@@ -1,3 +1,4 @@
+import { scan_journal_call_records } from './bench_call_summaries.ts';
 import { closeSync, existsSync, fsyncSync, lstatSync, openSync, readFileSync, readdirSync, writeFileSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { createHash, randomUUID } from 'node:crypto';
@@ -247,13 +248,13 @@ export class BenchExecutionService {
                 save_execution_json(path, run);
             }
             // Classify legacy outcomes in memory; never rewrite historical evidence on load.
+            // Only legacy response_incomplete_or_error samples need journal evidence; journals can be
+            // hundreds of MB, so skip them otherwise and stream only call lines when required.
             if (run.status === 'failed') {
                 const calls = new Map<string, RecordValue>();
                 const journal = join(directory, 'journal.jsonl');
-                if (existsSync(journal)) for (const line of readFileSync(journal, 'utf8').split('\n').filter(Boolean)) {
-                    const row = parseAssessmentJson(line) as RecordValue;
-                    if (row.type === 'call') calls.set(String(row.call_id), row);
-                }
+                const legacy = run.samples.some(sample => sample.status === 'response_incomplete_or_error');
+                if (legacy && existsSync(journal)) scan_journal_call_records(journal, row => { calls.set(String(row.call_id), row); });
                 for (const sample of run.samples) if (sample.status === 'response_incomplete_or_error') {
                     const ids = Array.isArray(sample.calls) ? sample.calls : [];
                     const last = calls.get(String(ids.at(-1)));
@@ -753,14 +754,14 @@ export class BenchExecutionService {
         budget.uncertain_cost = Number(run.budget.uncertain_cost_reservation_usd ?? 0);
         if (run.budget.uncertain_cost_reservation_usd === undefined && budget.missing_cost) {
             let missing = 0;
-            for (const line of readFileSync(join(this.data_dir, id, 'journal.jsonl'), 'utf8').split('\n').filter(Boolean)) {
-                const call = parseAssessmentJson(line) as RecordValue;
-                if (call.type !== 'call' || call.estimated_uncached_cost_usd !== null) continue;
+            // Stream call lines only; strict parsing keeps the original number tokens for reservation bytes.
+            scan_journal_call_records(join(this.data_dir, id, 'journal.jsonl'), call => {
+                if (call.estimated_uncached_cost_usd !== null) return;
                 const target = run.plan.targets.find(target => target.id === call.target_id);
                 if (!target || !object(call.request)) throw new TypeError('Cannot reconstruct unknown-call budget reservation');
                 budget.uncertain_cost += new AssessmentBudget(Infinity, 1).admit(call.request, target.pricing)!;
                 missing++;
-            }
+            }, parseAssessmentJson);
             if (missing !== budget.missing_cost) throw new TypeError('Missing request evidence for retry cost accounting');
         }
         if (budget.requests >= budget.request_limit || budget.spent + budget.uncertain_cost >= budget.cost_limit) throw new TypeError('Original execution limit exhausted; copy configuration to a new task with adjusted limits');

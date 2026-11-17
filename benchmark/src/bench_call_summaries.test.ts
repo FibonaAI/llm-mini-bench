@@ -66,3 +66,14 @@ test('result quality ignores never-sent prior attempts but keeps genuinely unkno
     expect(quality.prior_unknown_usage_samples).toBe(1);
     expect(quality.prior_unknown_cost_samples).toBe(1);
 });
+
+test('journal scanning propagates visitor errors and accepts a strict parser', async () => {
+    const { scan_journal_call_records } = await import('./bench_call_summaries.ts');
+    const root = mkdtempSync(join(tmpdir(), 'call-scan-'));
+    const path = join(root, 'journal.jsonl');
+    writeFileSync(path, line({ type: 'call', call_id: 'a' }) + line({ type: 'stream_chunk', raw_stream_text: 'x'.repeat(3 << 20) }) + line({ type: 'call', call_id: 'b' }));
+    const seen: string[] = [];
+    scan_journal_call_records(path, record => { seen.push(String(record.call_id)); }, text => JSON.parse(text));
+    expect(seen).toEqual(['a', 'b']);
+    expect(() => scan_journal_call_records(path, () => { throw new TypeError('evidence mismatch'); })).toThrow('evidence mismatch');
+});

@@ -17,15 +17,18 @@ export interface RunCallSummary {
 const CALL_MARKER = Buffer.from('"type":"call"');
 const CHUNK = 1 << 20;
 
-/** Stream one JSONL file and parse only lines that can be call records. */
-function scanCallLines(path: string, visit: (record: RecordValue) => void): void {
+/** Stream one JSONL file and parse only lines that can be call records; memory stays bounded by the longest line. */
+export function scan_journal_call_records(path: string, visit: (record: RecordValue) => void, parse: (text: string) => unknown = JSON.parse): void {
     const fd = openSync(path, 'r');
     try {
         const buffer = Buffer.allocUnsafe(CHUNK);
         let pending: Buffer[] = [];
         const flush = (line: Buffer) => {
             if (line.indexOf(CALL_MARKER) < 0) return;
-            try { const value = JSON.parse(line.toString('utf8')); if (object(value) && value.type === 'call') visit(value); } catch { /* A torn final line is not evidence. */ }
+            let value: unknown;
+            try { value = parse(line.toString('utf8')); } catch { return; /* A torn final line is not evidence. */ }
+            // Visitor errors are real failures and must propagate.
+            if (object(value) && value.type === 'call') visit(value);
         };
         for (;;) {
             const read = readSync(fd, buffer, 0, CHUNK, null);
@@ -73,7 +76,7 @@ export class RunCallSummaryReader {
         const cached = this.cache.get(run_id);
         if (cached?.signature === signature) return cached.calls;
         const calls: RunCallSummary[] = [];
-        for (const path of journals) scanCallLines(path, record => calls.push(summarize_call_record(record)));
+        for (const path of journals) scan_journal_call_records(path, record => calls.push(summarize_call_record(record)));
         this.cache.set(run_id, { signature, calls });
         return calls;
     }

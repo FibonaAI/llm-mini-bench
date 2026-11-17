@@ -23,6 +23,7 @@ export const EXECUTION_SOURCE_PATHS = [
     'src/bench_routes.ts',
     'src/bench_adapter.ts',
     'src/bench_http_body.ts',
+    'src/bench_call_summaries.ts',
     ...ASSESSMENT_BANK_SOURCE_PATHS,
     // The bank loader imports these unconditionally, including for production 1.0.
     ...ASSESSMENT_INTERACTIVE_SOURCE_PATHS
