@@ -11,7 +11,14 @@ const artifacts = mkdtempSync(join(tmpdir(), 'mini-bench-install-channels-'));
 const pkg = JSON.parse(readFileSync(join(root, 'package.json'), 'utf8'));
 const home = join(artifacts, 'home');
 mkdirSync(home);
-const env = { PATH: process.env.PATH ?? '', HOME: home, TMPDIR: artifacts, GIT_CONFIG_NOSYSTEM: '1', GIT_TERMINAL_PROMPT: '0', BUN_INSTALL_CACHE_DIR: join(artifacts, 'cache') };
+const env = {
+    PATH: process.env.PATH ?? '',
+    HOME: home,
+    TMPDIR: artifacts,
+    GIT_CONFIG_NOSYSTEM: '1',
+    GIT_TERMINAL_PROMPT: '0',
+    BUN_INSTALL_CACHE_DIR: join(artifacts, 'cache')
+};
 async function command(args: string[], cwd: string): Promise<string> {
     const child = Bun.spawn(args, { cwd, env, stdout: 'pipe', stderr: 'pipe' });
     const [output, error, status] = await Promise.all([new Response(child.stdout).text(), new Response(child.stderr).text(), child.exited]);
@@ -26,15 +33,31 @@ await command([process.execPath, 'pm', 'pack', '--ignore-scripts', '--destinatio
 const archiveName = `${pkg.name.replace(/^@/, '').replaceAll('/', '-')}-${pkg.version}.tgz`;
 const archive = readFileSync(join(artifacts, archiveName));
 const registryRequests: string[] = [];
-const registry = Bun.serve({ hostname: '127.0.0.1', port: 0, fetch(request): Response {
-    const path = new URL(request.url).pathname;
-    registryRequests.push(path);
-    if (path === '/package.tgz') return new Response(archive, { headers: { 'Content-Type': 'application/octet-stream' } });
-    if (decodeURIComponent(path.slice(1)) !== pkg.name) return new Response('Registry fixture has no such package', { status: 404 });
-    return Response.json({ name: pkg.name, 'dist-tags': { latest: pkg.version }, versions: { [pkg.version]: { ...pkg, devDependencies: undefined, dist: {
-        tarball: `http://127.0.0.1:${registry.port}/package.tgz`, shasum: createHash('sha1').update(archive).digest('hex'), integrity: 'sha512-' + createHash('sha512').update(archive).digest('base64')
-    } } } });
-} });
+const registry = Bun.serve({
+    hostname: '127.0.0.1',
+    port: 0,
+    fetch(request): Response {
+        const path = new URL(request.url).pathname;
+        registryRequests.push(path);
+        if (path === '/package.tgz') return new Response(archive, { headers: { 'Content-Type': 'application/octet-stream' } });
+        if (decodeURIComponent(path.slice(1)) !== pkg.name) return new Response('Registry fixture has no such package', { status: 404 });
+        return Response.json({
+            name: pkg.name,
+            'dist-tags': { latest: pkg.version },
+            versions: {
+                [pkg.version]: {
+                    ...pkg,
+                    devDependencies: undefined,
+                    dist: {
+                        tarball: `http://127.0.0.1:${registry.port}/package.tgz`,
+                        shasum: createHash('sha1').update(archive).digest('hex'),
+                        integrity: 'sha512-' + createHash('sha512').update(archive).digest('base64')
+                    }
+                }
+            }
+        });
+    }
+});
 async function smoke(channel: string, spec: string, registryUrl?: string) {
     const directory = join(artifacts, channel);
     mkdirSync(directory);
@@ -60,7 +83,12 @@ async function smoke(channel: string, spec: string, registryUrl?: string) {
             console.log(JSON.stringify({id:plugin.id,tasks:banks.banks[0].tasks.length,baselines:baselines.baselines.length,page:page.includes('LLM Mini Bench')}));
         } finally {await running.stop();}
     `;
-    const child = Bun.spawn([process.execPath, '--eval', script], { cwd: directory, env: { ...env, MAGPIE_BENCH_BASE_URL: 'http://127.0.0.1:1/v1', MAGPIE_BENCH_DATA_DIR: join(directory, 'data') }, stdout: 'pipe', stderr: 'pipe' });
+    const child = Bun.spawn([process.execPath, '--eval', script], {
+        cwd: directory,
+        env: { ...env, MAGPIE_BENCH_BASE_URL: 'http://127.0.0.1:1/v1', MAGPIE_BENCH_DATA_DIR: join(directory, 'data') },
+        stdout: 'pipe',
+        stderr: 'pipe'
+    });
     const [output, error, status] = await Promise.all([new Response(child.stdout).text(), new Response(child.stderr).text(), child.exited]);
     assert.equal(status, 0, error);
     assert.deepEqual(JSON.parse(output), { id: 'magpie-mini-bench', tasks: 14, baselines: 0, page: true });
@@ -71,8 +99,29 @@ try {
     assert.ok(registryRequests.includes('/package.tgz'), 'npm channel must install the actual registry tarball');
     await command(['git', 'init', '-b', 'main'], source);
     await command(['git', 'add', '.'], source);
-    await command(['git', '-c', 'user.name=Install Fixture', '-c', 'user.email=fixture@example.invalid', 'commit', '-m', 'Isolated plugin installation fixture'], source);
+    await command(
+        [
+            'git',
+            '-c',
+            'user.name=Install Fixture',
+            '-c',
+            'user.email=fixture@example.invalid',
+            'commit',
+            '-m',
+            'Isolated plugin installation fixture'
+        ],
+        source
+    );
     await command(['git', 'tag', `v${pkg.version}`], source);
     const git = await smoke('git', `git+file://${source}#v${pkg.version}`);
-    console.log(JSON.stringify({ passed: true, artifacts, channels: [npm, git], note: 'Local npm registry and Git ref; no public package/repository or Magpie CLI invoked.' }));
-} finally { await registry.stop(true); }
+    console.log(
+        JSON.stringify({
+            passed: true,
+            artifacts,
+            channels: [npm, git],
+            note: 'Local npm registry and Git ref; no public package/repository or Magpie CLI invoked.'
+        })
+    );
+} finally {
+    await registry.stop(true);
+}

@@ -1,8 +1,11 @@
 /** Differential fixtures preserve Python simulator traces, cards and final grading. */
 import { describe, expect, test } from 'bun:test';
 import {
-    ASSESSMENT_TOOL_TASKS, InventoryAssessmentSimulator, BookingAssessmentSimulator,
-    _inventory_task, grade_tool_without_trace,
+    ASSESSMENT_TOOL_TASKS,
+    InventoryAssessmentSimulator,
+    BookingAssessmentSimulator,
+    _inventory_task,
+    grade_tool_without_trace
 } from '../src/assessment_tools.ts';
 import fixture from './fixtures/assessment-tools.json';
 import rawArgumentFixture from './fixtures/assessment-tools-raw-arguments.json';
@@ -18,8 +21,7 @@ type FixtureScenario = {
 };
 
 function simulatorFor(kind: string) {
-    return kind === 'booking' ? new BookingAssessmentSimulator()
-        : new InventoryAssessmentSimulator(kind === 'inventory_feasible');
+    return kind === 'booking' ? new BookingAssessmentSimulator() : new InventoryAssessmentSimulator(kind === 'inventory_feasible');
 }
 
 function simulatorState(sim: InventoryAssessmentSimulator | BookingAssessmentSimulator) {
@@ -28,8 +30,9 @@ function simulatorState(sim: InventoryAssessmentSimulator | BookingAssessmentSim
 
 describe('assessment tools Python differential fixtures', () => {
     test('cards and schemas are byte-for-byte equivalent strings and structures', () => {
-        const cards = ASSESSMENT_TOOL_TASKS.map(task => Object.fromEntries(
-            Object.entries(task).filter(([, value]) => typeof value !== 'function')));
+        const cards = ASSESSMENT_TOOL_TASKS.map(task =>
+            Object.fromEntries(Object.entries(task).filter(([, value]) => typeof value !== 'function'))
+        );
         expect(cards).toEqual(fixture.cards);
     });
 
@@ -54,10 +57,16 @@ describe('assessment tools raw argument number spelling parity', () => {
         test(`${scenario.key}: ${scenario.raw_arguments}`, () => {
             const sim = simulatorFor(scenario.kind);
             expect(simulatorState(sim)).toEqual(scenario.initial);
-            const before = sim instanceof InventoryAssessmentSimulator
-                ? { stock: structuredClone(sim.stock) }
-                : { free: structuredClone(sim.free), revisions: { ...sim.revisions }, booking: sim.booking,
-                    external_change_done: sim.external_change_done, feedback_seen: sim.feedback_seen };
+            const before =
+                sim instanceof InventoryAssessmentSimulator
+                    ? { stock: structuredClone(sim.stock) }
+                    : {
+                          free: structuredClone(sim.free),
+                          revisions: { ...sim.revisions },
+                          booking: sim.booking,
+                          external_change_done: sim.external_change_done,
+                          feedback_seen: sim.feedback_seen
+                      };
             expect(sim.call(scenario.name, parseAssessmentJson(scenario.raw_arguments))).toEqual(scenario.result);
             expect(simulatorState(sim)).toEqual(scenario.state);
             if (scenario.state.invalid_attempts > 0) {
@@ -82,9 +91,15 @@ describe('assessment tools safety and independent invariants', () => {
             expect(first).not.toBe(second);
             expect(first.history).not.toBe(second.history);
             expect(task.grade('I used the tools').outcome).toBe('ungradable');
-            for (const tool of task.tools as { type: string; strict: boolean; parameters: {
-                additionalProperties: boolean; required: string[]; properties: ToolRecord;
-            } }[]) {
+            for (const tool of task.tools as {
+                type: string;
+                strict: boolean;
+                parameters: {
+                    additionalProperties: boolean;
+                    required: string[];
+                    properties: ToolRecord;
+                };
+            }[]) {
                 expect(tool.type).toBe('function');
                 expect(tool.strict).toBe(true);
                 expect(tool.parameters.additionalProperties).toBe(false);
@@ -114,7 +129,22 @@ describe('assessment tools safety and independent invariants', () => {
     });
 
     test('all legal surplus transfer orderings succeed without trace matching', () => {
-        for (const path of [[['A', 3], ['B', 1]], [['B', 1], ['A', 1], ['A', 2]], [['A', 2], ['B', 1], ['A', 1]]]) {
+        for (const path of [
+            [
+                ['A', 3],
+                ['B', 1]
+            ],
+            [
+                ['B', 1],
+                ['A', 1],
+                ['A', 2]
+            ],
+            [
+                ['A', 2],
+                ['B', 1],
+                ['A', 1]
+            ]
+        ]) {
             const sim = new InventoryAssessmentSimulator();
             sim.call('inspect_inventory', {});
             for (const [source, units] of path) {

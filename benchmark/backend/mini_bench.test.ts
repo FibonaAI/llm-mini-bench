@@ -1,14 +1,5 @@
 import { afterEach, expect, test } from 'bun:test';
-import {
-    mkdtempSync,
-    mkdirSync,
-    readFileSync,
-    readdirSync,
-    rmSync,
-    statSync,
-    symlinkSync,
-    writeFileSync
-} from 'node:fs';
+import { mkdtempSync, mkdirSync, readFileSync, readdirSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { BenchService, make_handler, MAX_BODY, startMiniBenchService } from './mini_bench.ts';
@@ -23,16 +14,21 @@ test('quota endpoint is authenticated, read-only and strips upstream secrets', a
     const calls: string[] = [];
     adapter.gateway = async path => {
         calls.push(path);
-        return { data: [{ provider:'office/codex',user:'offline@example.invalid',secret:'hidden',windows:[{name:'weekly',used:0}] }] };
+        return {
+            data: [{ provider: 'office/codex', user: 'offline@example.invalid', secret: 'hidden', windows: [{ name: 'weekly', used: 0 }] }]
+        };
     };
     expect((await request('/api/bench/quota-cards', 'GET', undefined, { 'X-Mini-Bench-Token': '' })).status).toBe(403);
     expect(calls).toEqual([]);
     const response = await request('/api/bench/quota-cards');
     const body = await response.json();
-    expect(body.status).toBe('available'); expect(body.cards[0].user).toBe('offline@example.invalid');
+    expect(body.status).toBe('available');
+    expect(body.cards[0].user).toBe('offline@example.invalid');
     expect(JSON.stringify(body)).not.toContain('hidden');
-    await request('/api/bench/quota-cards'); expect(calls).toHaveLength(1);
-    await request('/api/bench/quota-cards?refresh=1'); expect(calls).toEqual(['/magpie/quotas/cards','/magpie/quotas/cards']);
+    await request('/api/bench/quota-cards');
+    expect(calls).toHaveLength(1);
+    await request('/api/bench/quota-cards?refresh=1');
+    expect(calls).toEqual(['/magpie/quotas/cards', '/magpie/quotas/cards']);
     expect((await request('/api/bench/quota-cards', 'POST', {})).status).not.toBe(200);
     expect(calls).toHaveLength(2);
 });
@@ -46,46 +42,65 @@ test('a new workspace never loads bundled test baselines or produces placeholder
 });
 
 test('analysis reads independent evidence snapshots without building discarded history summaries', async () => {
-    const {service}=fixture(), execution=service.bench_execution();
-    const id=await execution.start_run({targets:[{route_id:'route-a'}],rounds:1});
-    expect(await execution.wait_for_run(id,5)).toBe(true);
-    const snapshots=execution.list_run_snapshots();
-    expect(snapshots).toHaveLength(1);expect(snapshots[0]!.samples).toHaveLength(14);
-    snapshots[0]!.samples[0]!.status='tampered';
+    const { service } = fixture(),
+        execution = service.bench_execution();
+    const id = await execution.start_run({ targets: [{ route_id: 'route-a' }], rounds: 1 });
+    expect(await execution.wait_for_run(id, 5)).toBe(true);
+    const snapshots = execution.list_run_snapshots();
+    expect(snapshots).toHaveLength(1);
+    expect(snapshots[0]!.samples).toHaveLength(14);
+    snapshots[0]!.samples[0]!.status = 'tampered';
     expect(execution.get_run(id)!.samples[0]!.status).not.toBe('tampered');
-    execution.list_runs=()=>{throw new Error('Analysis must not construct discarded summaries');};
+    execution.list_runs = () => {
+        throw new Error('Analysis must not construct discarded summaries');
+    };
     expect(service.observations()).toHaveLength(1);
 });
 
 test('route refresh invalidates the model cache and removed routes cannot resolve', async () => {
     const { service, adapter, request } = fixture();
     service._bench_execution = undefined;
-    let model = 'office/codex/old', loads = 0;
+    let model = 'office/codex/old',
+        loads = 0;
     adapter.gateway = async path => {
-        expect(path).toBe('/models'); loads++;
-        return { data: [{ id:model, owned_by:'office', magpie_via:['remote','local'], pricing:{prompt:0,completion:0} }] };
+        expect(path).toBe('/models');
+        loads++;
+        return { data: [{ id: model, owned_by: 'office', magpie_via: ['remote', 'local'], pricing: { prompt: 0, completion: 0 } }] };
     };
     const first = await (await request('/api/bench/routes')).json();
     model = 'office/codex/new';
     expect((await (await request('/api/bench/routes')).json()).routes[0].model).toBe('office/codex/old');
     const refreshed = await (await request('/api/bench/routes?refresh=1')).json();
-    expect(refreshed.routes[0].model).toBe(model); expect(loads).toBe(2);
+    expect(refreshed.routes[0].model).toBe(model);
+    expect(loads).toBe(2);
     await expect(service.bench_execution().routes.resolve(first.routes[0].id)).rejects.toThrow('unavailable');
 });
 
 test('manual retry endpoints require authentication, explicit idempotency keys and supported bodies', async () => {
     const { service, request } = fixture();
-    const execution = service.bench_execution(), calls: string[] = [];
-    execution.retry_run = async (id, key) => { calls.push(id + ':' + key); return id; };
-    execution.retry_task = async (id, key) => { calls.push(id + ':' + key); return { ids: [id], rejected: [] }; };
+    const execution = service.bench_execution(),
+        calls: string[] = [];
+    execution.retry_run = async (id, key) => {
+        calls.push(id + ':' + key);
+        return id;
+    };
+    execution.retry_task = async (id, key) => {
+        calls.push(id + ':' + key);
+        return { ids: [id], rejected: [] };
+    };
     const key = 'b'.repeat(32);
-    expect((await request('/api/bench/runs/' + RUN_ID + '/retry', 'POST', { request_id: key }, { 'X-Mini-Bench-Token': '' })).status).toBe(403);
+    expect((await request('/api/bench/runs/' + RUN_ID + '/retry', 'POST', { request_id: key }, { 'X-Mini-Bench-Token': '' })).status).toBe(
+        403
+    );
     expect(calls).toHaveLength(0);
     expect((await request('/api/bench/runs/' + RUN_ID + '/retry', 'POST', {})).status).toBe(400);
     expect((await request('/api/bench/tasks/' + RUN_ID + '/retry', 'POST', { request_id: key, extra: true })).status).toBe(400);
     expect((await request('/api/bench/runs/' + RUN_ID + '/retry', 'GET')).status).toBe(404);
     expect((await request('/api/bench/runs/' + RUN_ID + '/retry', 'POST', { request_id: key })).status).toBe(202);
-    expect(await (await request('/api/bench/tasks/' + RUN_ID + '/retry', 'POST', { request_id: key })).json()).toEqual({ ids: [RUN_ID], rejected: [] });
+    expect(await (await request('/api/bench/tasks/' + RUN_ID + '/retry', 'POST', { request_id: key })).json()).toEqual({
+        ids: [RUN_ID],
+        rejected: []
+    });
     expect(calls).toEqual([RUN_ID + ':' + key, RUN_ID + ':' + key]);
 });
 
@@ -144,12 +159,7 @@ function fixture() {
         await service.close();
         rmSync(directory, { recursive: true, force: true });
     });
-    const request = (
-        path: string,
-        method = 'GET',
-        body?: unknown,
-        extra: Record<string, string | undefined> = {}
-    ) => {
+    const request = (path: string, method = 'GET', body?: unknown, extra: Record<string, string | undefined> = {}) => {
         const text = body === undefined ? undefined : typeof body === 'string' ? body : JSON.stringify(body);
         return handler(
             new Request('http://127.0.0.1:3481' + path, {
@@ -163,11 +173,7 @@ function fixture() {
                               'Content-Type': 'application/json',
                               'Content-Length': String(Buffer.byteLength(text))
                           }),
-                    ...Object.fromEntries(
-                        Object.entries(extra).filter(
-                            (entry): entry is [string, string] => entry[1] !== undefined
-                        )
-                    )
+                    ...Object.fromEntries(Object.entries(extra).filter((entry): entry is [string, string] => entry[1] !== undefined))
                 },
                 body: text
             })
@@ -195,9 +201,7 @@ test('host, origin, token and opaque plugin origin security', async () => {
     expect(response.headers.get('Cache-Control')).toBe('no-store');
     expect(response.headers.get('X-Content-Type-Options')).toBe('nosniff');
     expect(response.headers.get('Referrer-Policy')).toBe('no-referrer');
-    expect(
-        (await request('/api/bench/banks', 'GET', undefined, { origin: 'http://127.0.0.1:3481' })).status
-    ).toBe(200);
+    expect((await request('/api/bench/banks', 'GET', undefined, { origin: 'http://127.0.0.1:3481' })).status).toBe(200);
 });
 test('preflight grants only sandbox origin; actual requests still require token', async () => {
     const { request } = fixture();
@@ -208,9 +212,7 @@ test('preflight grants only sandbox origin; actual requests still require token'
     expect(response.status).toBe(204);
     expect(response.headers.get('Access-Control-Allow-Methods')).toBe('GET, POST');
     expect(response.headers.get('Access-Control-Allow-Headers')).toBe('Content-Type, X-Mini-Bench-Token');
-    expect(
-        (await request('/api/bench/runs', 'OPTIONS', undefined, { origin: 'https://evil.example' })).status
-    ).toBe(403);
+    expect((await request('/api/bench/runs', 'OPTIONS', undefined, { origin: 'https://evil.example' })).status).toBe(403);
 });
 test('strict JSON rejects duplicates, nonfinite, arrays, invalid UTF8, absent or oversized body', async () => {
     const { request, handler, execution } = fixture();
@@ -323,10 +325,20 @@ test('complete target baseline roundtrip and per-task observation API', async ()
     await execution.wait_run(id, 4);
     const run = execution._runs.get(id)!;
     for (const sample of run.samples) {
-        const task = run.plan.task_snapshots.find((task) => task.id === sample.task)!;
+        const task = run.plan.task_snapshots.find(task => task.id === sample.task)!;
         const { max_output_tokens, max_turns, max_tool_calls, timeout, max_api_retries, timeout_scope } = run.plan.limits;
-        const config = { max_output_tokens, max_turns, max_tool_calls, timeout, max_api_retries, ...(timeout_scope ? { timeout_scope } : {}) };
-        const protocol = target_execution_protocol([{ id: sample.task, ...(max_output_tokens === null ? {} : { max_output_tokens }) }], sample.thinking);
+        const config = {
+            max_output_tokens,
+            max_turns,
+            max_tool_calls,
+            timeout,
+            max_api_retries,
+            ...(timeout_scope ? { timeout_scope } : {})
+        };
+        const protocol = target_execution_protocol(
+            [{ id: sample.task, ...(max_output_tokens === null ? {} : { max_output_tokens }) }],
+            sample.thinking
+        );
         Object.assign(sample, {
             status: 'completed',
             ok: true,
@@ -349,7 +361,7 @@ test('complete target baseline roundtrip and per-task observation API', async ()
     const observations = (await (await request('/api/bench/observations')).json()) as {
         observations: Array<Record<string, unknown>>;
     };
-    const personal = observations.observations.find((row) => row.source === 'run' && row.run_id === id)!;
+    const personal = observations.observations.find(row => row.source === 'run' && row.run_id === id)!;
     expect(personal.baseline_eligible).toBe(true);
     expect(personal.tasks).toHaveLength(14);
     const restored = new BenchService({ data_dir: directory, token: TOKEN });
@@ -372,8 +384,7 @@ test('old user storage remains untouched and unconsumed', async () => {
         writeFileSync(location, value);
     }
     service.baselines();
-    for (const [path, value] of Object.entries(files))
-        expect(readFileSync(join(directory, path), 'utf8')).toBe(value);
+    for (const [path, value] of Object.entries(files)) expect(readFileSync(join(directory, path), 'utf8')).toBe(value);
     expect('jobs' in service).toBe(false);
     expect('questions' in service).toBe(false);
 });
@@ -399,24 +410,37 @@ test('catalog reads coalesce and defensive copies cannot poison cache', async ()
 test('catalog handshake requests remote-hop evidence and filters non-chat models', async () => {
     const directory = mkdtempSync(join(tmpdir(), 'mini-bench-remote-catalog-'));
     let requests = 0;
-    const gateway = Bun.serve({ hostname: '127.0.0.1', port: 0, fetch(request) {
-        requests++;
-        expect(request.method).toBe('GET');
-        expect(new URL(request.url).pathname).toBe('/v1/models');
-        expect(request.headers.get('X-Magpie-Drawers')).toBe('1');
-        expect(request.headers.get('Authorization')).toBe('Bearer fixture-key');
-        return Response.json({ data: [
-            { id: 'office/openai/model', owned_by: 'office', magpie_via: ['remote-hop', 'local-hop'] },
-            { id: 'chat', kind: 'chat' },
-            { id: 'image', kind: 'image' },
-            { id: 'video', kind: 'video' },
-            { id: 'decision', kind: 'decision' },
-            { id: 'future-kind', kind: 'unknown' }
-        ] });
-    } });
-    const service = new BenchService({ token: TOKEN, data_dir: directory,
-        adapter: new MagpieBenchAdapter(`http://127.0.0.1:${gateway.port}/v1`, 'fixture-key') });
-    cleanups.push(async () => { await service.close(); await gateway.stop(); rmSync(directory, { recursive: true, force: true }); });
+    const gateway = Bun.serve({
+        hostname: '127.0.0.1',
+        port: 0,
+        fetch(request) {
+            requests++;
+            expect(request.method).toBe('GET');
+            expect(new URL(request.url).pathname).toBe('/v1/models');
+            expect(request.headers.get('X-Magpie-Drawers')).toBe('1');
+            expect(request.headers.get('Authorization')).toBe('Bearer fixture-key');
+            return Response.json({
+                data: [
+                    { id: 'office/openai/model', owned_by: 'office', magpie_via: ['remote-hop', 'local-hop'] },
+                    { id: 'chat', kind: 'chat' },
+                    { id: 'image', kind: 'image' },
+                    { id: 'video', kind: 'video' },
+                    { id: 'decision', kind: 'decision' },
+                    { id: 'future-kind', kind: 'unknown' }
+                ]
+            });
+        }
+    });
+    const service = new BenchService({
+        token: TOKEN,
+        data_dir: directory,
+        adapter: new MagpieBenchAdapter(`http://127.0.0.1:${gateway.port}/v1`, 'fixture-key')
+    });
+    cleanups.push(async () => {
+        await service.close();
+        await gateway.stop();
+        rmSync(directory, { recursive: true, force: true });
+    });
     const catalog = await service.models();
     expect(catalog.map(model => model.id)).toEqual(['office/openai/model', 'chat']);
     expect(catalog[0]!.magpie_via).toEqual(['remote-hop', 'local-hop']);
@@ -456,10 +480,12 @@ test('failed initial persistence returns safe storage error then closes admissio
 
 test('task API plans independent whole-bank runs, persists membership and cancels children', async () => {
     const { request, execution } = fixture();
-    const body = { targets: [
-        { id: 'default', route_id: 'route-a', thinking: 'default' },
-        { id: 'high', route_id: 'route-a', thinking: 'high' }
-    ] };
+    const body = {
+        targets: [
+            { id: 'default', route_id: 'route-a', thinking: 'default' },
+            { id: 'high', route_id: 'route-a', thinking: 'high' }
+        ]
+    };
     const planned = await request('/api/bench/task-plans', 'POST', body);
     expect(planned.status).toBe(200);
     const plan = await planned.json();
@@ -536,9 +562,7 @@ test('explicit missing routes never silently fall back to gateway models', async
     try {
         const execution = service.bench_execution();
         expect(await execution.routes.public_routes()).toEqual([]);
-        await expect(execution.plan({ targets: [{ route_id: 'missing' }] })).rejects.toThrow(
-            'not configured'
-        );
+        await expect(execution.plan({ targets: [{ route_id: 'missing' }] })).rejects.toThrow('not configured');
         expect(execution.list_runs()).toEqual([]);
         expect(catalogCalls).toBe(0);
         expect(readdirSync(directory)).not.toContain('absent.json');
@@ -559,8 +583,7 @@ test('safe assets cannot escape via symlink and unknown suffixes are not served'
     symlinkSync(join(directory, 'private.js'), join(web, 'escape.js'));
     writeFileSync(join(web, 'private.json'), 'secret');
     const handler = make_handler(service, web);
-    const call = (path: string) =>
-        handler(new Request('http://localhost' + path, { headers: { host: 'localhost' } }));
+    const call = (path: string) => handler(new Request('http://localhost' + path, { headers: { host: 'localhost' } }));
     expect((await call('/')).status).toBe(200);
     expect((await call('/escape.js')).status).toBe(404);
     expect((await call('/private.json')).status).toBe(404);
@@ -623,9 +646,19 @@ test('run call diagnosis is authenticated, read-only and limited to known runs',
     const execution = service.bench_execution();
     expect((await request('/api/bench/runs/' + RUN_ID + '/calls', 'GET', undefined, { 'X-Mini-Bench-Token': '' })).status).toBe(403);
     expect((await request('/api/bench/runs/' + RUN_ID + '/calls')).status).toBe(404);
-    execution.get_run = (id) => (id === RUN_ID ? ({ id } as never) : null);
+    execution.get_run = id => (id === RUN_ID ? ({ id } as never) : null);
     mkdirSync(join(execution.data_dir, RUN_ID), { recursive: true });
-    writeFileSync(join(execution.data_dir, RUN_ID, 'journal.jsonl'), JSON.stringify({ type: 'call', call_id: 'c', sample_id: 's', http_status: 502, request: { input: 'secret prompt' }, raw_response: {} }) + '\n');
+    writeFileSync(
+        join(execution.data_dir, RUN_ID, 'journal.jsonl'),
+        JSON.stringify({
+            type: 'call',
+            call_id: 'c',
+            sample_id: 's',
+            http_status: 502,
+            request: { input: 'secret prompt' },
+            raw_response: {}
+        }) + '\n'
+    );
     const response = await request('/api/bench/runs/' + RUN_ID + '/calls');
     expect(response.status).toBe(200);
     const body = await response.json();

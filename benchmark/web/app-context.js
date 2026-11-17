@@ -57,20 +57,37 @@ export function createAppContext(services, eventTarget) {
   /** Publish the documented detail payload without changing state implicitly. */
   const emit = (name, detail) => eventTarget.dispatchEvent(new CustomEvent(name, { detail }));
   const context = {
-    services: Object.freeze({ ...services }), on, emit,
-    get bank() { return bank; },
-    get targets() { return targets; },
-    get taskCount() { return bank?.tasks?.length || 0; },
+    services: Object.freeze({ ...services }),
+    on,
+    emit,
+    get bank() {
+      return bank;
+    },
+    get targets() {
+      return targets;
+    },
+    get taskCount() {
+      return bank?.tasks?.length || 0;
+    },
     getTaskId: runId => runTaskIds.get(runId),
     /** Replace the bank before notifying listeners; never infer a production bank. */
-    setBank(value) { bank = value; emit('mini-bench:banks-changed', bank); },
+    setBank(value) {
+      bank = value;
+      emit('mini-bench:banks-changed', bank);
+    },
     /** Catalog replacement retains only exact supported selections, never replacements. */
     setTargetCatalog(routes, leaves, supportedKeys) {
       const supported = new Set(supportedKeys);
-      targets = Object.freeze({ routes: Object.freeze([...routes]), leaves: Object.freeze([...leaves]), selectedKeys: Object.freeze(targets.selectedKeys.filter(key => supported.has(key))) });
+      targets = Object.freeze({
+        routes: Object.freeze([...routes]),
+        leaves: Object.freeze([...leaves]),
+        selectedKeys: Object.freeze(targets.selectedKeys.filter(key => supported.has(key)))
+      });
     },
     /** Target controllers validate keys before publishing one immutable selection. */
-    setTargetSelection(keys) { targets = Object.freeze({ ...targets, selectedKeys: Object.freeze([...keys]) }); },
+    setTargetSelection(keys) {
+      targets = Object.freeze({ ...targets, selectedKeys: Object.freeze([...keys]) });
+    },
     /** Only membership is shared with analysis; history must not rewrite observations. */
     setHistory(tasks) {
       runTaskIds = new Map(tasks.flatMap(task => (task.children || []).map(child => [child.run_id, task.id])));
@@ -83,15 +100,31 @@ export function createAppContext(services, eventTarget) {
     },
     getSelectedTargets: () => targetActions.getSelectedTargets(),
     setTaskSelection: (keys, announce = false) => targetActions.setTaskSelection(keys, announce),
-    setTaskRoutes: routes => targetActions.setTaskRoutes(routes),
+    setTaskRoutes: routes => targetActions.setTaskRoutes(routes)
   };
   // Compatibility is introspection plus the same controller actions, not another store.
   const runState = Object.freeze({
-    get routes() { return targets.routes; }, get leaves() { return targets.leaves; },
-    get selectedKeys() { return targets.selectedKeys; }, get taskCount() { return context.taskCount; },
-    get bank() { return bank; }, get runTaskIds() { return new Map(runTaskIds); },
+    get routes() {
+      return targets.routes;
+    },
+    get leaves() {
+      return targets.leaves;
+    },
+    get selectedKeys() {
+      return targets.selectedKeys;
+    },
+    get taskCount() {
+      return context.taskCount;
+    },
+    get bank() {
+      return bank;
+    },
+    get runTaskIds() {
+      return new Map(runTaskIds);
+    },
     getSelectedTargets: context.getSelectedTargets,
-    setTaskSelection: context.setTaskSelection, setTaskRoutes: context.setTaskRoutes,
+    setTaskSelection: context.setTaskSelection,
+    setTaskRoutes: context.setTaskRoutes
   });
   return Object.freeze(Object.defineProperty(context, 'runState', { value: runState }));
 }
@@ -105,7 +138,7 @@ export function getAppContext() {
     browserContext = createAppContext(services, window);
     Object.defineProperties(services, {
       bank: { get: () => browserContext.bank },
-      runState: { get: () => browserContext.runState },
+      runState: { get: () => browserContext.runState }
     });
   }
   return browserContext;

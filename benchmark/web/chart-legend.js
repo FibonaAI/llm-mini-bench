@@ -11,25 +11,39 @@ export function buildChartLegendGroups(records, dimension) {
       const provider = record.providerName ?? record.providerDisplayId ?? record.provider ?? '未记录渠道';
       const account = record.accountDisplayId ?? record.account ?? '未记录账号';
       groups.set(category.key, {
-        key: category.key, label: category.label,
+        key: category.key,
+        label: category.label,
         name: dimension === 'series' ? chartCategory(record, 'model').label : category.label,
         detail: dimension === 'series' ? `${provider} / ${account}` : '',
-        record, count: 0, searchValues: new Set()
+        record,
+        count: 0,
+        searchValues: new Set()
       });
     }
     const group = groups.get(category.key);
     group.count++;
-    for (const value of [category.label, record.model, record.modelDisplayName, record.providerName, record.providerDisplayId, record.provider, record.accountDisplayId, record.account]) {
+    for (const value of [
+      category.label,
+      record.model,
+      record.modelDisplayName,
+      record.providerName,
+      record.providerDisplayId,
+      record.provider,
+      record.accountDisplayId,
+      record.account
+    ]) {
       if (value) group.searchValues.add(String(value));
     }
   }
-  return [...groups.values()].map(({ searchValues, ...group }) => ({ ...group, searchText: normalizeLegendSearch([...searchValues].join(' ')) }))
+  return [...groups.values()]
+    .map(({ searchValues, ...group }) => ({ ...group, searchText: normalizeLegendSearch([...searchValues].join(' ')) }))
     .sort((a, b) => a.label.localeCompare(b.label, 'zh-CN') || a.key.localeCompare(b.key));
 }
 
 /** Fit a contiguous legend prefix in CSS pixels; never leave invisible items keyboard-focusable. */
 export function fitChartLegendItems(widths, availableWidth, gap = 6) {
-  let used = 0, count = 0;
+  let used = 0,
+    count = 0;
   for (const width of widths) {
     const next = used + width + (count ? gap : 0);
     if (next > availableWidth) break;
@@ -74,11 +88,21 @@ export function createChartLegend(container, id) {
   const empty = legendNode('p', 'chart-legend-empty', '没有匹配图例，请调整关键词。');
   empty.hidden = true;
   searchBar.append(searchLabel, count);
-  panel.append(searchBar, list, empty, legendNode('p', 'chart-legend-help', '悬停或聚焦图例可定位同色数据点；搜索只查找图例，不改变图中数据。'));
+  panel.append(
+    searchBar,
+    list,
+    empty,
+    legendNode('p', 'chart-legend-help', '悬停或聚焦图例可定位同色数据点；搜索只查找图例，不改变图中数据。')
+  );
   disclosure.append(summary, panel);
   root.append(bar, disclosure);
   container.append(root);
-  let entries = [], dimension = null, signature = '', compactButtons = [], highlight = () => {}, activeKey = null;
+  let entries = [],
+    dimension = null,
+    signature = '',
+    compactButtons = [],
+    highlight = () => {},
+    activeKey = null;
 
   function setHighlight(key) {
     activeKey = key;
@@ -108,7 +132,10 @@ export function createChartLegend(container, id) {
     button.addEventListener('pointerleave', () => setHighlight(focusedKey()));
     button.addEventListener('focus', () => setHighlight(entry.key));
     button.addEventListener('blur', () => setHighlight(null));
-    button.addEventListener('click', () => { button.focus({ preventScroll: true }); setHighlight(entry.key); });
+    button.addEventListener('click', () => {
+      button.focus({ preventScroll: true });
+      setHighlight(entry.key);
+    });
     return button;
   }
   function renderList() {
@@ -123,7 +150,9 @@ export function createChartLegend(container, id) {
     summary.textContent = disclosure.open ? '收起图例' : `查看全部 · ${entries.length} 组`;
     disclosure.hidden = false;
     bar.style.paddingRight = '0px';
-    compactButtons.forEach(button => { button.hidden = false; });
+    compactButtons.forEach(button => {
+      button.hidden = false;
+    });
     const widths = compactButtons.map(button => button.getBoundingClientRect().width);
     let shown = fitChartLegendItems(widths, compact.clientWidth);
     if (shown === entries.length && !disclosure.open) disclosure.hidden = true;
@@ -132,12 +161,21 @@ export function createChartLegend(container, id) {
       shown = fitChartLegendItems(widths, compact.clientWidth);
     }
     const focused = document.activeElement;
-    compactButtons.forEach((button, index) => { button.hidden = index >= shown; });
+    compactButtons.forEach((button, index) => {
+      button.hidden = index >= shown;
+    });
     if (compactButtons.some(button => button === focused && button.hidden)) summary.focus({ preventScroll: true });
     if (focused === summary && disclosure.hidden) compactButtons[0]?.focus({ preventScroll: true });
   }
-  disclosure.addEventListener('toggle', () => { if (!disclosure.open) setHighlight(null); fitCompact(); });
-  search.addEventListener('input', () => { setHighlight(null); list.scrollTop = 0; renderList(); });
+  disclosure.addEventListener('toggle', () => {
+    if (!disclosure.open) setHighlight(null);
+    fitCompact();
+  });
+  search.addEventListener('input', () => {
+    setHighlight(null);
+    list.scrollTop = 0;
+    renderList();
+  });
   root.addEventListener('keydown', event => {
     if (event.key !== 'Escape' || !disclosure.open) return;
     event.preventDefault();
@@ -150,7 +188,9 @@ export function createChartLegend(container, id) {
   return {
     render(nextEntries, nextDimension, onHighlight) {
       highlight = onHighlight;
-      const nextSignature = JSON.stringify(nextEntries.map(({ key, label, name, detail, color, count, searchText }) => [key, label, name, detail, color, count, searchText]));
+      const nextSignature = JSON.stringify(
+        nextEntries.map(({ key, label, name, detail, color, count, searchText }) => [key, label, name, detail, color, count, searchText])
+      );
       const dimensionChanged = dimension !== nextDimension;
       const changed = dimensionChanged || signature !== nextSignature;
       const hadFocus = root.contains(document.activeElement);
@@ -176,6 +216,8 @@ export function createChartLegend(container, id) {
       fitCompact();
       if (activeKey !== null) highlight(activeKey);
     },
-    destroy() { root.remove(); }
+    destroy() {
+      root.remove();
+    }
   };
 }

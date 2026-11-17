@@ -34,7 +34,7 @@ test('CLI passes token only to configured API origin and never follows redirects
         downstream++;
         return Response.json({});
     });
-    const source = server((request) => {
+    const source = server(request => {
         expect(request.headers.get('X-Mini-Bench-Token')).toBe('private-token');
         return new Response('', { status: 302, headers: { Location: target + '/capture' } });
     });
@@ -43,7 +43,7 @@ test('CLI passes token only to configured API origin and never follows redirects
 });
 test('CLI sends plan/start/show/cancel with stable API shapes', async () => {
     const requests: Array<{ path: string; method: string; body: unknown }> = [];
-    const url = server(async (request) => {
+    const url = server(async request => {
         requests.push({
             path: new URL(request.url).pathname,
             method: request.method,
@@ -74,7 +74,7 @@ test('CLI sends plan/start/show/cancel with stable API shapes', async () => {
             ['task-cancel', 'b'.repeat(32)]
         ])
             expect(await main(['--url', url, ...command])).toBe(0);
-        expect(requests.map((row) => [row.method, row.path])).toEqual([
+        expect(requests.map(row => [row.method, row.path])).toEqual([
             ['GET', '/api/bench/routes'],
             ['GET', '/api/bench/banks'],
             ['GET', '/api/bench/runs'],
@@ -119,18 +119,12 @@ test('invalid plans and malformed run IDs never submit', async () => {
 });
 test('CLI forwards parsed numeric spellings without turning floats into integers', async () => {
     let received = '';
-    const url = server(async (request) => {
+    const url = server(async request => {
         received = await request.text();
         return Response.json({});
     });
     const { parseAssessmentJson } = await import('./src/assessment_json.ts');
-    await bench_api_request(
-        url,
-        'token',
-        'POST',
-        'plans',
-        parseAssessmentJson('{"rounds":1.0,"limits":{"max_requests":1e0}}')
-    );
+    await bench_api_request(url, 'token', 'POST', 'plans', parseAssessmentJson('{"rounds":1.0,"limits":{"max_requests":1e0}}'));
     expect(received).toContain('"rounds":1.0');
     expect(received).toContain('"max_requests":1e0');
 });
@@ -139,9 +133,7 @@ test('CLI unavailable error warns that submitted run may still exist', async () 
     const server_ = Bun.serve({ hostname: '127.0.0.1', port: 0, fetch: () => Response.json({}) });
     const url = 'http://127.0.0.1:' + server_.port;
     await server_.stop();
-    await expect(bench_api_request(url, 'token', 'POST', 'runs', {})).rejects.toThrow(
-        'check tasks and runs before resubmitting'
-    );
+    await expect(bench_api_request(url, 'token', 'POST', 'runs', {})).rejects.toThrow('check tasks and runs before resubmitting');
 });
 test('CLI and standalone serve help are import safe', async () => {
     const output = spyOn(console, 'log').mockImplementation(() => {});

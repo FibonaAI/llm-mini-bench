@@ -12,15 +12,20 @@ const web = process.env.MINI_BENCH_WEB_DIR || join(root, 'web');
 const artifacts = mkdtempSync(join(tmpdir(), 'assessment-web-'));
 const staticFiles = {};
 function loadStatic(directory, prefix = '') {
-  for (const entry of readdirSync(directory, { withFileTypes: true })) {
-    const name = prefix + entry.name;
-    if (entry.isDirectory()) { if (entry.name === 'icons') loadStatic(join(directory, entry.name), name + '/'); }
-    else if (/\.(html|css|js|svg)$/.test(name) && !name.endsWith('.test.js')) staticFiles[name] = readFileSync(join(directory, entry.name), 'utf8');
-  }
+    for (const entry of readdirSync(directory, { withFileTypes: true })) {
+        const name = prefix + entry.name;
+        if (entry.isDirectory()) {
+            if (entry.name === 'icons') loadStatic(join(directory, entry.name), name + '/');
+        } else if (/\.(html|css|js|svg)$/.test(name) && !name.endsWith('.test.js'))
+            staticFiles[name] = readFileSync(join(directory, entry.name), 'utf8');
+    }
 }
 loadStatic(web);
 const loadedBank = load_assessment_bank();
-const bank = { ...loadedBank, tasks: loadedBank.tasks.map(task => Object.fromEntries(Object.entries(task).filter(([, value]) => typeof value !== 'function'))) };
+const bank = {
+    ...loadedBank,
+    tasks: loadedBank.tasks.map(task => Object.fromEntries(Object.entries(task).filter(([, value]) => typeof value !== 'function')))
+};
 assert.equal(bank.tasks.length, 14);
 const script = `async page => {
   page.setDefaultTimeout(8000);
@@ -148,7 +153,7 @@ const script = `async page => {
   require(await page.locator('#model-inspector').isVisible(),'Result row cannot inspect an observation');
   await page.locator('#close-inspector').click();await page.locator('#analysis-results').waitFor({state:'hidden'});
   require(await page.locator('#analysis-results').isHidden(),'Matching results cannot close');
-  await page.screenshot({path:${JSON.stringify(join(artifacts,'analysis-filters.png'))},fullPage:false});
+  await page.screenshot({path:${JSON.stringify(join(artifacts, 'analysis-filters.png'))},fullPage:false});
   const label=await point('baseline-fixture').getAttribute('aria-label');require(Math.abs(Number(label.match(/均分 ([0-9.]+)/)?.[1])-80)<1e-9&&label.includes('$0.02'),'Metric must be mean80 and .06/3=.020: '+label);
   const firstColor=await color('baseline-fixture'),secondColor=await color('peer');require(firstColor!==secondColor,'Different channel/model combinations must have distinct colors');
   require(await page.locator('#chart-color-by').inputValue()==='series','Default color mode must preserve provider/model coloring');
@@ -171,11 +176,11 @@ const script = `async page => {
   await page.locator('[data-load-evidence="baseline-fixture"]').click();
   await page.waitForFunction(()=>document.querySelector('#inspector-content').textContent.includes('saved raw evidence'));
   require((await page.locator('#inspector-content').textContent()).includes('original provenance'),'Raw provenance lost');
-  await page.locator('#close-inspector').click();await page.screenshot({path:${JSON.stringify(join(artifacts,'analysis.png'))},fullPage:true});
+  await page.locator('#close-inspector').click();await page.screenshot({path:${JSON.stringify(join(artifacts, 'analysis.png'))},fullPage:true});
   await page.evaluate(()=>{document.documentElement.dataset.theme='dark';});
   await page.waitForFunction(()=>getComputedStyle(document.documentElement).colorScheme==='dark'&&document.querySelector('.score-cost-svg > rect').getAttribute('fill')==='#232327');
   require(await color('baseline-fixture')!==await color('peer'),'Different channels merged in dark mode');
-  await page.screenshot({path:${JSON.stringify(join(artifacts,'dark-analysis.png'))},fullPage:true});
+  await page.screenshot({path:${JSON.stringify(join(artifacts, 'dark-analysis.png'))},fullPage:true});
   await page.evaluate(()=>{document.documentElement.dataset.theme='light';});
   await page.waitForFunction(()=>getComputedStyle(document.documentElement).colorScheme==='light');
   require(await color('baseline-fixture')===firstColor,'Theme switch lost stable color mapping');
@@ -256,12 +261,12 @@ const script = `async page => {
   require(await page.locator('#bench-run-list [data-bench-run-id="peer-run"]').count()===1,'Legacy standalone run hidden');
   require(await page.locator('#bench-run-list > .history-entry > [data-bench-run-id^="mock-task-"]').count()===0,'Child run appeared as legacy history');
   const taskText=await page.locator('#bench-task-detail').innerText();require(taskText.includes('已完成')&&taskText.includes('运行中')&&taskText.includes('排队中'),'Independent child statuses missing: '+taskText);
-  await page.locator('#bench-task-section').screenshot({path:${JSON.stringify(join(artifacts,'task-children-light.png'))}});
+  await page.locator('#bench-task-section').screenshot({path:${JSON.stringify(join(artifacts, 'task-children-light.png'))}});
   await page.evaluate(()=>{document.documentElement.dataset.theme='dark';});await page.waitForFunction(()=>getComputedStyle(document.documentElement).colorScheme==='dark');
-  await page.locator('#bench-task-section').screenshot({path:${JSON.stringify(join(artifacts,'task-children-dark.png'))}});
+  await page.locator('#bench-task-section').screenshot({path:${JSON.stringify(join(artifacts, 'task-children-dark.png'))}});
   await page.evaluate(()=>{document.documentElement.dataset.theme='light';});await page.setViewportSize({width:390,height:844});
   require(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth),'Mobile task detail overflow');
-  await page.locator('#bench-task-section').screenshot({path:${JSON.stringify(join(artifacts,'task-children-mobile.png'))}});
+  await page.locator('#bench-task-section').screenshot({path:${JSON.stringify(join(artifacts, 'task-children-mobile.png'))}});
   await page.setViewportSize({width:1440,height:1000});
   const taskCard=page.locator('[data-bench-task-id="mock-task-1"]');
   await taskCard.click();require(await taskCard.getAttribute('aria-expanded')==='false'&&await page.locator('#bench-task-section').count()===0,'Same task card must collapse');
@@ -332,7 +337,7 @@ const script = `async page => {
   await page.locator('[data-view-link="analysis"]').click();await point('peer').evaluate(node=>node.dispatchEvent(new MouseEvent('click',{bubbles:true})));await page.locator('[data-open-run="peer-run"]').click();
   await page.locator('#runs-view').waitFor({state:'visible'});require((await page.locator('#bench-run-detail').textContent()).includes('saved legacy response'),'Analysis-to-legacy-run navigation lost');
   await page.locator('#history-search').fill('not-found');require(await page.locator('.run-list-item').count()===0,'History search');await page.locator('#history-search').fill('');await page.locator('#history-status').selectOption('running');require(await page.locator('.run-list-item').count()===0,'History status');await page.locator('#history-status').selectOption('all');
-  await page.screenshot({path:${JSON.stringify(join(artifacts,'tasks.png'))},fullPage:true});
+  await page.screenshot({path:${JSON.stringify(join(artifacts, 'tasks.png'))},fullPage:true});
   timeoutNextSubmit=true;const beforeTimeoutRequests=requests.length;await page.locator('#start-run').click();
   await page.waitForFunction(()=>document.querySelector('#app-notice').textContent.includes('未能确认'));
   require(posts.filter(post=>post.path==='/api/bench/tasks').length===2,'Timed-out task was automatically resubmitted');
@@ -351,7 +356,7 @@ const script = `async page => {
   require(await point('incomplete').count()===0&&await point('historical').count()===0&&await point('extra-sample').count()===0,'Missing cost/incomplete/extra sample plotted');
   await page.locator('#chart-settings-trigger').click();await page.locator('#log-axis').check();require(await point('zero-cost').count()===0,'Zero on log axis');await page.locator('#log-axis').uncheck();require(await point('zero-cost').count()===1,'Known zero absent on linear');await page.locator('#chart-settings-trigger').click();
   await point('eligible').evaluate(node=>node.dispatchEvent(new MouseEvent('click',{bubbles:true})));await page.locator('[data-promote-id="eligible"]').click();await page.waitForFunction(()=>document.querySelector('#dataset-summary').textContent.includes('2 份基线'));require(posts.find(post=>post.path.endsWith('/baseline')).body.target_id==='eligible-target','Promotion target missing');await page.locator('#close-inspector').click();
-  await page.screenshot({path:${JSON.stringify(join(artifacts,'mixed-protocol.png'))},fullPage:true});
+  await page.screenshot({path:${JSON.stringify(join(artifacts, 'mixed-protocol.png'))},fullPage:true});
   await page.locator('#analysis-source').selectOption('baseline');require(!await page.locator('#pareto-line').isDisabled(),'Filtering disabled frontier');
   await page.locator('#analysis-picker .af-search').fill('no-analysis-match');require(await page.locator('.score-cost-point').count()===0,'Unmatched search plotted data');await page.locator('#analysis-reset').click();
   await page.locator('#analysis-result-count').click();await chooseData('all');await page.locator('#analysis-excluded-count').click();
@@ -387,8 +392,8 @@ const script = `async page => {
   }
   console.log('Disclosure geometry: '+JSON.stringify(disclosureGeometry));
   await page.setViewportSize({width:1440,height:1000});
-  await page.setViewportSize({width:390,height:844});require(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth),'Mobile analysis overflow');await page.screenshot({path:${JSON.stringify(join(artifacts,'mobile-analysis.png'))},fullPage:true});
-  await page.locator('[data-view-link="runs"]').click();await page.locator('#task-picker .dp-trigger').click();const bounds=await popup.boundingBox();require(bounds.x>=0&&bounds.x+bounds.width<=390,'Mobile picker clipped');require(await popup.locator('.dp-results').evaluate(node=>node.scrollWidth<=node.clientWidth),'Mobile results overflow horizontally');require(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth),'Mobile popup page overflow');await page.screenshot({path:${JSON.stringify(join(artifacts,'mobile-picker.png'))},fullPage:true});await page.keyboard.press('Escape');require(await page.locator('#task-picker .dp-trigger').evaluate(node=>node===document.activeElement),'Escape failed focus restore');
+  await page.setViewportSize({width:390,height:844});require(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth),'Mobile analysis overflow');await page.screenshot({path:${JSON.stringify(join(artifacts, 'mobile-analysis.png'))},fullPage:true});
+  await page.locator('[data-view-link="runs"]').click();await page.locator('#task-picker .dp-trigger').click();const bounds=await popup.boundingBox();require(bounds.x>=0&&bounds.x+bounds.width<=390,'Mobile picker clipped');require(await popup.locator('.dp-results').evaluate(node=>node.scrollWidth<=node.clientWidth),'Mobile results overflow horizontally');require(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth),'Mobile popup page overflow');await page.screenshot({path:${JSON.stringify(join(artifacts, 'mobile-picker.png'))},fullPage:true});await page.keyboard.press('Escape');require(await page.locator('#task-picker .dp-trigger').evaluate(node=>node===document.activeElement),'Escape failed focus restore');
   await page.setViewportSize({width:1440,height:1000});
   await page.locator('#task-picker .dp-trigger').click();await popup.getByRole('button',{name:'清空全部',exact:true}).click();
   await popup.locator('.dp-search').fill('no-match-before-reset');
@@ -408,7 +413,7 @@ const script = `async page => {
   for(const [namespace,label] of [['auto','自动路由'],['group','路由组']]){await chooseProvider(JSON.stringify(['remote-A',namespace]));require((await popup.locator('.dp-route').innerText()).includes(label),'Remote routing namespace mislabeled');require(await popup.locator('.dp-quota-cards').count()===0,'Inferred group member accounts');}
   await chooseProvider('provider:ordinary-owner');require(await popup.locator('.dp-think[data-think="high"]').getAttribute('data-model')==='ordinary-owner/openai/not-a-remote','Ordinary slash model changed');await popup.locator('.dp-think[data-think="high"]').click();
   require(!await popup.locator('.dp-provider-filter option').evaluateAll(nodes=>nodes.some(node=>node.textContent==='ordinary-owner / openai')),'Ordinary slash model falsely expanded');
-  await page.screenshot({path:${JSON.stringify(join(artifacts,'remote-picker.png'))},fullPage:true});await popup.getByRole('button',{name:'完成',exact:true}).click();
+  await page.screenshot({path:${JSON.stringify(join(artifacts, 'remote-picker.png'))},fullPage:true});await popup.getByRole('button',{name:'完成',exact:true}).click();
   await page.waitForFunction(()=>!document.querySelector('#start-run').disabled);
   plan={targets:await page.evaluate(()=>window.MiniBench.runState.getSelectedTargets())};
   require(JSON.stringify(plan.targets.map(({route_id,thinking})=>({route_id,thinking})))===JSON.stringify(['ordinary-slash-route','remote-A-openai','remote-B-openai'].map(route_id=>({route_id,thinking:'high'}))),'Remote task plan changed exact route IDs or Thinking');
@@ -769,13 +774,20 @@ const script = `async page => {
   await page.evaluate(()=>sessionStorage.clear());const before=requests.length;await page.goto('http://assessment-ui.invalid/?view=analysis');await page.locator('#app-notice').waitFor({state:'visible'});require((await page.locator('#app-notice').textContent()).includes('缺少访问令牌'),'Missing token message');require(!requests.slice(before).some(path=>path.startsWith('/api/')),'Unauthenticated API call');
   require(!requests.some(path=>/^\\/api\\/(runs|questions|observations|models)/.test(path)),'Legacy API');require(errors.length===0,errors.join('\\n'));return {passed:true,pickerGeometry,polishedGeometry,posts,errors,requests:[...new Set(requests)]};
 }`;
-const scriptPath=join(artifacts,'browser-check.js');writeFileSync(scriptPath,script);
-const session=`assessment-test-${Date.now()}`;
+const scriptPath = join(artifacts, 'browser-check.js');
+writeFileSync(scriptPath, script);
+const session = `assessment-test-${Date.now()}`;
 try {
-  execFileSync('playwright-cli',[`-s=${session}`,'open','about:blank'],{cwd:artifacts,encoding:'utf8'});
-  const result=execFileSync('playwright-cli',['--raw',`-s=${session}`,'run-code',`--filename=${scriptPath}`],{cwd:artifacts,encoding:'utf8',timeout:90000});
-  writeFileSync(join(artifacts,'result.txt'),result);console.log(result.slice(0,5000));assert.match(result,/"passed":\s*true/,'Browser acceptance did not report success');
+    execFileSync('playwright-cli', [`-s=${session}`, 'open', 'about:blank'], { cwd: artifacts, encoding: 'utf8' });
+    const result = execFileSync('playwright-cli', ['--raw', `-s=${session}`, 'run-code', `--filename=${scriptPath}`], {
+        cwd: artifacts,
+        encoding: 'utf8',
+        timeout: 90000
+    });
+    writeFileSync(join(artifacts, 'result.txt'), result);
+    console.log(result.slice(0, 5000));
+    assert.match(result, /"passed":\s*true/, 'Browser acceptance did not report success');
 } finally {
-  execFileSync('playwright-cli',[`-s=${session}`,'close'],{cwd:artifacts,encoding:'utf8'});
-  console.log(`Browser evidence: ${artifacts}`);
+    execFileSync('playwright-cli', [`-s=${session}`, 'close'], { cwd: artifacts, encoding: 'utf8' });
+    console.log(`Browser evidence: ${artifacts}`);
 }

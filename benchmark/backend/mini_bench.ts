@@ -5,11 +5,7 @@ import { homedir } from 'node:os';
 import { dirname, extname, join, relative, resolve } from 'node:path';
 import { randomUUID, timingSafeEqual } from 'node:crypto';
 import { fileURLToPath } from 'node:url';
-import {
-    assessment_observations,
-    build_assessment_baseline,
-    load_assessment_baselines
-} from '../src/assessment_baselines.ts';
+import { assessment_observations, build_assessment_baseline, load_assessment_baselines } from '../src/assessment_baselines.ts';
 import { load_assessment_bank } from '../src/assessment_bank.ts';
 import { create_assessment_source_context, type AssessmentSourceContext } from '../src/assessment_provenance.ts';
 import { parseAssessmentJson } from '../src/assessment_json.ts';
@@ -52,17 +48,12 @@ export class BenchService {
     private close_promise: Promise<void> | null = null;
     constructor(options: Partial<MiniBenchOptions> = {}) {
         this.token = options.token ?? process.env.MAGPIE_BENCH_TOKEN ?? '';
-        if (Array.from(this.token).length < 32)
-            throw new TypeError('MAGPIE_BENCH_TOKEN must be at least 32 characters');
+        if (Array.from(this.token).length < 32) throw new TypeError('MAGPIE_BENCH_TOKEN must be at least 32 characters');
         const concurrency = process.env.MAGPIE_BENCH_CONCURRENCY ?? '18';
         if (!/^\d+$/.test(concurrency) || Number(concurrency) < 1 || Number(concurrency) > 64)
             throw new TypeError('MAGPIE_BENCH_CONCURRENCY must be an integer from 1 to 64');
         this.concurrency = Number(concurrency);
-        this.data_dir = resolve(
-            expandHome(
-                options.data_dir ?? process.env.MAGPIE_BENCH_DATA_DIR ?? '~/.local/share/magpie-mini-bench'
-            )
-        );
+        this.data_dir = resolve(expandHome(options.data_dir ?? process.env.MAGPIE_BENCH_DATA_DIR ?? '~/.local/share/magpie-mini-bench'));
         this.adapter = options.adapter;
         private_directory(this.data_dir);
         private_directory(join(this.data_dir, 'assessment-baselines'));
@@ -76,8 +67,7 @@ export class BenchService {
         if (this.closed) throw new BenchUnavailableError('Assessment service is closed');
         if (!this._bench_execution) {
             const override = process.env.MAGPIE_BENCH_ROUTES_FILE;
-            if (override !== undefined && !override.trim())
-                throw new TypeError('Bench routes file override must not be empty');
+            if (override !== undefined && !override.trim()) throw new TypeError('Bench routes file override must not be empty');
             const path = expandHome(override ?? join(this.data_dir, 'routes.json'));
             let entryExists = false;
             try {
@@ -86,15 +76,8 @@ export class BenchService {
             } catch (error) {
                 if (!(error instanceof Error && 'code' in error && error.code === 'ENOENT')) throw error;
             }
-            const routes =
-                override !== undefined || entryExists || !this.adapter
-                    ? new BenchRouteRegistry(path)
-                    : this.adapter.routes;
-            this._bench_execution = new BenchExecutionService(
-                join(this.data_dir, 'assessment'),
-                routes,
-                this.concurrency
-            );
+            const routes = override !== undefined || entryExists || !this.adapter ? new BenchRouteRegistry(path) : this.adapter.routes;
+            this._bench_execution = new BenchExecutionService(join(this.data_dir, 'assessment'), routes, this.concurrency);
         }
         return this._bench_execution;
     }
@@ -104,7 +87,9 @@ export class BenchService {
         this.close_promise = this._bench_execution?.close() ?? Promise.resolve();
         return this.close_promise;
     }
-    async models(): Promise<JsonObject[]> { return this.adapter ? structuredClone(await this.adapter.models()) : []; }
+    async models(): Promise<JsonObject[]> {
+        return this.adapter ? structuredClone(await this.adapter.models()) : [];
+    }
     async quota_cards(refresh = false): Promise<BenchQuotaCatalog> {
         return this.adapter?.quotas ? this.adapter.quotas.read(refresh) : { status: 'unavailable', fetched_at: null, cards: [] };
     }
@@ -113,23 +98,20 @@ export class BenchService {
         // Historical fixtures are retained for offline replay, never mixed into personal workspaces.
         const directory = join(this.data_dir, 'assessment-baselines');
         if (existsSync(directory))
-            for (const name of readdirSync(directory).sort())
-                if (name.endsWith('.json')) paths.push(join(directory, name));
+            for (const name of readdirSync(directory).sort()) if (name.endsWith('.json')) paths.push(join(directory, name));
         const baselines = load_assessment_baselines(paths, context);
-        return [...new Map(baselines.map((baseline) => [baseline.id, baseline])).values()];
+        return [...new Map(baselines.map(baseline => [baseline.id, baseline])).values()];
     }
     create_run_baseline(run_id: string, target_id: string) {
         const run = this.bench_execution().get_run(run_id);
         if (!run) return null;
         const baseline = build_assessment_baseline(run, target_id);
-        save_execution_json(
-            join(this.data_dir, 'assessment-baselines', randomUUID().replaceAll('-', '') + '.json'),
-            baseline
-        );
+        save_execution_json(join(this.data_dir, 'assessment-baselines', randomUUID().replaceAll('-', '') + '.json'), baseline);
         return baseline;
     }
     observations() {
-        const execution = this.bench_execution(), context = create_assessment_source_context();
+        const execution = this.bench_execution(),
+            context = create_assessment_source_context();
         return assessment_observations(this.baselines(context), execution.list_run_snapshots(), context);
     }
 }
@@ -187,10 +169,7 @@ async function requestBody(request: Request): Promise<JsonObject> {
     return body;
 }
 /** Embeddable Bun fetch handler enforces token, Host, Origin, and strict request bodies. */
-export function make_handler(
-    service: BenchService,
-    web_dir?: string
-): (request: Request) => Promise<Response> {
+export function make_handler(service: BenchService, web_dir?: string): (request: Request) => Promise<Response> {
     return async (request: Request): Promise<Response> => {
         const headers = new Headers({
             'Content-Type': 'application/json; charset=utf-8',
@@ -202,10 +181,8 @@ export function make_handler(
             headers.set('Access-Control-Allow-Origin', 'null');
             headers.set('Vary', 'Origin');
         }
-        const json = (status: number, value: unknown) =>
-            new Response(JSON.stringify(value), { status, headers });
-        if (!secureRequest(request))
-            return json(403, { error: 'loopback host and same-origin requests only' });
+        const json = (status: number, value: unknown) => new Response(JSON.stringify(value), { status, headers });
+        if (!secureRequest(request)) return json(403, { error: 'loopback host and same-origin requests only' });
         if (request.method === 'OPTIONS') {
             if (request.headers.get('origin') !== 'null') return json(403, { error: 'origin not allowed' });
             headers.set('Access-Control-Allow-Methods', 'GET, POST');
@@ -223,10 +200,8 @@ export function make_handler(
             if (path.startsWith('/api/bench/')) {
                 if (request.method === 'GET' && path === '/api/bench/banks') {
                     const bank = load_assessment_bank(PRODUCTION_BANK_VERSION);
-                    const tasks = bank.tasks.map((task) =>
-                        Object.fromEntries(
-                            Object.entries(task).filter(([, value]) => typeof value !== 'function')
-                        )
+                    const tasks = bank.tasks.map(task =>
+                        Object.fromEntries(Object.entries(task).filter(([, value]) => typeof value !== 'function'))
                     );
                     return json(200, {
                         execution_policy: 'sample-timeout-v1',
@@ -244,8 +219,7 @@ export function make_handler(
                         ]
                     });
                 }
-                if (request.method === 'GET' && path === '/api/bench/baselines')
-                    return json(200, { baselines: service.baselines() });
+                if (request.method === 'GET' && path === '/api/bench/baselines') return json(200, { baselines: service.baselines() });
                 if (request.method === 'GET' && path === '/api/bench/observations')
                     return json(200, { observations: service.observations() });
                 const execution = service.bench_execution();
@@ -257,8 +231,7 @@ export function make_handler(
                 }
                 if (request.method === 'POST' && path === '/api/bench/task-plans')
                     return json(200, await execution.plan_task(await requestBody(request)));
-                if (request.method === 'GET' && path === '/api/bench/tasks')
-                    return json(200, { tasks: execution.list_tasks() });
+                if (request.method === 'GET' && path === '/api/bench/tasks') return json(200, { tasks: execution.list_tasks() });
                 if (request.method === 'POST' && path === '/api/bench/tasks')
                     return json(202, { id: await execution.start_task(await requestBody(request)) });
                 const taskMatch = path.match(/^\/api\/bench\/tasks\/([0-9a-f]{32})(\/cancel|\/retry)?$/);
@@ -269,18 +242,16 @@ export function make_handler(
                     }
                     if (request.method === 'POST' && taskMatch[2] === '/retry') {
                         const body = await requestBody(request);
-                        if (Object.keys(body).length !== 1 || typeof body.request_id !== 'string') throw new TypeError('retry request must contain only request_id');
+                        if (Object.keys(body).length !== 1 || typeof body.request_id !== 'string')
+                            throw new TypeError('retry request must contain only request_id');
                         return json(202, await execution.retry_task(taskMatch[1]!, body.request_id));
                     }
                     if (request.method === 'POST' && taskMatch[2] === '/cancel')
-                        return execution.cancel_task(taskMatch[1]!)
-                            ? json(200, { ok: true })
-                            : json(404, { error: 'task not found' });
+                        return execution.cancel_task(taskMatch[1]!) ? json(200, { ok: true }) : json(404, { error: 'task not found' });
                 }
                 if (request.method === 'POST' && path === '/api/bench/plans')
                     return json(200, await execution.plan(await requestBody(request)));
-                if (request.method === 'GET' && path === '/api/bench/runs')
-                    return json(200, { runs: execution.list_runs() });
+                if (request.method === 'GET' && path === '/api/bench/runs') return json(200, { runs: execution.list_runs() });
                 if (request.method === 'POST' && path === '/api/bench/runs')
                     return json(202, { id: await execution.start_run(await requestBody(request)) });
                 const match = path.match(/^\/api\/bench\/runs\/([0-9a-f]{32})(\/cancel|\/retry|\/baseline|\/calls)?$/);
@@ -297,8 +268,15 @@ export function make_handler(
                     }
                     if (request.method === 'POST' && match[2] === '/retry') {
                         const body = await requestBody(request);
-                        if (Object.keys(body).some(key => !['request_id', 'policy'].includes(key)) || typeof body.request_id !== 'string' || body.policy !== undefined && body.policy !== 'sample-timeout-v1') throw new TypeError('retry request requires request_id and an optional supported policy');
-                        return json(202, { id: await execution.retry_run(id, body.request_id, body.policy as 'sample-timeout-v1' | undefined) });
+                        if (
+                            Object.keys(body).some(key => !['request_id', 'policy'].includes(key)) ||
+                            typeof body.request_id !== 'string' ||
+                            (body.policy !== undefined && body.policy !== 'sample-timeout-v1')
+                        )
+                            throw new TypeError('retry request requires request_id and an optional supported policy');
+                        return json(202, {
+                            id: await execution.retry_run(id, body.request_id, body.policy as 'sample-timeout-v1' | undefined)
+                        });
                     }
                     if (request.method === 'POST' && match[2] === '/baseline') {
                         const body = await requestBody(request);
@@ -308,24 +286,16 @@ export function make_handler(
                         return baseline ? json(201, { baseline }) : json(404, { error: 'run not found' });
                     }
                     if (request.method === 'POST' && match[2] === '/cancel')
-                        return execution.cancel_run(id)
-                            ? json(200, { ok: true })
-                            : json(404, { error: 'run not found' });
+                        return execution.cancel_run(id) ? json(200, { ok: true }) : json(404, { error: 'run not found' });
                 }
                 return json(404, { error: 'not found' });
             }
-            if (request.method === 'GET' && path === '/api/models')
-                return json(200, { models: await service.models() });
+            if (request.method === 'GET' && path === '/api/models') return json(200, { models: await service.models() });
             if (request.method === 'GET' && web_dir && !path.startsWith('/api/')) {
                 const root = realpathSync(web_dir);
                 let candidate: string;
                 try {
-                    candidate = realpathSync(
-                        resolve(
-                            root,
-                            path === '/' ? 'index.html' : decodeURIComponent(path).replace(/^\/+/, '')
-                        )
-                    );
+                    candidate = realpathSync(resolve(root, path === '/' ? 'index.html' : decodeURIComponent(path).replace(/^\/+/, '')));
                 } catch {
                     return json(404, { error: 'not found' });
                 }
@@ -339,13 +309,7 @@ export function make_handler(
                     '.png': 'image/png',
                     '.ico': 'image/x-icon'
                 };
-                if (
-                    inside &&
-                    !inside.startsWith('..') &&
-                    !inside.startsWith('/') &&
-                    extension in mime &&
-                    lstatSync(candidate).isFile()
-                ) {
+                if (inside && !inside.startsWith('..') && !inside.startsWith('/') && extension in mime && lstatSync(candidate).isFile()) {
                     // Magpie's allow-scripts iframe has an opaque origin. Modules and SVG
                     // masks need the same narrowly scoped Origin:null CORS headers as the API.
                     headers.set('Content-Type', mime[extension] + '; charset=utf-8');
@@ -360,8 +324,7 @@ export function make_handler(
                     error: 'execution service unavailable; inspect storage and restart before submitting again'
                 });
             // Validation errors originate in local validators, not arbitrary upstream exceptions.
-            if (error instanceof TypeError || error instanceof SyntaxError)
-                return json(400, { error: error.message });
+            if (error instanceof TypeError || error instanceof SyntaxError) return json(400, { error: error.message });
             return json(500, { error: 'assessment service error' });
         }
     };
@@ -371,11 +334,9 @@ export async function startMiniBenchService(
     options: MiniBenchOptions
 ): Promise<{ port: number; service: BenchService; stop: () => Promise<void> }> {
     const configuredPort = options.port === undefined ? process.env.MAGPIE_BENCH_PORT : undefined;
-    if (configuredPort !== undefined && !/^\d+$/.test(configuredPort))
-        throw new TypeError('LLM Mini Bench port is outside safety bounds');
+    if (configuredPort !== undefined && !/^\d+$/.test(configuredPort)) throw new TypeError('LLM Mini Bench port is outside safety bounds');
     const port = options.port ?? Number(configuredPort ?? 3481);
-    if (!Number.isInteger(port) || port < 0 || port > 65535)
-        throw new TypeError('LLM Mini Bench port is outside safety bounds');
+    if (!Number.isInteger(port) || port < 0 || port > 65535) throw new TypeError('LLM Mini Bench port is outside safety bounds');
     const service = new BenchService(options);
     let server: ReturnType<typeof Bun.serve>;
     try {

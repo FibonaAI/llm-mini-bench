@@ -9,7 +9,11 @@ import { assessmentChartMetric } from './assessment-chart-metric.js';
  * selected IDs, log scale, and history membership are deliberately not inputs.
  */
 export function createAnalysisModel({ mapObservations = observationPickerRecords, deriveMetric = assessmentChartMetric } = {}) {
-  let observations = null, records = [], expectedTaskIds = null, bankVersion = null, bankKey = 'null';
+  let observations = null,
+    records = [],
+    expectedTaskIds = null,
+    bankVersion = null,
+    bankKey = 'null';
   const axes = new Map();
   return {
     /** New server response identity invalidates mapped identities and both axis metrics. */
@@ -32,9 +36,13 @@ export function createAnalysisModel({ mapObservations = observationPickerRecords
     /** Return stable derived records for one axis, preserving repeats and raw originals. */
     records(axis = 'cost') {
       const key = axis === 'tokens' ? 'tokens' : 'cost';
-      if (!axes.has(key)) axes.set(key, records.map(record => ({ ...record, ...deriveMetric(record.original, expectedTaskIds, key, bankVersion) })));
+      if (!axes.has(key))
+        axes.set(
+          key,
+          records.map(record => ({ ...record, ...deriveMetric(record.original, expectedTaskIds, key, bankVersion) }))
+        );
       return axes.get(key);
-    },
+    }
   };
 }
 

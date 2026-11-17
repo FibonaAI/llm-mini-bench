@@ -5,8 +5,15 @@ function recordTimestamp(record) {
 
 function historyGroupKey(record) {
   // Whole-bank and diagnostic records, and runs and baselines, never replace each other.
-  return JSON.stringify([record.source, record.bank_version, record.bank_scope,
-    record.providerId, record.accountId, record.model, record.think]);
+  return JSON.stringify([
+    record.source,
+    record.bank_version,
+    record.bank_scope,
+    record.providerId,
+    record.accountId,
+    record.model,
+    record.think
+  ]);
 }
 
 function localDateBoundary(value, nextDay = false) {
@@ -24,11 +31,17 @@ export function buildAnalysisHistoryStates(records) {
   for (const record of records) {
     const time = recordTimestamp(record);
     if (!Number.isFinite(time)) continue;
-    const key = historyGroupKey(record), previous = latest.get(key);
-    if (!previous || time > recordTimestamp(previous) || (time === recordTimestamp(previous) && record.id.localeCompare(previous.id) > 0)) latest.set(key, record);
+    const key = historyGroupKey(record),
+      previous = latest.get(key);
+    if (!previous || time > recordTimestamp(previous) || (time === recordTimestamp(previous) && record.id.localeCompare(previous.id) > 0))
+      latest.set(key, record);
   }
-  return new Map(records.map(record => [record.id, !Number.isFinite(recordTimestamp(record)) ? 'unknown'
-    : latest.get(historyGroupKey(record)) === record ? 'latest' : 'historical']));
+  return new Map(
+    records.map(record => [
+      record.id,
+      !Number.isFinite(recordTimestamp(record)) ? 'unknown' : latest.get(historyGroupKey(record)) === record ? 'latest' : 'historical'
+    ])
+  );
 }
 
 /** Select latest or historical records before chart eligibility; date bounds use local calendar days. */
@@ -38,10 +51,13 @@ export function selectAnalysisHistoryRecords(records, { mode = 'latest', from = 
     // Undated history remains visible: do not pretend an arbitrary record is the newest.
     return records.filter(record => states.get(record.id) !== 'historical');
   }
-  const start = localDateBoundary(from), end = localDateBoundary(to, true);
-  return records.filter(record => {
-    if (mode === 'selected' && !selectedIds.has(record.id)) return false;
-    const time = recordTimestamp(record);
-    return (!from || Number.isFinite(start) && time >= start) && (!to || Number.isFinite(end) && time < end);
-  }).sort((a, b) => (recordTimestamp(b) || 0) - (recordTimestamp(a) || 0) || a.id.localeCompare(b.id));
+  const start = localDateBoundary(from),
+    end = localDateBoundary(to, true);
+  return records
+    .filter(record => {
+      if (mode === 'selected' && !selectedIds.has(record.id)) return false;
+      const time = recordTimestamp(record);
+      return (!from || (Number.isFinite(start) && time >= start)) && (!to || (Number.isFinite(end) && time < end));
+    })
+    .sort((a, b) => (recordTimestamp(b) || 0) - (recordTimestamp(a) || 0) || a.id.localeCompare(b.id));
 }

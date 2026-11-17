@@ -18,36 +18,79 @@ delete process.env.MAGPIE_BENCH_ROUTES_FILE;
 const adapter = new MagpieBenchAdapter('http://127.0.0.1:1/never-contact', 'offline-test');
 const service = new BenchService({ token, data_dir: join(artifacts, 'data'), adapter });
 // Seed this isolated acceptance workspace explicitly; production workspaces stay empty.
-copyFileSync(fileURLToPath(new URL('../baselines/1e0617b82fc8b44f085d147ffd8c53a6998856050364ab6c4c3a8363a080372a.json', import.meta.url)), join(service.data_dir, 'assessment-baselines', 'fixture.json'));
-adapter.models = async () => [
-  ...['remote-A', 'remote-B'].map(owner => ({ id: `${owner}/openai/exact/model-v1`, owned_by: owner, magpie_via: ['remote-hop', 'local-hop'], reasoning_levels: ['high'] })),
-  ...['auto', 'group'].map(namespace => ({ id: `remote-A/${namespace}/model-v1`, owned_by: 'remote-A', magpie_via: ['remote-hop', 'local-hop'], reasoning_levels: ['high'] })),
-  { id: 'ordinary-owner/openai/not-a-remote', owned_by: 'ordinary-owner', reasoning_levels: ['high'] },
-  ...['image', 'video', 'decision'].map(kind => ({ id: `excluded-${kind}/model`, owned_by: `excluded-${kind}`, kind }))
-].map(model => ({ ...model, pricing: { prompt: '0.000001', completion: '0.000002' } }));
+copyFileSync(
+    fileURLToPath(new URL('../baselines/1e0617b82fc8b44f085d147ffd8c53a6998856050364ab6c4c3a8363a080372a.json', import.meta.url)),
+    join(service.data_dir, 'assessment-baselines', 'fixture.json')
+);
+adapter.models = async () =>
+    [
+        ...['remote-A', 'remote-B'].map(owner => ({
+            id: `${owner}/openai/exact/model-v1`,
+            owned_by: owner,
+            magpie_via: ['remote-hop', 'local-hop'],
+            reasoning_levels: ['high']
+        })),
+        ...['auto', 'group'].map(namespace => ({
+            id: `remote-A/${namespace}/model-v1`,
+            owned_by: 'remote-A',
+            magpie_via: ['remote-hop', 'local-hop'],
+            reasoning_levels: ['high']
+        })),
+        { id: 'ordinary-owner/openai/not-a-remote', owned_by: 'ordinary-owner', reasoning_levels: ['high'] },
+        ...['image', 'video', 'decision'].map(kind => ({ id: `excluded-${kind}/model`, owned_by: `excluded-${kind}`, kind }))
+    ].map(model => ({ ...model, pricing: { prompt: '0.000001', completion: '0.000002' } }));
 adapter.gateway = async (path, body) => {
-  if (path === '/magpie/quotas/cards' && body === undefined) return { data: [{ provider: 'remote-A/openai', user: 'sandbox@example.invalid', readAt: '2026-11-11T00:00:00Z', windows: [{ name: '7 days', used: 23 }], api_key: 'must-not-reach-browser' }] };
-  throw new Error('Sandbox acceptance must never contact a gateway');
+    if (path === '/magpie/quotas/cards' && body === undefined)
+        return {
+            data: [
+                {
+                    provider: 'remote-A/openai',
+                    user: 'sandbox@example.invalid',
+                    readAt: '2026-11-11T00:00:00Z',
+                    windows: [{ name: '7 days', used: 23 }],
+                    api_key: 'must-not-reach-browser'
+                }
+            ]
+        };
+    throw new Error('Sandbox acceptance must never contact a gateway');
 };
 const handler = make_handler(service, web);
 const requests = [];
-const backend = Bun.serve({ hostname: '127.0.0.1', port: 0, async fetch(request) {
-  const entry = { path: new URL(request.url).pathname, method: request.method, origin: request.headers.get('origin'), authenticated: request.headers.get('x-mini-bench-token') === token };
-  requests.push(entry);
-  // No paid or mutating request can reach the production handler in this acceptance test.
-  if (!['GET', 'OPTIONS'].includes(request.method)) return new Response('Mutations disabled by acceptance harness', { status: 405 });
-  const response = await handler(request);
-  entry.status = response.status;
-  entry.allowOrigin = response.headers.get('access-control-allow-origin');
-  return response;
-} });
+const backend = Bun.serve({
+    hostname: '127.0.0.1',
+    port: 0,
+    async fetch(request) {
+        const entry = {
+            path: new URL(request.url).pathname,
+            method: request.method,
+            origin: request.headers.get('origin'),
+            authenticated: request.headers.get('x-mini-bench-token') === token
+        };
+        requests.push(entry);
+        // No paid or mutating request can reach the production handler in this acceptance test.
+        if (!['GET', 'OPTIONS'].includes(request.method)) return new Response('Mutations disabled by acceptance harness', { status: 405 });
+        const response = await handler(request);
+        entry.status = response.status;
+        entry.allowOrigin = response.headers.get('access-control-allow-origin');
+        return response;
+    }
+});
 const backendUrl = `http://127.0.0.1:${backend.port}`;
-const host = Bun.serve({ hostname: '127.0.0.1', port: 0, fetch() {
-  return new Response(`<!doctype html><html><body style="margin:0"><iframe title="Magpie sandbox" sandbox="allow-scripts" src="${backendUrl}/#token=${token}" style="border:0;width:100vw;height:100vh"></iframe></body></html>`, { headers: { 'content-type': 'text/html' } });
-} });
+const host = Bun.serve({
+    hostname: '127.0.0.1',
+    port: 0,
+    fetch() {
+        return new Response(
+            `<!doctype html><html><body style="margin:0"><iframe title="Magpie sandbox" sandbox="allow-scripts" src="${backendUrl}/#token=${token}" style="border:0;width:100vw;height:100vh"></iframe></body></html>`,
+            { headers: { 'content-type': 'text/html' } }
+        );
+    }
+});
 const session = `sandbox-regression-${Date.now()}`;
 const scriptPath = join(artifacts, 'check.js');
-writeFileSync(scriptPath, `async page => {
+writeFileSync(
+    scriptPath,
+    `async page => {
  page.setDefaultTimeout(8000);
  const errors=[],consoleErrors=[],failures=[];
  page.on('pageerror',error=>errors.push(String(error)));
@@ -87,29 +130,66 @@ writeFileSync(scriptPath, `async page => {
  const taskState=await frame.evaluate(()=>({sampleConcurrency:document.querySelector('#sample-concurrency')?.value,runConcurrency:document.querySelector('#run-concurrency')?.value,rounds:document.querySelector('#run-rounds')?.value,planDisabled:!document.querySelector('#bench-plan'),startDisabled:document.querySelector('#start-run')?.disabled,history:document.querySelector('#bench-run-list')?.textContent}));
  await page.screenshot({path:${JSON.stringify(join(artifacts, 'sandbox.png'))},fullPage:true});
  return {passed:state.origin==='null'&&state.storageDenied&&state.pickers===1&&state.analysisFilters===3&&Object.values(legendState).every(Boolean)&&Object.values(analysisState).every(Boolean)&&state.chart&&state.points>0&&state.bank.includes('14')&&svg.ok&&svg.svg&&taskState.sampleConcurrency==='6'&&taskState.runConcurrency==='3'&&taskState.rounds==='3'&&taskState.planDisabled&&taskState.startDisabled&&Object.values(remoteState).every(Boolean)&&!errors.length&&!consoleErrors.length&&!failures.length,state,legendState,analysisState,taskState,remoteState,svg,readyError,errors,consoleErrors,failures};
-}`);
+}`
+);
 let opened = false;
 try {
-  await exec('playwright-cli', [`-s=${session}`, 'open', 'about:blank'], { cwd: artifacts, timeout: 15000 });
-  opened = true;
-  const { stdout } = await exec('playwright-cli', ['--raw', `-s=${session}`, 'run-code', `--filename=${scriptPath}`], { cwd: artifacts, timeout: 30000, maxBuffer: 1024 * 1024 });
-  writeFileSync(join(artifacts, 'result.txt'), stdout);
-  writeFileSync(join(artifacts, 'http-requests.json'), JSON.stringify(requests, null, 2));
-  console.log(stdout);
-  assert(requests.every(request => ['GET', 'OPTIONS'].includes(request.method)), 'Unexpected mutation attempted');
-  assert(requests.some(request => request.path.startsWith('/api/') && request.method === 'GET' && request.authenticated && request.status === 200), 'No real authenticated API GET');
-  for (const path of ['/api/bench/tasks', '/api/bench/runs']) {
-    assert(requests.some(request => request.path === path && request.method === 'GET' && request.origin === 'null' && request.authenticated && request.status === 200 && request.allowOrigin === 'null'), `Missing real opaque-origin history GET: ${path}`);
-  }
-  assert(requests.some(request => request.path === '/chart-legend.js' && request.method === 'GET' && request.origin === 'null' && request.status === 200 && request.allowOrigin === 'null'), 'Legend module did not load through real opaque-origin CORS');
-  assert(requests.some(request => request.method === 'OPTIONS' && request.origin === 'null' && request.status === 204), 'Opaque-origin preflight absent');
-  assert.match(stdout, /"passed":\s*true/, 'Real sandbox browser regression failed (see saved CORS diagnostics)');
+    await exec('playwright-cli', [`-s=${session}`, 'open', 'about:blank'], { cwd: artifacts, timeout: 15000 });
+    opened = true;
+    const { stdout } = await exec('playwright-cli', ['--raw', `-s=${session}`, 'run-code', `--filename=${scriptPath}`], {
+        cwd: artifacts,
+        timeout: 30000,
+        maxBuffer: 1024 * 1024
+    });
+    writeFileSync(join(artifacts, 'result.txt'), stdout);
+    writeFileSync(join(artifacts, 'http-requests.json'), JSON.stringify(requests, null, 2));
+    console.log(stdout);
+    assert(
+        requests.every(request => ['GET', 'OPTIONS'].includes(request.method)),
+        'Unexpected mutation attempted'
+    );
+    assert(
+        requests.some(
+            request => request.path.startsWith('/api/') && request.method === 'GET' && request.authenticated && request.status === 200
+        ),
+        'No real authenticated API GET'
+    );
+    for (const path of ['/api/bench/tasks', '/api/bench/runs']) {
+        assert(
+            requests.some(
+                request =>
+                    request.path === path &&
+                    request.method === 'GET' &&
+                    request.origin === 'null' &&
+                    request.authenticated &&
+                    request.status === 200 &&
+                    request.allowOrigin === 'null'
+            ),
+            `Missing real opaque-origin history GET: ${path}`
+        );
+    }
+    assert(
+        requests.some(
+            request =>
+                request.path === '/chart-legend.js' &&
+                request.method === 'GET' &&
+                request.origin === 'null' &&
+                request.status === 200 &&
+                request.allowOrigin === 'null'
+        ),
+        'Legend module did not load through real opaque-origin CORS'
+    );
+    assert(
+        requests.some(request => request.method === 'OPTIONS' && request.origin === 'null' && request.status === 204),
+        'Opaque-origin preflight absent'
+    );
+    assert.match(stdout, /"passed":\s*true/, 'Real sandbox browser regression failed (see saved CORS diagnostics)');
 } finally {
-  if (opened) await exec('playwright-cli', [`-s=${session}`, 'close'], { cwd: artifacts, timeout: 10000 }).catch(() => {});
-  host.stop(true);
-  backend.stop(true);
-  await service.close();
-  if (previousRoutes === undefined) delete process.env.MAGPIE_BENCH_ROUTES_FILE;
-  else process.env.MAGPIE_BENCH_ROUTES_FILE = previousRoutes;
-  console.log(`Sandbox evidence: ${artifacts}`);
+    if (opened) await exec('playwright-cli', [`-s=${session}`, 'close'], { cwd: artifacts, timeout: 10000 }).catch(() => {});
+    host.stop(true);
+    backend.stop(true);
+    await service.close();
+    if (previousRoutes === undefined) delete process.env.MAGPIE_BENCH_ROUTES_FILE;
+    else process.env.MAGPIE_BENCH_ROUTES_FILE = previousRoutes;
+    console.log(`Sandbox evidence: ${artifacts}`);
 }

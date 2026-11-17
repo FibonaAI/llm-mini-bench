@@ -5,9 +5,17 @@ const bank = load_assessment_bank('2.2');
 const words = Array.from({ length: 32 }, (_, word) => word);
 const bit = (word: number, index: number) => (word >> index) & 1;
 const popcount = (word: number): number => word.toString(2).replaceAll('0', '').length;
-const orbitCounts = [[0, 0], [0, 1], [0, 2], [1, 0], [1, 1], [1, 2]];
+const orbitCounts = [
+    [0, 0],
+    [0, 1],
+    [0, 2],
+    [1, 0],
+    [1, 1],
+    [1, 2]
+];
 function orbitIndex(word: number): number {
-    const k = popcount(word & 7), l = popcount(word >> 3);
+    const k = popcount(word & 7),
+        l = popcount(word >> 3);
     return orbitCounts.findIndex(([a, b]) => (k === a && l === b) || (k === 3 - a && l === 2 - b));
 }
 function expandOrbitMasses(masses: number[]): number[] {
@@ -21,7 +29,9 @@ function checkAtomicMarginals(masses: number[], numerator: number, denominator: 
         for (let j = i + 1; j < 5; j++) {
             const [originalNumerator, originalDenominator] = j < 3 ? [2, 3] : i === 3 ? [1, 1] : [2, 5];
             const actual = words.reduce((sum, word) => sum + masses[word] * Number(bit(word, i) !== bit(word, j)), 0);
-            expect(actual * denominator * 2 * originalDenominator).toBe(2880 * (2 * numerator * originalNumerator + (denominator - numerator) * originalDenominator));
+            expect(actual * denominator * 2 * originalDenominator).toBe(
+                2880 * (2 * numerator * originalNumerator + (denominator - numerator) * originalDenominator)
+            );
         }
     }
 }
@@ -38,7 +48,9 @@ function checkAnswerMutations(id: string, answer: Record<string, unknown>): void
 describe('Assessment 2.2 mathematical certificates', () => {
     test('global marginal inequality and atomic witnesses establish sharp bounds', () => {
         for (const word of words) {
-            const k = popcount(word & 7), l = popcount(word >> 3), s = k - l;
+            const k = popcount(word & 7),
+                l = popcount(word >> 3),
+                s = k - l;
             const within = k * (3 - k) + l * (2 - l);
             const cross = k * (2 - l) + (3 - k) * l;
             expect(within - cross).toBe(s * (1 - s));
@@ -46,20 +58,30 @@ describe('Assessment 2.2 mathematical certificates', () => {
         }
         // E[within-cross] = -1 + 8t/5, so every feasible t is <= 5/8.
         checkAtomicMarginals(expandOrbitMasses([270, 0, 0, 270, 2340, 0]), 5, 8);
-        const witnesses = [[72, 288, 0, 648, 1872, 0], [360, 0, 0, 72, 2160, 288]];
-        const allEqual: number[] = [], tripleAndPairEqual: number[] = [];
+        const witnesses = [
+            [72, 288, 0, 648, 1872, 0],
+            [360, 0, 0, 72, 2160, 288]
+        ];
+        const allEqual: number[] = [],
+            tripleAndPairEqual: number[] = [];
         for (const orbitMasses of witnesses) {
             const masses = expandOrbitMasses(orbitMasses);
             checkAtomicMarginals(masses, 1, 2);
             allEqual.push(masses[0] + masses[31]);
-            tripleAndPairEqual.push(words.reduce((sum, word) => sum + masses[word] * Number((popcount(word & 7) % 3 === 0) && (popcount(word >> 3) % 2 === 0)), 0));
+            tripleAndPairEqual.push(
+                words.reduce((sum, word) => sum + masses[word] * Number(popcount(word & 7) % 3 === 0 && popcount(word >> 3) % 2 === 0), 0)
+            );
             expect(words.reduce((sum, word) => sum + masses[word] * Number(bit(word, 3) === bit(word, 4)), 0)).toBe(720);
         }
         // Verify the linear identities used to bound every feasible distribution,
         // not just the witnesses. A is total ABC disagreement, B is DE, C is cross.
         for (const word of words) {
-            const k = popcount(word & 7), l = popcount(word >> 3), orbit = orbitIndex(word);
-            const a = k * (3 - k), b = l * (2 - l), c = k * (2 - l) + (3 - k) * l;
+            const k = popcount(word & 7),
+                l = popcount(word >> 3),
+                orbit = orbitIndex(word);
+            const a = k * (3 - k),
+                b = l * (2 - l),
+                c = k * (2 - l) + (3 - k) * l;
             expect(2 * Number(orbit <= 2)).toBe(2 - a);
             expect(2 * (Number(orbit === 1) + 3 * Number(orbit === 2) + Number(orbit === 5))).toBe(c - a - b);
         }
@@ -69,8 +91,9 @@ describe('Assessment 2.2 mathematical certificates', () => {
         expect(allEqual).toEqual([72, 360]);
         expect(tripleAndPairEqual).toEqual([72, 360]);
         checkAnswerMutations('F_Marginal_Compatibility', {
-            maximum_feasible_t: '5/8', all_equal_bounds_at_half: { lower: '1/40', upper: '1/8' },
-            conditional_triple_bounds_at_half: { lower: '1/10', upper: '1/2' },
+            maximum_feasible_t: '5/8',
+            all_equal_bounds_at_half: { lower: '1/40', upper: '1/8' },
+            conditional_triple_bounds_at_half: { lower: '1/10', upper: '1/2' }
         });
     });
 
@@ -78,10 +101,19 @@ describe('Assessment 2.2 mathematical certificates', () => {
         // Atom order is state L/H, then player 1, then player 2.
         const atoms = Array.from({ length: 8 }, (_, atom) => [bit(atom, 2), bit(atom, 1), bit(atom, 0)]);
         function obedience(masses: number[]): number[] {
-            return [0, 1].flatMap(player => [0, 1].map(recommendation => atoms.reduce((sum, [state, a, b], index) => {
-                const actions = [a, b];
-                return sum + (actions[player] === recommendation ? masses[index] * ((state ? 2 : -3) + 2 * actions[1 - player]) * (recommendation ? 1 : -1) : 0);
-            }, 0)));
+            return [0, 1].flatMap(player =>
+                [0, 1].map(recommendation =>
+                    atoms.reduce((sum, [state, a, b], index) => {
+                        const actions = [a, b];
+                        return (
+                            sum +
+                            (actions[player] === recommendation
+                                ? masses[index] * ((state ? 2 : -3) + 2 * actions[1 - player]) * (recommendation ? 1 : -1)
+                                : 0)
+                        );
+                    }, 0)
+                )
+            );
         }
         // Symmetrize each individual atom using doubled masses. The resulting
         // identity holds on arbitrary mixtures, including asymmetric rules.
@@ -105,7 +137,9 @@ describe('Assessment 2.2 mathematical certificates', () => {
         expect(obedience(informed)).toEqual([0, 0, 0, 0]);
         expect(informed[1] + informed[2] + informed[5] + informed[6]).toBe(70);
         expect(informed[3] + informed[7]).toBe(10);
-        const corrupted = [...informed]; corrupted[6]++; corrupted[7]--;
+        const corrupted = [...informed];
+        corrupted[6]++;
+        corrupted[7]--;
         expect(obedience(corrupted).some(slack => slack < 0)).toBe(true);
         // Blind rule: all four action profiles equally likely, independent of state.
         expect(obedience([3, 3, 3, 3, 2, 2, 2, 2])).toEqual([0, 0, 0, 0]);
@@ -114,7 +148,10 @@ describe('Assessment 2.2 mathematical certificates', () => {
         // impossible. Always public 00 is feasible because prior theta=-1.
         expect(obedience([3, 0, 0, 0, 2, 0, 0, 0])).toEqual([5, 0, 5, 0]);
         checkAnswerMutations('F_Private_Recommendations', {
-            informed_private_max: '7/9', blind_private_max: '1/2', informed_public_max: 0, minimum_both_at_informed_optimum: '1/9',
+            informed_private_max: '7/9',
+            blind_private_max: '1/2',
+            informed_public_max: 0,
+            minimum_both_at_informed_optimum: '1/9'
         });
     });
 
@@ -125,20 +162,25 @@ describe('Assessment 2.2 mathematical certificates', () => {
         let survivingTriples = 0;
         // Six centers must split 3/3 by parity. Exhaust every even triple:
         // if it leaves <=3 odd vertices uncovered, those are the forced odd centers.
-        for (let i = 0; i < even.length; i++) for (let j = i + 1; j < even.length; j++) for (let k = j + 1; k < even.length; k++) {
-            const centers = [even[i], even[j], even[k]];
-            const missingOdd = odd.filter(word => !covered(word, centers));
-            if (missingOdd.length > 3) continue;
-            survivingTriples++;
-            expect(missingOdd.length).toBe(3);
-            expect(words.every(word => covered(word, [...centers, ...missingOdd]))).toBe(false);
-        }
+        for (let i = 0; i < even.length; i++)
+            for (let j = i + 1; j < even.length; j++)
+                for (let k = j + 1; k < even.length; k++) {
+                    const centers = [even[i], even[j], even[k]];
+                    const missingOdd = odd.filter(word => !covered(word, centers));
+                    if (missingOdd.length > 3) continue;
+                    survivingTriples++;
+                    expect(missingOdd.length).toBe(3);
+                    expect(words.every(word => covered(word, [...centers, ...missingOdd]))).toBe(false);
+                }
         expect(survivingTriples).toBeGreaterThan(0);
         function localRules(losing: number[]) {
-            return Array.from({ length: 5 }, (_, player) => words.map(view => {
-                const zero = view & ~(1 << player), one = zero | (1 << player);
-                return losing.includes(zero) === losing.includes(one) ? -1 : losing.includes(zero) ? 1 : 0;
-            }));
+            return Array.from({ length: 5 }, (_, player) =>
+                words.map(view => {
+                    const zero = view & ~(1 << player),
+                        one = zero | (1 << player);
+                    return losing.includes(zero) === losing.includes(one) ? -1 : losing.includes(zero) ? 1 : 0;
+                })
+            );
         }
         function successful(rules: number[][]): number[] {
             return words.filter(word => {
@@ -154,18 +196,27 @@ describe('Assessment 2.2 mathematical certificates', () => {
         const complementRules = localRules(eight);
         expect(successful(complementRules).length).toBe(24);
         // Complement symmetry makes losing cardinality even, hence at least 8.
-        for (let player = 0; player < 5; player++) for (const view of words.filter(word => !bit(word, player))) {
-            const output = complementRules[player][view];
-            expect(complementRules[player][view ^ (31 ^ (1 << player))]).toBe(output < 0 ? -1 : 1 - output);
-        }
+        for (let player = 0; player < 5; player++)
+            for (const view of words.filter(word => !bit(word, player))) {
+                const output = complementRules[player][view];
+                expect(complementRules[player][view ^ (31 ^ (1 << player))]).toBe(output < 0 ? -1 : 1 - output);
+            }
         let anonymousMaximum = 0;
         for (let encoding = 0; encoding < 3 ** 5; encoding++) {
             let remainder = encoding;
-            const outputs = Array.from({ length: 5 }, () => { const output = remainder % 3 - 1; remainder = Math.floor(remainder / 3); return output; });
+            const outputs = Array.from({ length: 5 }, () => {
+                const output = (remainder % 3) - 1;
+                remainder = Math.floor(remainder / 3);
+                return output;
+            });
             const rules = Array.from({ length: 5 }, (_, player) => words.map(view => outputs[popcount(view & ~(1 << player))]));
             anonymousMaximum = Math.max(anonymousMaximum, successful(rules).length);
         }
         expect(anonymousMaximum).toBe(22);
-        checkAnswerMutations('F_Distributed_Guessing', { unrestricted_max: 25, complement_equivariant_max: 24, anonymous_max: anonymousMaximum });
+        checkAnswerMutations('F_Distributed_Guessing', {
+            unrestricted_max: 25,
+            complement_equivariant_max: 24,
+            anonymous_max: anonymousMaximum
+        });
     });
 });

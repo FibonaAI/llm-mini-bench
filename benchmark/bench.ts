@@ -1,10 +1,6 @@
 #!/usr/bin/env bun
 import { readFileSync } from 'node:fs';
-import {
-    assessmentJsonNumberToken,
-    canonicalAssessmentJson,
-    parseAssessmentJson
-} from './src/assessment_json.ts';
+import { assessmentJsonNumberToken, canonicalAssessmentJson, parseAssessmentJson } from './src/assessment_json.ts';
 
 function serializeBenchPlan(value: unknown): string {
     // Validate finite plain JSON first, then retain parsed integer-versus-float tokens on the wire.
@@ -13,8 +9,7 @@ function serializeBenchPlan(value: unknown): string {
         if (typeof item === 'number' && parent && key !== undefined) {
             return assessmentJsonNumberToken(parent, key) ?? String(item);
         }
-        if (Array.isArray(item))
-            return '[' + item.map((child, index) => encode(child, item, String(index))).join(',') + ']';
+        if (Array.isArray(item)) return '[' + item.map((child, index) => encode(child, item, String(index))).join(',') + ']';
         if (item !== null && typeof item === 'object')
             return (
                 '{' +
@@ -29,13 +24,7 @@ function serializeBenchPlan(value: unknown): string {
 }
 
 /** Call only a loopback HTTP origin, never follow a credential-bearing redirect. */
-export async function bench_api_request(
-    base_url: string,
-    token: string,
-    method: string,
-    path: string,
-    body?: unknown
-): Promise<unknown> {
+export async function bench_api_request(base_url: string, token: string, method: string, path: string, body?: unknown): Promise<unknown> {
     let parsed: URL;
     try {
         parsed = new URL(base_url);
@@ -79,9 +68,7 @@ export async function bench_api_request(
     }
     if (!response.ok) {
         const detail =
-            value && typeof value === 'object' && 'error' in value && typeof value.error === 'string'
-                ? value.error
-                : 'request rejected';
+            value && typeof value === 'object' && 'error' in value && typeof value.error === 'string' ? value.error : 'request rejected';
         throw new TypeError('Bench API HTTP ' + response.status + ': ' + detail);
     }
     if (value === null) throw new TypeError('Bench API returned invalid JSON');
@@ -117,10 +104,9 @@ export async function main(argv = process.argv.slice(2)): Promise<number> {
         } else if (command === 'plan' || command === 'start' || command === 'task-plan' || command === 'task-start') {
             if (args.length !== 1) throw new TypeError('Bench CLI requires one JSON plan file');
             body = parseAssessmentJson(readFileSync(args[0]!, 'utf8'));
-            if (!body || typeof body !== 'object' || Array.isArray(body))
-                throw new TypeError('Bench plan must be a JSON object');
+            if (!body || typeof body !== 'object' || Array.isArray(body)) throw new TypeError('Bench plan must be a JSON object');
             method = 'POST';
-            path = ({ plan: 'plans', start: 'runs', 'task-plan': 'task-plans', 'task-start': 'tasks' })[command];
+            path = { plan: 'plans', start: 'runs', 'task-plan': 'task-plans', 'task-start': 'tasks' }[command];
         } else if (command === 'show' || command === 'cancel' || command === 'task-show' || command === 'task-cancel') {
             if (args.length !== 1 || !/^[0-9a-f]{32}$/.test(args[0]!))
                 throw new TypeError('Bench task or run ID must contain 32 lowercase hexadecimal characters');
@@ -130,7 +116,10 @@ export async function main(argv = process.argv.slice(2)): Promise<number> {
                 path += '/cancel';
                 body = {};
             }
-        } else throw new TypeError('Bench CLI requires routes, banks, tasks, task-plan, task-start, task-show, task-cancel, runs, plan, start, show or cancel');
+        } else
+            throw new TypeError(
+                'Bench CLI requires routes, banks, tasks, task-plan, task-start, task-show, task-cancel, runs, plan, start, show or cancel'
+            );
         const result = await bench_api_request(url, process.env.MAGPIE_BENCH_TOKEN ?? '', method, path, body);
         console.log(JSON.stringify(result, null, 2));
         return 0;

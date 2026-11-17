@@ -1,47 +1,355 @@
 <!doctype html>
 <html lang="zh-CN">
-<head>
-  <meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>LLM Mini Bench · 模型分析</title><link rel="icon" href="data:,">
-  <link rel="stylesheet" href="./magpie-theme.css"><link rel="stylesheet" href="./bench.css"><link rel="stylesheet" href="./data-picker.css"><link rel="stylesheet" href="./score-cost-chart.css">
-  <script src="./startup.js"></script>
-  <script src="./api.js" defer></script><script type="module" src="./bench.js"></script><script type="module" src="./analysis.js"></script>
-</head>
-<body>
-  <a class="skip-link" href="#main-content">跳至主要内容</a>
-  <header class="top"><a class="brand" href="#analysis">LLM Mini Bench</a><nav class="tabs" aria-label="页面"><button class="tab is-active" type="button" data-view-link="analysis" aria-current="page">分析</button><button class="tab" type="button" data-view-link="runs">任务</button></nav><div class="actions"><span id="connection-status" class="muted">本地工作区</span><button class="btn" id="refresh-data" type="button">刷新</button><button class="btn" id="new-run-button" type="button">新建评测</button></div></header>
-  <div id="app-notice" class="notice" role="status" aria-live="polite" hidden></div>
-  <main id="main-content">
-    <section class="page" id="analysis-view" aria-labelledby="analysis-title">
-      <div class="page-head"><div><h1 id="analysis-title">模型分析</h1><p id="dataset-summary">正在读取评测记录</p></div><button class="btn" id="use-analysis" type="button">评测匹配目标 ↗</button></div>
-      <search class="analysis-toolbar" aria-label="筛选评测结果">
-      <div class="filter-bar"><div id="analysis-picker" class="analysis-filters"></div><div class="af-facet" id="analysis-data-filter"><button class="btn af-trigger" id="analysis-data-trigger" type="button" aria-expanded="false" aria-controls="analysis-data-panel">数据 · 最新</button><section class="analysis-popover analysis-data-panel" id="analysis-data-panel" aria-labelledby="analysis-data-title" hidden><div class="af-heading"><strong id="analysis-data-title">数据范围</strong><button id="close-analysis-data" class="text-control" type="button">完成</button></div><fieldset class="analysis-data-scope" aria-describedby="analysis-data-hint"><legend class="visually-hidden">数据范围</legend><label><input id="analysis-data-latest" type="radio" name="analysis-data" value="latest" checked>最新数据</label><label><input id="analysis-data-all" type="radio" name="analysis-data" value="all">全部历史</label><label><input id="analysis-data-selected" type="radio" name="analysis-data" value="selected">指定记录</label></fieldset><p id="analysis-data-hint" class="field-hint"></p><div id="analysis-date-range" class="analysis-date-range" hidden><label for="analysis-date-from">从 <input id="analysis-date-from" type="date"></label><label for="analysis-date-to">至 <input id="analysis-date-to" type="date"></label></div><section id="analysis-history-picker" class="analysis-history-picker" aria-label="选择历史记录" hidden><div class="analysis-history-heading"><span id="analysis-history-count" class="muted"></span><button id="analysis-history-select-all" class="text-control" type="button">全选匹配记录</button><button id="analysis-history-clear" class="text-control" type="button">清空选择</button></div><div id="analysis-history-options" class="analysis-history-options"></div></section></section></div><label>数据来源 <select id="analysis-source"><option value="all">全部来源</option><option value="run">我的评测</option><option value="baseline">基线</option></select></label><button class="text-control" id="analysis-reset" type="button">重置筛选</button></div>
-      <div id="analysis-conditions" class="analysis-conditions" aria-label="当前筛选条件" hidden></div>
-      <div id="visible-count" class="analysis-counts"><button class="text-control" id="analysis-result-count" type="button" aria-expanded="false" aria-controls="analysis-results">匹配 0 个结果</button><span id="analysis-plotted-count" class="muted"></span><button class="text-control" id="analysis-excluded-count" type="button" aria-expanded="false" aria-controls="analysis-excluded" hidden></button></div>
-      <p id="analysis-count-status" class="visually-hidden" role="status" aria-live="polite"></p>
-      </search>
-      <section class="chart-card" id="chart-card" aria-labelledby="chart-title">
-        <div class="chart-top"><div><h2 id="chart-title">分数与用量</h2><p>每点是一条评测记录；悬停或选中展开同批 Thinking，点击查看详情</p></div><div class="chart-tools"><label for="chart-color-by">着色 <select id="chart-color-by"><option value="series">供应商-模型</option><option value="model">模型</option><option value="family">模型系列</option><option value="time">评测时间</option></select></label><label>横轴 <select id="chart-axis"><option value="cost">每轮费用 / USD</option><option value="tokens">每轮总 tokens</option></select></label><button class="icon-btn" id="export-chart" type="button" aria-label="导出 SVG 图表" title="导出 SVG 图表"><span class="icon download"></span></button><div class="chart-settings"><button class="icon-btn" id="chart-settings-trigger" type="button" aria-label="图表设置" title="图表设置" aria-expanded="false" aria-controls="chart-settings-panel"><span class="icon sliders"></span></button><section class="analysis-popover settings-pop" id="chart-settings-panel" aria-labelledby="chart-settings-title" hidden><div class="af-heading"><strong id="chart-settings-title">图表设置</strong><button class="text-control" id="close-chart-settings" type="button">完成</button></div><label><input type="checkbox" id="log-axis" checked>横轴使用对数刻度</label><label><input type="checkbox" id="point-labels" checked>显示模型名称</label><label><input type="checkbox" id="pareto-line" checked>显示帕累托前沿</label><label><input type="checkbox" id="usage-lower-bound" checked>用量不完整时按已知下限绘制</label><p>前沿按当前可见点计算，越高分、越低用量越优；不同 Thinking 可直接对照。用量不完整的点带橙色角标，横坐标是已知下限（实际只会更高），不参与前沿。</p></section></div></div></div>
-        <div id="score-cost-chart"></div>
-        <div class="chart-footer"><span class="source-key"><i class="source-dot"></i>最新</span><span class="source-key"><i class="source-history"></i>历史</span><span class="source-key"><i class="source-unknown"></i>时间未知</span><span class="source-key"><i class="source-baseline"></i>基线</span><span class="source-key"><i class="source-thinking"></i>同批 Thinking</span><span class="source-key"><i class="source-frontier"></i>前沿</span><span class="source-key"><i class="source-incomplete"></i>用量不完整（下限）</span><span class="muted">费用为估算值，非账单</span><div class="zoom-controls"><button class="btn" id="chart-zoom-out" type="button" aria-label="缩小视图">−</button><button class="btn" id="chart-reset" type="button">复位</button><button class="btn" id="chart-zoom-in" type="button" aria-label="放大视图">＋</button></div></div>
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>LLM Mini Bench · 模型分析</title>
+    <link rel="icon" href="data:," />
+    <link rel="stylesheet" href="./magpie-theme.css" />
+    <link rel="stylesheet" href="./bench.css" />
+    <link rel="stylesheet" href="./data-picker.css" />
+    <link rel="stylesheet" href="./score-cost-chart.css" />
+    <script src="./startup.js"></script>
+    <script src="./api.js" defer></script>
+    <script type="module" src="./bench.js"></script>
+    <script type="module" src="./analysis.js"></script>
+  </head>
+  <body>
+    <a class="skip-link" href="#main-content">跳至主要内容</a>
+    <header class="top">
+      <a class="brand" href="#analysis">LLM Mini Bench</a>
+      <nav class="tabs" aria-label="页面">
+        <button class="tab is-active" type="button" data-view-link="analysis" aria-current="page">分析</button
+        ><button class="tab" type="button" data-view-link="runs">任务</button>
+      </nav>
+      <div class="actions">
+        <span id="connection-status" class="muted">本地工作区</span><button class="btn" id="refresh-data" type="button">刷新</button
+        ><button class="btn" id="new-run-button" type="button">新建评测</button>
+      </div>
+    </header>
+    <div id="app-notice" class="notice" role="status" aria-live="polite" hidden></div>
+    <main id="main-content">
+      <section class="page" id="analysis-view" aria-labelledby="analysis-title">
+        <div class="page-head">
+          <div>
+            <h1 id="analysis-title">模型分析</h1>
+            <p id="dataset-summary">正在读取评测记录</p>
+          </div>
+          <button class="btn" id="use-analysis" type="button">评测匹配目标 ↗</button>
+        </div>
+        <search class="analysis-toolbar" aria-label="筛选评测结果">
+          <div class="filter-bar">
+            <div id="analysis-picker" class="analysis-filters"></div>
+            <div class="af-facet" id="analysis-data-filter">
+              <button
+                class="btn af-trigger"
+                id="analysis-data-trigger"
+                type="button"
+                aria-expanded="false"
+                aria-controls="analysis-data-panel"
+              >
+                数据 · 最新
+              </button>
+              <section class="analysis-popover analysis-data-panel" id="analysis-data-panel" aria-labelledby="analysis-data-title" hidden>
+                <div class="af-heading">
+                  <strong id="analysis-data-title">数据范围</strong
+                  ><button id="close-analysis-data" class="text-control" type="button">完成</button>
+                </div>
+                <fieldset class="analysis-data-scope" aria-describedby="analysis-data-hint">
+                  <legend class="visually-hidden">数据范围</legend>
+                  <label><input id="analysis-data-latest" type="radio" name="analysis-data" value="latest" checked />最新数据</label
+                  ><label><input id="analysis-data-all" type="radio" name="analysis-data" value="all" />全部历史</label
+                  ><label><input id="analysis-data-selected" type="radio" name="analysis-data" value="selected" />指定记录</label>
+                </fieldset>
+                <p id="analysis-data-hint" class="field-hint"></p>
+                <div id="analysis-date-range" class="analysis-date-range" hidden>
+                  <label for="analysis-date-from">从 <input id="analysis-date-from" type="date" /></label
+                  ><label for="analysis-date-to">至 <input id="analysis-date-to" type="date" /></label>
+                </div>
+                <section id="analysis-history-picker" class="analysis-history-picker" aria-label="选择历史记录" hidden>
+                  <div class="analysis-history-heading">
+                    <span id="analysis-history-count" class="muted"></span
+                    ><button id="analysis-history-select-all" class="text-control" type="button">全选匹配记录</button
+                    ><button id="analysis-history-clear" class="text-control" type="button">清空选择</button>
+                  </div>
+                  <div id="analysis-history-options" class="analysis-history-options"></div>
+                </section>
+              </section>
+            </div>
+            <label
+              >数据来源
+              <select id="analysis-source">
+                <option value="all">全部来源</option>
+                <option value="run">我的评测</option>
+                <option value="baseline">基线</option>
+              </select></label
+            ><button class="text-control" id="analysis-reset" type="button">重置筛选</button>
+          </div>
+          <div id="analysis-conditions" class="analysis-conditions" aria-label="当前筛选条件" hidden></div>
+          <div id="visible-count" class="analysis-counts">
+            <button class="text-control" id="analysis-result-count" type="button" aria-expanded="false" aria-controls="analysis-results">
+              匹配 0 个结果</button
+            ><span id="analysis-plotted-count" class="muted"></span
+            ><button
+              class="text-control"
+              id="analysis-excluded-count"
+              type="button"
+              aria-expanded="false"
+              aria-controls="analysis-excluded"
+              hidden
+            ></button>
+          </div>
+          <p id="analysis-count-status" class="visually-hidden" role="status" aria-live="polite"></p>
+        </search>
+        <section class="chart-card" id="chart-card" aria-labelledby="chart-title">
+          <div class="chart-top">
+            <div>
+              <h2 id="chart-title">分数与用量</h2>
+              <p>每点是一条评测记录；悬停或选中展开同批 Thinking，点击查看详情</p>
+            </div>
+            <div class="chart-tools">
+              <label for="chart-color-by"
+                >着色
+                <select id="chart-color-by">
+                  <option value="series">供应商-模型</option>
+                  <option value="model">模型</option>
+                  <option value="family">模型系列</option>
+                  <option value="time">评测时间</option>
+                </select></label
+              ><label
+                >横轴
+                <select id="chart-axis">
+                  <option value="cost">每轮费用 / USD</option>
+                  <option value="tokens">每轮总 tokens</option>
+                </select></label
+              ><button class="icon-btn" id="export-chart" type="button" aria-label="导出 SVG 图表" title="导出 SVG 图表">
+                <span class="icon download"></span>
+              </button>
+              <div class="chart-settings">
+                <button
+                  class="icon-btn"
+                  id="chart-settings-trigger"
+                  type="button"
+                  aria-label="图表设置"
+                  title="图表设置"
+                  aria-expanded="false"
+                  aria-controls="chart-settings-panel"
+                >
+                  <span class="icon sliders"></span>
+                </button>
+                <section class="analysis-popover settings-pop" id="chart-settings-panel" aria-labelledby="chart-settings-title" hidden>
+                  <div class="af-heading">
+                    <strong id="chart-settings-title">图表设置</strong
+                    ><button class="text-control" id="close-chart-settings" type="button">完成</button>
+                  </div>
+                  <label><input type="checkbox" id="log-axis" checked />横轴使用对数刻度</label
+                  ><label><input type="checkbox" id="point-labels" checked />显示模型名称</label
+                  ><label><input type="checkbox" id="pareto-line" checked />显示帕累托前沿</label
+                  ><label><input type="checkbox" id="usage-lower-bound" checked />用量不完整时按已知下限绘制</label>
+                  <p>
+                    前沿按当前可见点计算，越高分、越低用量越优；不同 Thinking
+                    可直接对照。用量不完整的点带橙色角标，横坐标是已知下限（实际只会更高），不参与前沿。
+                  </p>
+                </section>
+              </div>
+            </div>
+          </div>
+          <div id="score-cost-chart"></div>
+          <div class="chart-footer">
+            <span class="source-key"><i class="source-dot"></i>最新</span><span class="source-key"><i class="source-history"></i>历史</span
+            ><span class="source-key"><i class="source-unknown"></i>时间未知</span
+            ><span class="source-key"><i class="source-baseline"></i>基线</span
+            ><span class="source-key"><i class="source-thinking"></i>同批 Thinking</span
+            ><span class="source-key"><i class="source-frontier"></i>前沿</span
+            ><span class="source-key"><i class="source-incomplete"></i>用量不完整（下限）</span
+            ><span class="muted">费用为估算值，非账单</span>
+            <div class="zoom-controls">
+              <button class="btn" id="chart-zoom-out" type="button" aria-label="缩小视图">−</button
+              ><button class="btn" id="chart-reset" type="button">复位</button
+              ><button class="btn" id="chart-zoom-in" type="button" aria-label="放大视图">＋</button>
+            </div>
+          </div>
+        </section>
+        <section id="analysis-results" class="analysis-popover analysis-result-panel" aria-labelledby="analysis-results-title" hidden>
+          <div class="af-heading">
+            <h2 id="analysis-results-title">匹配记录</h2>
+            <button class="text-control" id="close-analysis-results" type="button">关闭</button>
+          </div>
+          <div
+            id="analysis-results-content"
+            class="analysis-record-scroll"
+            tabindex="0"
+            role="region"
+            aria-labelledby="analysis-results-title"
+          ></div>
+        </section>
+        <section id="analysis-excluded" class="analysis-popover analysis-result-panel" aria-labelledby="analysis-excluded-title" hidden>
+          <div class="af-heading">
+            <h2 id="analysis-excluded-title">未入图原因</h2>
+            <button class="text-control" id="close-analysis-excluded" type="button">关闭</button>
+          </div>
+          <div
+            id="analysis-excluded-content"
+            class="analysis-record-scroll"
+            tabindex="0"
+            role="region"
+            aria-labelledby="analysis-excluded-title"
+          ></div>
+        </section>
+        <details class="analysis-methodology">
+          <summary>评分、用量与入图规则</summary>
+          <p id="analysis-method" class="method-note"></p>
+          <p class="method-note">成本为估算而非账单；缺失数据保持缺失。网关目录归属与配置账号不证明最终服务模型或实际账号身份。</p>
+        </details>
+        <aside class="model-inspector" id="model-inspector" aria-labelledby="inspector-title" hidden>
+          <div class="inspector-heading">
+            <div>
+              <h2 id="inspector-title">结果详情</h2>
+              <p class="inspector-identity" id="inspector-identity"></p>
+            </div>
+            <button class="panel-close" id="close-inspector" type="button" aria-label="关闭详情">×</button>
+          </div>
+          <div id="inspector-content"></div>
+        </aside>
       </section>
-      <section id="analysis-results" class="analysis-popover analysis-result-panel" aria-labelledby="analysis-results-title" hidden><div class="af-heading"><h2 id="analysis-results-title">匹配记录</h2><button class="text-control" id="close-analysis-results" type="button">关闭</button></div><div id="analysis-results-content" class="analysis-record-scroll" tabindex="0" role="region" aria-labelledby="analysis-results-title"></div></section>
-      <section id="analysis-excluded" class="analysis-popover analysis-result-panel" aria-labelledby="analysis-excluded-title" hidden><div class="af-heading"><h2 id="analysis-excluded-title">未入图原因</h2><button class="text-control" id="close-analysis-excluded" type="button">关闭</button></div><div id="analysis-excluded-content" class="analysis-record-scroll" tabindex="0" role="region" aria-labelledby="analysis-excluded-title"></div></section>
-      <details class="analysis-methodology"><summary>评分、用量与入图规则</summary><p id="analysis-method" class="method-note"></p><p class="method-note">成本为估算而非账单；缺失数据保持缺失。网关目录归属与配置账号不证明最终服务模型或实际账号身份。</p></details>
-      <aside class="model-inspector" id="model-inspector" aria-labelledby="inspector-title" hidden><div class="inspector-heading"><div><h2 id="inspector-title">结果详情</h2><p class="inspector-identity" id="inspector-identity"></p></div><button class="panel-close" id="close-inspector" type="button" aria-label="关闭详情">×</button></div><div id="inspector-content"></div></aside>
-    </section>
-    <section class="page" id="runs-view" aria-labelledby="runs-title" hidden>
-      <div class="page-head"><div><h1 id="runs-title">评测任务</h1><p id="run-summary">正在读取任务</p></div><span class="muted" id="runs-bank-label">Mini Bench</span></div>
-      <section class="list run-composer" aria-labelledby="composer-title"><div class="section-heading"><h2 id="composer-title">新建任务</h2><span class="muted">选择目标后，核对样本数与超时再开始</span></div><form id="run-form" aria-labelledby="composer-title">
-        <fieldset class="form-section"><legend>独立运行目标</legend><div class="task-selection"><div id="task-picker"></div><p class="field-hint" id="run-model-count"></p></div><p id="task-route-warning" class="task-route-warning" role="status" hidden></p><details class="selected-targets"><summary>查看已选目标</summary><div id="run-selected-targets"></div></details></fieldset>
-        <fieldset class="form-section"><legend>评测配置</legend><div class="run-config-grid"><label><span>题库</span><input id="bench-bank" type="hidden" value=""><output class="field" id="bench-bank-label">Mini Bench · 正在加载</output></label><label><span>重复轮数</span><input class="field" id="run-rounds" type="number" min="1" max="3" step="1" value="3" required></label><label><span>每运行样本并发</span><input class="field" id="sample-concurrency" type="number" min="1" max="64" step="1" value="6" required aria-describedby="sample-concurrency-hint"><small id="sample-concurrency-hint">每个运行同时执行的题目样本数</small></label><label><span>运行并发</span><input class="field" id="run-concurrency" type="number" min="1" max="10" step="1" value="3" required aria-describedby="run-concurrency-hint"><small id="run-concurrency-hint">任务内同时执行的独立运行数</small></label><label><span>每题总超时 / 秒</span><input class="field" id="bench-timeout" type="number" min="10" max="3600" step="1" value="600" required aria-describedby="bench-timeout-hint"><small id="bench-timeout-hint">包含请求、工具交互和 API 重试；超时后继续其他题</small></label></div></fieldset>
-        <section class="run-plan-preview" id="bench-plan-preview" aria-live="polite" hidden></section>
-        <div class="run-submit-row"><div><p class="field-hint" id="run-request-estimate"></p></div><div class="run-actions"><button class="btn" id="bench-retry-review" type="button" hidden>已核对历史，允许重新开始</button><button class="btn primary" id="start-run" type="submit" disabled>开始评测</button></div></div>
-      </form></section>
-      <section class="list run-history" aria-labelledby="history-title"><div class="section-heading"><h2 id="history-title">任务记录</h2><div class="history-filters"><input class="field" id="history-search" type="search" placeholder="搜索模型、账号或任务 ID" aria-label="搜索任务记录"><select class="field" id="history-status" aria-label="筛选任务状态"><option value="all">全部状态</option><option value="queued">排队中</option><option value="running">运行中</option><option value="cancelling">取消中</option><option value="completed">已完成</option><option value="incomplete">未完成</option><option value="failed">API 失败</option><option value="cancelled">已取消</option><option value="interrupted">已中断</option></select></div></div><div id="bench-run-list" class="run-list">正在加载…</div></section>
-      <section class="list bench-task-section" id="bench-task-section" aria-labelledby="bench-task-title" hidden><div class="section-heading"><h2 id="bench-task-title">任务与独立运行</h2><div class="run-actions"><button class="btn" id="bench-close-task" type="button">收起</button><button class="btn" id="bench-copy-task" type="button">复制配置</button><button class="btn" id="bench-retry-task" type="button" hidden>重试 API 失败</button><button class="btn" id="bench-cancel-task" type="button" hidden>取消整个任务</button></div></div><div id="bench-task-detail"></div></section>
-      <section class="list bench-run-section" id="bench-run-section" aria-labelledby="bench-run-title" hidden><div class="section-heading"><h2 id="bench-run-title">运行样本</h2><div class="run-actions"><button class="btn" id="bench-close-run" type="button">收起</button><button class="btn" id="bench-copy-run" type="button">复制配置</button><button class="btn" id="bench-retry-run" type="button" hidden>重试 API 失败</button><button class="btn" id="bench-cancel-run" type="button" hidden>取消该运行</button></div></div><div id="bench-run-detail"><div class="empty">选择一个运行查看样本</div></div></section>
-    </section>
-  </main>
-</body>
+      <section class="page" id="runs-view" aria-labelledby="runs-title" hidden>
+        <div class="page-head">
+          <div>
+            <h1 id="runs-title">评测任务</h1>
+            <p id="run-summary">正在读取任务</p>
+          </div>
+          <span class="muted" id="runs-bank-label">Mini Bench</span>
+        </div>
+        <section class="list run-composer" aria-labelledby="composer-title">
+          <div class="section-heading">
+            <h2 id="composer-title">新建任务</h2>
+            <span class="muted">选择目标后，核对样本数与超时再开始</span>
+          </div>
+          <form id="run-form" aria-labelledby="composer-title">
+            <fieldset class="form-section">
+              <legend>独立运行目标</legend>
+              <div class="task-selection">
+                <div id="task-picker"></div>
+                <p class="field-hint" id="run-model-count"></p>
+              </div>
+              <p id="task-route-warning" class="task-route-warning" role="status" hidden></p>
+              <details class="selected-targets">
+                <summary>查看已选目标</summary>
+                <div id="run-selected-targets"></div>
+              </details>
+            </fieldset>
+            <fieldset class="form-section">
+              <legend>评测配置</legend>
+              <div class="run-config-grid">
+                <label
+                  ><span>题库</span><input id="bench-bank" type="hidden" value="" /><output class="field" id="bench-bank-label"
+                    >Mini Bench · 正在加载</output
+                  ></label
+                ><label
+                  ><span>重复轮数</span
+                  ><input class="field" id="run-rounds" type="number" min="1" max="3" step="1" value="3" required /></label
+                ><label
+                  ><span>每运行样本并发</span
+                  ><input
+                    class="field"
+                    id="sample-concurrency"
+                    type="number"
+                    min="1"
+                    max="64"
+                    step="1"
+                    value="6"
+                    required
+                    aria-describedby="sample-concurrency-hint"
+                  /><small id="sample-concurrency-hint">每个运行同时执行的题目样本数</small></label
+                ><label
+                  ><span>运行并发</span
+                  ><input
+                    class="field"
+                    id="run-concurrency"
+                    type="number"
+                    min="1"
+                    max="10"
+                    step="1"
+                    value="3"
+                    required
+                    aria-describedby="run-concurrency-hint"
+                  /><small id="run-concurrency-hint">任务内同时执行的独立运行数</small></label
+                ><label
+                  ><span>每题总超时 / 秒</span
+                  ><input
+                    class="field"
+                    id="bench-timeout"
+                    type="number"
+                    min="10"
+                    max="3600"
+                    step="1"
+                    value="600"
+                    required
+                    aria-describedby="bench-timeout-hint"
+                  /><small id="bench-timeout-hint">包含请求、工具交互和 API 重试；超时后继续其他题</small></label
+                >
+              </div>
+            </fieldset>
+            <section class="run-plan-preview" id="bench-plan-preview" aria-live="polite" hidden></section>
+            <div class="run-submit-row">
+              <div><p class="field-hint" id="run-request-estimate"></p></div>
+              <div class="run-actions">
+                <button class="btn" id="bench-retry-review" type="button" hidden>已核对历史，允许重新开始</button
+                ><button class="btn primary" id="start-run" type="submit" disabled>开始评测</button>
+              </div>
+            </div>
+          </form>
+        </section>
+        <section class="list run-history" aria-labelledby="history-title">
+          <div class="section-heading">
+            <h2 id="history-title">任务记录</h2>
+            <div class="history-filters">
+              <input
+                class="field"
+                id="history-search"
+                type="search"
+                placeholder="搜索模型、账号或任务 ID"
+                aria-label="搜索任务记录"
+              /><select class="field" id="history-status" aria-label="筛选任务状态">
+                <option value="all">全部状态</option>
+                <option value="queued">排队中</option>
+                <option value="running">运行中</option>
+                <option value="cancelling">取消中</option>
+                <option value="completed">已完成</option>
+                <option value="incomplete">未完成</option>
+                <option value="failed">API 失败</option>
+                <option value="cancelled">已取消</option>
+                <option value="interrupted">已中断</option>
+              </select>
+            </div>
+          </div>
+          <div id="bench-run-list" class="run-list">正在加载…</div>
+        </section>
+        <section class="list bench-task-section" id="bench-task-section" aria-labelledby="bench-task-title" hidden>
+          <div class="section-heading">
+            <h2 id="bench-task-title">任务与独立运行</h2>
+            <div class="run-actions">
+              <button class="btn" id="bench-close-task" type="button">收起</button
+              ><button class="btn" id="bench-copy-task" type="button">复制配置</button
+              ><button class="btn" id="bench-retry-task" type="button" hidden>重试 API 失败</button
+              ><button class="btn" id="bench-cancel-task" type="button" hidden>取消整个任务</button>
+            </div>
+          </div>
+          <div id="bench-task-detail"></div>
+        </section>
+        <section class="list bench-run-section" id="bench-run-section" aria-labelledby="bench-run-title" hidden>
+          <div class="section-heading">
+            <h2 id="bench-run-title">运行样本</h2>
+            <div class="run-actions">
+              <button class="btn" id="bench-close-run" type="button">收起</button
+              ><button class="btn" id="bench-copy-run" type="button">复制配置</button
+              ><button class="btn" id="bench-retry-run" type="button" hidden>重试 API 失败</button
+              ><button class="btn" id="bench-cancel-run" type="button" hidden>取消该运行</button>
+            </div>
+          </div>
+          <div id="bench-run-detail"><div class="empty">选择一个运行查看样本</div></div>
+        </section>
+      </section>
+    </main>
+  </body>
 </html>

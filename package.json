@@ -45,7 +45,9 @@
     "test:browser:sandbox": "bun benchmark/tests/assessment_sandbox_browser.mjs",
     "test:install": "bun benchmark/tests/assessment_install_channels.ts",
     "serve": "bun benchmark/bench.ts serve",
-    "calibrate": "bun benchmark/calibrate_assessment.ts"
+    "calibrate": "bun benchmark/calibrate_assessment.ts",
+    "format": "prettier --write .",
+    "format:check": "prettier --check ."
   },
   "magpie": {
     "page": {
@@ -62,6 +64,7 @@
   },
   "devDependencies": {
     "@types/bun": "1.4.4",
+    "prettier": "3.10.1",
     "typescript": "7.0.2"
   }
 }

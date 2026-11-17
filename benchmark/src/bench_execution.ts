@@ -11,11 +11,7 @@ import { execution_retryable_samples, execution_run_summary, execution_task_summ
 export { EXECUTION_SOURCE_PATHS } from './assessment_provenance.ts';
 export { private_directory, save_execution_json } from './bench_execution_storage.ts';
 import { GatewayClient } from './client.ts';
-import {
-    assessmentJsonNumberToken,
-    canonicalAssessmentJson,
-    parseAssessmentJson
-} from './assessment_json.ts';
+import { assessmentJsonNumberToken, canonicalAssessmentJson, parseAssessmentJson } from './assessment_json.ts';
 import type { AssessmentTask } from './assessment_tasks.ts';
 import { _route_text, type BenchRouteMetadata } from './bench_routes.ts';
 
@@ -165,7 +161,7 @@ function integer(value: unknown, minimum: number, maximum: number, name: string,
     return value;
 }
 function knownKeys(value: unknown, allowed: readonly string[], name: string): RecordValue {
-    if (!object(value) || Object.keys(value).some((key) => !allowed.includes(key)))
+    if (!object(value) || Object.keys(value).some(key => !allowed.includes(key)))
         throw new TypeError(name + ' must be an object with only supported fields');
     return value;
 }
@@ -229,12 +225,7 @@ export class BenchExecutionService {
     private load_runs(): void {
         for (const name of readdirSync(this.data_dir)) {
             const directory = join(this.data_dir, name);
-            if (
-                !/^[a-f0-9]{32}$/.test(name) ||
-                lstatSync(directory).isSymbolicLink() ||
-                !lstatSync(directory).isDirectory()
-            )
-                continue;
+            if (!/^[a-f0-9]{32}$/.test(name) || lstatSync(directory).isSymbolicLink() || !lstatSync(directory).isDirectory()) continue;
             const path = join(directory, 'run.json');
             if (!existsSync(path)) continue;
             const run = parseAssessmentJson(readFileSync(path, 'utf8')) as ExecutionRun;
@@ -244,8 +235,7 @@ export class BenchExecutionService {
                 run.status = 'interrupted';
                 run.updated_at = now();
                 run.stop_reason = 'service_restart';
-                for (const sample of run.samples)
-                    if (['pending', 'running'].includes(sample.status)) sample.status = 'interrupted';
+                for (const sample of run.samples) if (['pending', 'running'].includes(sample.status)) sample.status = 'interrupted';
                 save_execution_json(path, run);
             }
             // Classify legacy outcomes in memory; never rewrite historical evidence on load.
@@ -255,14 +245,20 @@ export class BenchExecutionService {
                 const calls = new Map<string, RecordValue>();
                 const journal = join(directory, 'journal.jsonl');
                 const legacy = run.samples.some(sample => sample.status === 'response_incomplete_or_error');
-                if (legacy && existsSync(journal)) scan_journal_call_records(journal, row => { calls.set(String(row.call_id), row); });
-                for (const sample of run.samples) if (sample.status === 'response_incomplete_or_error') {
-                    const ids = Array.isArray(sample.calls) ? sample.calls : [];
-                    const last = calls.get(String(ids.at(-1)));
-                    if (last && (last.http_status !== 200 || object(last.raw_response) && !!last.raw_response.error)) sample.status = 'api_failure';
-                    else sample.status = 'incomplete';
-                }
-                if (!run.samples.some(sample => ['api_failure', 'worker_error', 'storage_error'].includes(sample.status))) run.status = 'incomplete';
+                if (legacy && existsSync(journal))
+                    scan_journal_call_records(journal, row => {
+                        calls.set(String(row.call_id), row);
+                    });
+                for (const sample of run.samples)
+                    if (sample.status === 'response_incomplete_or_error') {
+                        const ids = Array.isArray(sample.calls) ? sample.calls : [];
+                        const last = calls.get(String(ids.at(-1)));
+                        if (last && (last.http_status !== 200 || (object(last.raw_response) && !!last.raw_response.error)))
+                            sample.status = 'api_failure';
+                        else sample.status = 'incomplete';
+                    }
+                if (!run.samples.some(sample => ['api_failure', 'worker_error', 'storage_error'].includes(sample.status)))
+                    run.status = 'incomplete';
             }
             this._runs.set(name, run);
         }
@@ -280,9 +276,15 @@ export class BenchExecutionService {
             const path = this.task_path(id);
             if (!existsSync(path)) continue; // Uncommitted staging directory never admits work.
             const task = parseAssessmentJson(readFileSync(path, 'utf8')) as unknown as ExecutionTaskState;
-            if (!object(task) || task.id !== id || !object(task.plan) || !Array.isArray(task.child_run_ids) ||
-                !task.child_run_ids.length || new Set(task.child_run_ids).size !== task.child_run_ids.length ||
-                task.child_run_ids.some(child => typeof child !== 'string' || this._runs.get(child)?.task_id !== id))
+            if (
+                !object(task) ||
+                task.id !== id ||
+                !object(task.plan) ||
+                !Array.isArray(task.child_run_ids) ||
+                !task.child_run_ids.length ||
+                new Set(task.child_run_ids).size !== task.child_run_ids.length ||
+                task.child_run_ids.some(child => typeof child !== 'string' || this._runs.get(child)?.task_id !== id)
+            )
                 throw new TypeError('Saved bench task membership mismatch');
             if (!TERMINAL_RUN_STATUSES.has(task.status)) {
                 task.status = 'interrupted';
@@ -292,26 +294,42 @@ export class BenchExecutionService {
             }
             if (['failed', 'incomplete'].includes(task.status)) {
                 const children = task.child_run_ids.map(child => this._runs.get(child)!);
-                if (children.every(run => TERMINAL_RUN_STATUSES.has(run.status)) && !children.some(run => run.status === 'failed')) task.status = children.every(run => run.status === 'completed') ? 'completed' : 'incomplete';
+                if (children.every(run => TERMINAL_RUN_STATUSES.has(run.status)) && !children.some(run => run.status === 'failed'))
+                    task.status = children.every(run => run.status === 'completed') ? 'completed' : 'incomplete';
             }
             this._tasks.set(id, task);
         }
     }
     private async prepare_task(request: unknown) {
-        const req = knownKeys(request, ['bank_version', 'targets', 'rounds', 'sample_concurrency', 'run_concurrency', 'limits'], 'task request');
-        const sample_concurrency = integer(req.sample_concurrency === undefined ? 6 : req.sample_concurrency, 1, 64, 'sample_concurrency', req);
+        const req = knownKeys(
+            request,
+            ['bank_version', 'targets', 'rounds', 'sample_concurrency', 'run_concurrency', 'limits'],
+            'task request'
+        );
+        const sample_concurrency = integer(
+            req.sample_concurrency === undefined ? 6 : req.sample_concurrency,
+            1,
+            64,
+            'sample_concurrency',
+            req
+        );
         const run_concurrency = integer(req.run_concurrency === undefined ? 3 : req.run_concurrency, 1, 10, 'run_concurrency', req);
         const rounds = integer(req.rounds === undefined ? 3 : req.rounds, 1, 3, 'rounds', req);
-        const prepared = await this.prepare({
-            bank_version: req.bank_version === undefined ? PRODUCTION_BANK_VERSION : req.bank_version,
-            targets: req.targets,
-            rounds,
-            concurrency: Math.min(sample_concurrency, this.concurrency),
-            limits: req.limits === undefined ? {} : req.limits
-        }, 'task');
+        const prepared = await this.prepare(
+            {
+                bank_version: req.bank_version === undefined ? PRODUCTION_BANK_VERSION : req.bank_version,
+                targets: req.targets,
+                rounds,
+                concurrency: Math.min(sample_concurrency, this.concurrency),
+                limits: req.limits === undefined ? {} : req.limits
+            },
+            'task'
+        );
         const { concurrency: ignored, ...base } = prepared.plan;
         const plan: ExecutionTaskPlan = {
-            ...base, sample_concurrency, run_concurrency,
+            ...base,
+            sample_concurrency,
+            run_concurrency,
             run_count: base.targets.length,
             samples_per_run: base.task_ids.length * base.rounds,
             total_max_cost_usd: base.limits.max_cost_usd === null ? null : base.targets.length * base.limits.max_cost_usd
@@ -331,19 +349,29 @@ export class BenchExecutionService {
         const id = uuid();
         const staged: Array<{ run: ExecutionRun; runtime: RunRuntime }> = [];
         const task: ExecutionTaskState = {
-            id, status: 'queued', created_at: now(), updated_at: now(), plan,
-            child_run_ids: [], stop_reason: null
+            id,
+            status: 'queued',
+            created_at: now(),
+            updated_at: now(),
+            plan,
+            child_run_ids: [],
+            stop_reason: null
         };
         try {
             private_directory(dirname(this.task_path(id)));
             for (const target of prepared.plan.targets) {
                 const childId = uuid();
                 const childPlan: ExecutionPlan = {
-                    ...clone(prepared.plan), targets: [clone(target)],
-                    concurrency: plan.sample_concurrency, sample_count: plan.samples_per_run
+                    ...clone(prepared.plan),
+                    targets: [clone(target)],
+                    concurrency: plan.sample_concurrency,
+                    sample_count: plan.samples_per_run
                 };
-                const child = this.stage_run({ ...prepared, plan: childPlan,
-                    bindings: new Map([[target.id, prepared.bindings.get(target.id)!]]) }, childId, id);
+                const child = this.stage_run(
+                    { ...prepared, plan: childPlan, bindings: new Map([[target.id, prepared.bindings.get(target.id)!]]) },
+                    childId,
+                    id
+                );
                 staged.push(child);
                 task.child_run_ids.push(childId);
                 this._persist(child.run);
@@ -351,7 +379,11 @@ export class BenchExecutionService {
             this._persist_task(task); // Commit: no child runtime has been installed yet.
         } catch (error) {
             for (const child of staged) {
-                try { child.runtime.journal.close(); } catch { /* All admissions remain disabled. */ }
+                try {
+                    child.runtime.journal.close();
+                } catch {
+                    /* All admissions remain disabled. */
+                }
             }
             this.fail_storage();
             throw error;
@@ -362,8 +394,10 @@ export class BenchExecutionService {
             this._runs.set(run.id, run);
             this._runtime.set(run.id, runtime);
             for (const route of runtime.bindings.values())
-                this._account_limits.set(route.account_ref,
-                    Math.min(this._account_limits.get(route.account_ref) ?? 500, route.account_concurrency));
+                this._account_limits.set(
+                    route.account_ref,
+                    Math.min(this._account_limits.get(route.account_ref) ?? 500, route.account_concurrency)
+                );
         }
         this.schedule();
         return id;
@@ -377,24 +411,41 @@ export class BenchExecutionService {
         if (!task || TERMINAL_RUN_STATUSES.has(task.status)) return;
         const runs = task.child_run_ids.map(child => this._runs.get(child)!);
         const finished = runs.every(run => TERMINAL_RUN_STATUSES.has(run.status));
-        const status = finished ? (task.stop_reason === 'storage_error' ? 'failed' :
-            task.stop_reason === 'cancelled' ? 'cancelled' :
-            runs.every(run => run.status === 'completed') ? 'completed' :
-            runs.some(run => run.status === 'failed') ? 'failed' : 'incomplete') :
-            task.stop_reason === 'cancelled' ? 'cancelling' : runs.some(run => run.status !== 'queued') ? 'running' : 'queued';
+        const status = finished
+            ? task.stop_reason === 'storage_error'
+                ? 'failed'
+                : task.stop_reason === 'cancelled'
+                  ? 'cancelled'
+                  : runs.every(run => run.status === 'completed')
+                    ? 'completed'
+                    : runs.some(run => run.status === 'failed')
+                      ? 'failed'
+                      : 'incomplete'
+            : task.stop_reason === 'cancelled'
+              ? 'cancelling'
+              : runs.some(run => run.status !== 'queued')
+                ? 'running'
+                : 'queued';
         if (task.status === status) return;
         task.status = status;
         if (finished && status === 'failed' && !task.stop_reason) task.stop_reason = 'child_failure';
-        try { this._persist_task(task); } catch { this.fail_storage(); }
+        try {
+            this._persist_task(task);
+        } catch {
+            this.fail_storage();
+        }
     }
     /** Task summaries expose child run IDs; raw samples and evidence remain at get_run. */
     get_task(id: string): RecordValue | null {
         const task = this._tasks.get(id);
         if (!task) return null;
-        return execution_task_summary(task, task.child_run_ids.map(run_id => {
-            const run = this._runs.get(run_id)!;
-            return execution_run_summary(run, this._runtime.get(run_id)?.budget.snapshot());
-        }));
+        return execution_task_summary(
+            task,
+            task.child_run_ids.map(run_id => {
+                const run = this._runs.get(run_id)!;
+                return execution_run_summary(run, this._runtime.get(run_id)?.budget.snapshot());
+            })
+        );
     }
     /** List independently persisted batches without duplicating raw child evidence. */
     /** History polling omits bulky frozen provenance; get_task keeps the complete plan. */
@@ -412,17 +463,18 @@ export class BenchExecutionService {
         if (TERMINAL_RUN_STATUSES.has(task.status)) return true;
         task.status = 'cancelling';
         if (task.stop_reason !== 'storage_error') task.stop_reason = 'cancelled';
-        try { this._persist_task(task); } catch { this.fail_storage(); return true; }
+        try {
+            this._persist_task(task);
+        } catch {
+            this.fail_storage();
+            return true;
+        }
         for (const child of task.child_run_ids) this.cancel_run(child);
         this.schedule();
         return true;
     }
     private async prepare(request: unknown, scope: 'run' | 'task' = 'run') {
-        const req = knownKeys(
-            request,
-            ['bank_version', 'targets', 'task_ids', 'rounds', 'concurrency', 'limits'],
-            'request'
-        );
+        const req = knownKeys(request, ['bank_version', 'targets', 'task_ids', 'rounds', 'concurrency', 'limits'], 'request');
         const version = req.bank_version === undefined ? PRODUCTION_BANK_VERSION : req.bank_version;
         if (typeof version !== 'string') throw new TypeError('Invalid bank version');
         const bank = load_assessment_bank(version);
@@ -434,11 +486,7 @@ export class BenchExecutionService {
                 'concurrency',
                 req
             );
-        const requested = knownKeys(
-            req.limits === undefined ? {} : req.limits,
-            Object.keys(DEFAULT_LIMITS),
-            'limits'
-        );
+        const requested = knownKeys(req.limits === undefined ? {} : req.limits, Object.keys(DEFAULT_LIMITS), 'limits');
         const limits = { ...DEFAULT_LIMITS, ...requested } as Limits;
         for (const [key, low, high] of [
             ['max_requests', 1, 500],
@@ -451,22 +499,23 @@ export class BenchExecutionService {
             if (!['timeout', 'max_api_retries'].includes(key) && limits[key] === null) continue;
             else integer(limits[key], low, high, key, requested);
         if (limits.timeout_scope !== undefined && limits.timeout_scope !== 'sample') throw new TypeError('Invalid timeout scope');
-        if (limits.max_cost_usd !== null && (
-            typeof limits.max_cost_usd !== 'number' ||
-            !Number.isFinite(limits.max_cost_usd) ||
-            limits.max_cost_usd <= 0 ||
-            limits.max_cost_usd > 10000
-        ))
+        if (
+            limits.max_cost_usd !== null &&
+            (typeof limits.max_cost_usd !== 'number' ||
+                !Number.isFinite(limits.max_cost_usd) ||
+                limits.max_cost_usd <= 0 ||
+                limits.max_cost_usd > 10000)
+        )
             throw new TypeError('max_cost_usd is outside safety bounds');
         const ids = req.task_ids === undefined ? bank.task_ids : req.task_ids;
         if (
             !Array.isArray(ids) ||
             !ids.length ||
-            ids.some((id) => typeof id !== 'string' || !bank.task_ids.includes(id)) ||
+            ids.some(id => typeof id !== 'string' || !bank.task_ids.includes(id)) ||
             new Set(ids).size !== ids.length
         )
             throw new TypeError('task_ids must be unique IDs in the selected assessment bank');
-        const tasks = bank.tasks.filter((task) => ids.includes(task.id));
+        const tasks = bank.tasks.filter(task => ids.includes(task.id));
         const specs = req.targets;
         if (!Array.isArray(specs) || !specs.length) throw new TypeError('targets must be a nonempty array');
         if (scope === 'run' && tasks.length * specs.length * rounds > 500)
@@ -489,23 +538,24 @@ export class BenchExecutionService {
             )
                 throw new TypeError('Target id, route_id and thinking must be nonempty strings');
             const combination = JSON.stringify([route_id, thinking]);
-            if (bindings.has(id) || combinations.has(combination))
-                throw new TypeError('Duplicate target id or route/thinking combination');
+            if (bindings.has(id) || combinations.has(combination)) throw new TypeError('Duplicate target id or route/thinking combination');
             const route = clone(await this.routes.resolve(route_id));
             if (!object(route)) throw new TypeError('Unknown bench route');
-            if (route.remote_route !== undefined && (
-                !object(route.remote_route) ||
-                Object.keys(route.remote_route).some(key => !['namespace', 'evidence'].includes(key)) ||
-                !_route_text(route.remote_route.namespace) || route.remote_route.namespace.includes('/') ||
-                !_route_text(route.remote_route.evidence, 128)
-            )) throw new TypeError('Invalid remote route namespace evidence');
+            if (
+                route.remote_route !== undefined &&
+                (!object(route.remote_route) ||
+                    Object.keys(route.remote_route).some(key => !['namespace', 'evidence'].includes(key)) ||
+                    !_route_text(route.remote_route.namespace) ||
+                    route.remote_route.namespace.includes('/') ||
+                    !_route_text(route.remote_route.evidence, 128))
+            )
+                throw new TypeError('Invalid remote route namespace evidence');
             if (route.binding_ref !== undefined && !_route_text(route.binding_ref))
                 throw new TypeError('Invalid adapter binding reference');
             if (thinking !== 'default' && !route.thinking_levels.includes(thinking))
                 throw new TypeError('Thinking level is not supported by this route');
             for (const key of ['account_ref', 'base_url', 'model', 'api_key'] as const)
-                if (typeof route[key] !== 'string' || !route[key].trim())
-                    throw new TypeError('Route configuration is incomplete');
+                if (typeof route[key] !== 'string' || !route[key].trim()) throw new TypeError('Route configuration is incomplete');
             const account_limit = integer(
                 route.account_concurrency === undefined ? 1 : route.account_concurrency,
                 1,
@@ -516,9 +566,7 @@ export class BenchExecutionService {
             const pricing = route.pricing;
             if (
                 !object(pricing) ||
-                [pricing.prompt, pricing.completion].some(
-                    (value) => typeof value !== 'number' || !Number.isFinite(value) || value < 0
-                )
+                [pricing.prompt, pricing.completion].some(value => typeof value !== 'number' || !Number.isFinite(value) || value < 0)
             )
                 throw new TypeError('Route token pricing must be finite and nonnegative');
             combinations.add(combination);
@@ -540,12 +588,17 @@ export class BenchExecutionService {
             });
             bindings.set(id, { ...route, account_concurrency: account_limit });
         }
-        const snapshots = tasks.map((task) =>
-            Object.fromEntries(Object.entries(task).filter(([, value]) => typeof value !== 'function'))
-        );
+        const snapshots = tasks.map(task => Object.fromEntries(Object.entries(task).filter(([, value]) => typeof value !== 'function')));
         const { sources, hashes } = capture_assessment_sources(bank);
         for (const [source, content] of Object.entries(this.routes.execution_sources?.() ?? {})) {
-            if (!_route_text(source, 512) || !/^[A-Za-z0-9_.-]+(?:\/[A-Za-z0-9_.-]+)*$/.test(source) || source.split('/').some(part => part === '.' || part === '..') || sources.has(source) || !(content instanceof Uint8Array) || content.byteLength > 2 * 1024 * 1024)
+            if (
+                !_route_text(source, 512) ||
+                !/^[A-Za-z0-9_.-]+(?:\/[A-Za-z0-9_.-]+)*$/.test(source) ||
+                source.split('/').some(part => part === '.' || part === '..') ||
+                sources.has(source) ||
+                !(content instanceof Uint8Array) ||
+                content.byteLength > 2 * 1024 * 1024
+            )
                 throw new TypeError('Invalid adapter execution source snapshot');
             sources.set(source, Buffer.from(content));
             hashes[source] = createHash('sha256').update(content).digest('hex');
@@ -558,7 +611,7 @@ export class BenchExecutionService {
             bank_scope: 'task_ids' in req ? 'subset' : 'whole',
             bank_snapshot: snapshot,
             targets,
-            task_ids: tasks.map((task) => task.id),
+            task_ids: tasks.map(task => task.id),
             task_snapshots: snapshots,
             rounds,
             concurrency,
@@ -574,7 +627,7 @@ export class BenchExecutionService {
     async start_run(request: unknown): Promise<string> {
         const { plan, tasks, bindings, sources } = await this.prepare(request);
         if (this._closing) throw new Error('Bench execution service is closed');
-        if ([...this._runs.values()].filter((run) => !run.task_id && !TERMINAL_RUN_STATUSES.has(run.status)).length >= 10)
+        if ([...this._runs.values()].filter(run => !run.task_id && !TERMINAL_RUN_STATUSES.has(run.status)).length >= 10)
             throw new TypeError('At most 10 bench runs may be active');
         const id = uuid();
         const { run, runtime } = this.stage_run({ plan, tasks, bindings, sources }, id);
@@ -645,8 +698,8 @@ export class BenchExecutionService {
         };
         const runtime: RunRuntime = {
             bindings,
-            tasks: new Map(tasks.map((task) => [task.id, task])),
-            targets: new Map(plan.targets.map((target) => [target.id, target])),
+            tasks: new Map(tasks.map(task => [task.id, task])),
+            targets: new Map(plan.targets.map(target => [target.id, target])),
             cancel,
             budget,
             active: 0,
@@ -654,11 +707,7 @@ export class BenchExecutionService {
             last_target_id: null,
             journal: new RunJournal(
                 join(directory, 'journal.jsonl'),
-                [...bindings.values()].flatMap((route) => [
-                    route.api_key,
-                    route.base_url.replace(/\/+$/, ''),
-                    route.api_key_env ?? ''
-                ])
+                [...bindings.values()].flatMap(route => [route.api_key, route.base_url.replace(/\/+$/, ''), route.api_key_env ?? ''])
             )
         };
         return { run, runtime };
@@ -679,8 +728,7 @@ export class BenchExecutionService {
             const run = this._runs.get(id)!;
             run.stop_reason = 'storage_error';
             if (!runtime.active) run.status = 'failed';
-            for (const sample of run.samples)
-                if (sample.status === 'pending') sample.status = 'storage_error';
+            for (const sample of run.samples) if (sample.status === 'pending') sample.status = 'storage_error';
         }
         this.schedule();
     }
@@ -707,54 +755,93 @@ export class BenchExecutionService {
         return [...this._runs.keys()].reverse().map(id => this.get_run(id)!);
     }
     list_runs(): RecordValue[] {
-        return [...this._runs.values()].reverse().map(run =>
-            execution_run_summary(run, this._runtime.get(run.id)?.budget.snapshot()));
+        return [...this._runs.values()].reverse().map(run => execution_run_summary(run, this._runtime.get(run.id)?.budget.snapshot()));
     }
     /** Batch retries reuse one idempotency key and report partial publication without resending successes. */
     async retry_task(id: string, request_id: string): Promise<{ ids: string[]; rejected: string[] }> {
         const task = this._tasks.get(id);
         if (!task || !/^[a-f0-9]{32}$/.test(request_id)) throw new TypeError('Invalid task or retry request_id');
-        const ids: string[] = [], rejected: string[] = [];
+        const ids: string[] = [],
+            rejected: string[] = [];
         for (const child of task.child_run_ids) {
             const run = this.get_run(child)!;
-            if (!(Number(run.retryable_samples) > 0 && TERMINAL_RUN_STATUSES.has(run.status)) && !(Array.isArray(run.retry_batches) && (run.retry_batches as RecordValue[]).some(batch => batch.request_id === request_id))) continue;
-            try { ids.push(await this.retry_run(child, request_id)); }
-            catch { rejected.push(child); }
+            if (
+                !(Number(run.retryable_samples) > 0 && TERMINAL_RUN_STATUSES.has(run.status)) &&
+                !(Array.isArray(run.retry_batches) && (run.retry_batches as RecordValue[]).some(batch => batch.request_id === request_id))
+            )
+                continue;
+            try {
+                ids.push(await this.retry_run(child, request_id));
+            } catch {
+                rejected.push(child);
+            }
         }
         return { ids, rejected };
     }
     /** Explicitly retry API-failed samples, retaining successes and immutable prior evidence. */
     async retry_run(id: string, request_id: string, policy?: 'sample-timeout-v1'): Promise<string> {
         if (policy !== undefined && policy !== 'sample-timeout-v1') throw new TypeError('Unknown rerun policy');
-        if (this._runs.get(id)?.execution_kind === 'calibration-import-v1') throw new TypeError('Imported calibration runs are read-only and cannot be retried');
+        if (this._runs.get(id)?.execution_kind === 'calibration-import-v1')
+            throw new TypeError('Imported calibration runs are read-only and cannot be retried');
         if (!/^[a-f0-9]{32}$/.test(request_id)) throw new TypeError('retry request_id must be 32 lowercase hex characters');
         const run = this._runs.get(id);
         if (!run) throw new TypeError('Run not found');
-        const batches = Array.isArray(run.retry_batches) ? run.retry_batches as RecordValue[] : [];
+        const batches = Array.isArray(run.retry_batches) ? (run.retry_batches as RecordValue[]) : [];
         const existingBatch = batches.find(batch => batch.request_id === request_id);
         if (existingBatch) {
             if (existingBatch.policy !== policy) throw new TypeError('Retry request_id policy mismatch');
             return id;
         }
-        if (this._closing || this._runtime.has(id) || !TERMINAL_RUN_STATUSES.has(run.status)) throw new TypeError('Run is still active or service unavailable');
-        const eligible = run.samples.filter(sample => policy === 'sample-timeout-v1' ? sample.status !== 'completed' : sample.status === 'api_failure' || sample.status === 'budget_not_admitted' && ['transport_failure', 'missing_usage_cost'].includes(run.stop_reason ?? ''));
+        if (this._closing || this._runtime.has(id) || !TERMINAL_RUN_STATUSES.has(run.status))
+            throw new TypeError('Run is still active or service unavailable');
+        const eligible = run.samples.filter(sample =>
+            policy === 'sample-timeout-v1'
+                ? sample.status !== 'completed'
+                : sample.status === 'api_failure' ||
+                  (sample.status === 'budget_not_admitted' && ['transport_failure', 'missing_usage_cost'].includes(run.stop_reason ?? ''))
+        );
         if (!eligible.length) throw new TypeError(policy ? 'No unfinished samples to rerun' : 'No API-failed samples to retry');
         const latestLimits = batches.at(-1)?.limits;
-        const retryLimits = policy ? clone(DEFAULT_LIMITS) : object(latestLimits) ? latestLimits as Limits : run.plan.limits;
-        const prepared = await this.prepare({ bank_version: run.plan.bank_version, targets: run.plan.targets.map(target => ({ id: target.id, route_id: target.route_id, thinking: target.thinking })), task_ids: run.plan.task_ids, rounds: run.plan.rounds, concurrency: Math.min(run.plan.concurrency, this.concurrency), limits: retryLimits }, run.task_id ? 'task' : 'run');
+        const retryLimits = policy ? clone(DEFAULT_LIMITS) : object(latestLimits) ? (latestLimits as Limits) : run.plan.limits;
+        const prepared = await this.prepare(
+            {
+                bank_version: run.plan.bank_version,
+                targets: run.plan.targets.map(target => ({ id: target.id, route_id: target.route_id, thinking: target.thinking })),
+                task_ids: run.plan.task_ids,
+                rounds: run.plan.rounds,
+                concurrency: Math.min(run.plan.concurrency, this.concurrency),
+                limits: retryLimits
+            },
+            run.task_id ? 'task' : 'run'
+        );
         // A second request may have arrived while route discovery was awaiting I/O.
-        const publishedBatch = Array.isArray(run.retry_batches) ? (run.retry_batches as RecordValue[]).find(batch => batch.request_id === request_id) : undefined;
+        const publishedBatch = Array.isArray(run.retry_batches)
+            ? (run.retry_batches as RecordValue[]).find(batch => batch.request_id === request_id)
+            : undefined;
         if (publishedBatch) {
             if (publishedBatch.policy !== policy) throw new TypeError('Retry request_id policy mismatch');
             return id;
         }
-        if (this._closing || this._runtime.has(id) || !TERMINAL_RUN_STATUSES.has(run.status)) throw new TypeError('Run retry already active or service closing');
+        if (this._closing || this._runtime.has(id) || !TERMINAL_RUN_STATUSES.has(run.status))
+            throw new TypeError('Run retry already active or service closing');
         for (const target of run.plan.targets) {
             const current = prepared.plan.targets.find(value => value.id === target.id)!;
-            for (const key of ['route_id', 'model', 'thinking', 'account_ref', 'account_evidence', 'binding_ref', 'provider_id', 'remote_route', 'pricing'] as const)
-                if (canonicalAssessmentJson(current[key] ?? null) !== canonicalAssessmentJson(target[key] ?? null)) throw new TypeError('Retry route identity or price changed; copy configuration to a new task instead');
+            for (const key of [
+                'route_id',
+                'model',
+                'thinking',
+                'account_ref',
+                'account_evidence',
+                'binding_ref',
+                'provider_id',
+                'remote_route',
+                'pricing'
+            ] as const)
+                if (canonicalAssessmentJson(current[key] ?? null) !== canonicalAssessmentJson(target[key] ?? null))
+                    throw new TypeError('Retry route identity or price changed; copy configuration to a new task instead');
         }
-        const cancel = { value: false }, budget = new RunBudget(retryLimits, cancel);
+        const cancel = { value: false },
+            budget = new RunBudget(retryLimits, cancel);
         budget.requests = Number(run.budget.requests ?? 0);
         budget.spent = Number(run.budget.known_cost_lower_bound_usd ?? 0);
         budget.missing_cost = Number(run.budget.missing_cost_calls ?? 0);
@@ -762,51 +849,124 @@ export class BenchExecutionService {
         if (run.budget.uncertain_cost_reservation_usd === undefined && budget.missing_cost) {
             let missing = 0;
             // Stream call lines only; strict parsing keeps the original number tokens for reservation bytes.
-            scan_journal_call_records(join(this.data_dir, id, 'journal.jsonl'), call => {
-                if (call.estimated_uncached_cost_usd !== null) return;
-                const target = run.plan.targets.find(target => target.id === call.target_id);
-                if (!target || !object(call.request)) throw new TypeError('Cannot reconstruct unknown-call budget reservation');
-                budget.uncertain_cost += new AssessmentBudget(Infinity, 1).admit(call.request, target.pricing)!;
-                missing++;
-            }, parseAssessmentJson);
+            scan_journal_call_records(
+                join(this.data_dir, id, 'journal.jsonl'),
+                call => {
+                    if (call.estimated_uncached_cost_usd !== null) return;
+                    const target = run.plan.targets.find(target => target.id === call.target_id);
+                    if (!target || !object(call.request)) throw new TypeError('Cannot reconstruct unknown-call budget reservation');
+                    budget.uncertain_cost += new AssessmentBudget(Infinity, 1).admit(call.request, target.pricing)!;
+                    missing++;
+                },
+                parseAssessmentJson
+            );
             if (missing !== budget.missing_cost) throw new TypeError('Missing request evidence for retry cost accounting');
         }
-        if (budget.requests >= budget.request_limit || budget.spent + budget.uncertain_cost >= budget.cost_limit) throw new TypeError('Original execution limit exhausted; copy configuration to a new task with adjusted limits');
-        const directory = join(this.data_dir, id), generation = 'retry-' + request_id;
+        if (budget.requests >= budget.request_limit || budget.spent + budget.uncertain_cost >= budget.cost_limit)
+            throw new TypeError('Original execution limit exhausted; copy configuration to a new task with adjusted limits');
+        const directory = join(this.data_dir, id),
+            generation = 'retry-' + request_id;
         private_directory(join(directory, generation));
         const original = clone(run);
         let journal: RunJournal | undefined;
         try {
             // Archive exact prior bytes before publishing any replacement result.
             const archive = openSync(join(directory, generation, 'run-before.json'), 'wx', 0o600);
-            try { writeFileSync(archive, readFileSync(join(directory, 'run.json'))); fsyncSync(archive); } finally { closeSync(archive); }
+            try {
+                writeFileSync(archive, readFileSync(join(directory, 'run.json')));
+                fsyncSync(archive);
+            } finally {
+                closeSync(archive);
+            }
             for (const [source, bytes] of prepared.sources) {
                 const destination = join(directory, generation, 'source', source);
-                private_directory(dirname(destination)); const fd = openSync(destination, 'wx', 0o600);
-                try { writeFileSync(fd, bytes); fsyncSync(fd); } finally { closeSync(fd); }
+                private_directory(dirname(destination));
+                const fd = openSync(destination, 'wx', 0o600);
+                try {
+                    writeFileSync(fd, bytes);
+                    fsyncSync(fd);
+                } finally {
+                    closeSync(fd);
+                }
             }
-            journal = new RunJournal(join(directory, generation, 'journal.jsonl'), [...prepared.bindings.values()].flatMap(route => [route.api_key, route.base_url.replace(/\/+$/, ''), route.api_key_env ?? '']));
+            journal = new RunJournal(
+                join(directory, generation, 'journal.jsonl'),
+                [...prepared.bindings.values()].flatMap(route => [
+                    route.api_key,
+                    route.base_url.replace(/\/+$/, ''),
+                    route.api_key_env ?? ''
+                ])
+            );
             for (const sample of eligible) {
                 const { attempts, ...previous } = clone(sample);
                 const history = [...(Array.isArray(attempts) ? attempts : []), previous];
-                for (const key of ['calls', 'usage', 'estimated_uncached_cost_usd', 'text', 'tool_trace', 'started_at', 'finished_at', 'runner_error']) delete sample[key];
-                Object.assign(sample, { status: 'pending', grade: null, ok: false, attempt_id: uuid(), attempts: history, retry_source_sha256: prepared.plan.source_sha256, retry_limits: clone(retryLimits) });
+                for (const key of [
+                    'calls',
+                    'usage',
+                    'estimated_uncached_cost_usd',
+                    'text',
+                    'tool_trace',
+                    'started_at',
+                    'finished_at',
+                    'runner_error'
+                ])
+                    delete sample[key];
+                Object.assign(sample, {
+                    status: 'pending',
+                    grade: null,
+                    ok: false,
+                    attempt_id: uuid(),
+                    attempts: history,
+                    retry_source_sha256: prepared.plan.source_sha256,
+                    retry_limits: clone(retryLimits)
+                });
             }
-            run.retry_batches = [...batches, { request_id, sample_ids: eligible.map(sample => sample.sample_id), source_sha256: prepared.plan.source_sha256, limits: clone(retryLimits), ...(policy ? { policy } : {}), created_at: now() }];
-            run.status = 'queued'; run.stop_reason = null;
-            const runtime: RunRuntime = { bindings: prepared.bindings, tasks: new Map(prepared.tasks.map(task => [task.id, task])), targets: new Map(run.plan.targets.map(target => [target.id, target])), cancel, budget, active: 0, target_active: new Set(), last_target_id: null, journal };
+            run.retry_batches = [
+                ...batches,
+                {
+                    request_id,
+                    sample_ids: eligible.map(sample => sample.sample_id),
+                    source_sha256: prepared.plan.source_sha256,
+                    limits: clone(retryLimits),
+                    ...(policy ? { policy } : {}),
+                    created_at: now()
+                }
+            ];
+            run.status = 'queued';
+            run.stop_reason = null;
+            const runtime: RunRuntime = {
+                bindings: prepared.bindings,
+                tasks: new Map(prepared.tasks.map(task => [task.id, task])),
+                targets: new Map(run.plan.targets.map(target => [target.id, target])),
+                cancel,
+                budget,
+                active: 0,
+                target_active: new Set(),
+                last_target_id: null,
+                journal
+            };
             run.budget = budget.snapshot();
             this._persist(run);
             if (typeof run.task_id === 'string') {
                 const task = this._tasks.get(run.task_id)!;
-                task.status = 'queued'; task.stop_reason = null; this._persist_task(task);
+                task.status = 'queued';
+                task.stop_reason = null;
+                this._persist_task(task);
                 if (!this.task_active_runs.has(task.id)) this.task_active_runs.set(task.id, new Set());
             }
             this._runtime.set(id, runtime);
-            for (const route of prepared.bindings.values()) this._account_limits.set(route.account_ref, Math.min(this._account_limits.get(route.account_ref) ?? 500, route.account_concurrency));
-            this.schedule(); return id;
+            for (const route of prepared.bindings.values())
+                this._account_limits.set(
+                    route.account_ref,
+                    Math.min(this._account_limits.get(route.account_ref) ?? 500, route.account_concurrency)
+                );
+            this.schedule();
+            return id;
         } catch (error) {
-            journal?.close(); this._runs.set(id, original); this.fail_storage(); throw error;
+            journal?.close();
+            this._runs.set(id, original);
+            this.fail_storage();
+            throw error;
         }
     }
     cancel_run(id: string): boolean {
@@ -823,7 +983,7 @@ export class BenchExecutionService {
     async wait_for_run(id: string, timeout?: number): Promise<boolean> {
         if (!this._runs.has(id)) return false;
         if (TERMINAL_RUN_STATUSES.has(this._runs.get(id)!.status) && !this._runtime.has(id)) return true;
-        return new Promise((resolve) => {
+        return new Promise(resolve => {
             let timer: ReturnType<typeof setTimeout> | undefined;
             const done = () => {
                 if (timer) clearTimeout(timer);
@@ -867,22 +1027,24 @@ export class BenchExecutionService {
                     stop = runtime.budget.stop_reason;
                 if (cancelled || stop)
                     for (const sample of run.samples)
-                        if (sample.status === 'pending')
-                            sample.status = cancelled ? 'cancelled' : 'budget_not_admitted';
-                const pending = run.samples.filter((sample) => sample.status === 'pending');
+                        if (sample.status === 'pending') sample.status = cancelled ? 'cancelled' : 'budget_not_admitted';
+                const pending = run.samples.filter(sample => sample.status === 'pending');
                 if (!pending.length && !runtime.active) {
                     run.status =
                         run.stop_reason === 'storage_error'
                             ? 'failed'
                             : cancelled
                               ? 'cancelled'
-                              : run.samples.every((sample) => sample.status === 'completed')
+                              : run.samples.every(sample => sample.status === 'completed')
                                 ? 'completed'
-                                : run.samples.some(sample => ['api_failure', 'worker_error', 'storage_error'].includes(sample.status)) ? 'failed' : 'incomplete';
+                                : run.samples.some(sample => ['api_failure', 'worker_error', 'storage_error'].includes(sample.status))
+                                  ? 'failed'
+                                  : 'incomplete';
                     if (run.stop_reason !== 'storage_error')
                         run.stop_reason = cancelled
                             ? 'cancelled'
-                            : stop || (run.status === 'failed' ? 'api_failure' : run.status === 'incomplete' ? 'capability_or_limit' : null);
+                            : stop ||
+                              (run.status === 'failed' ? 'api_failure' : run.status === 'incomplete' ? 'capability_or_limit' : null);
                     this.persist_safe(run);
                     try {
                         runtime.journal.close();
@@ -925,7 +1087,10 @@ export class BenchExecutionService {
                     if (taskChild) {
                         activeChildren.add(id);
                         this.update_task(taskId!);
-                        if (this._closing) { sample.status = 'storage_error'; break; }
+                        if (this._closing) {
+                            sample.status = 'storage_error';
+                            break;
+                        }
                     }
                     runtime.active++;
                     if (!taskChild) runtime.target_active.add(sample.target_id);
@@ -934,8 +1099,8 @@ export class BenchExecutionService {
                     this._active++;
                     this._account_active.set(account, (this._account_active.get(account) ?? 0) + 1);
                     void this.execute(run, runtime, clone(sample)).then(
-                        (observation) => this.complete(id, sample.sample_id, account, observation),
-                        (error) => this.complete(id, sample.sample_id, account, null, error)
+                        observation => this.complete(id, sample.sample_id, account, observation),
+                        error => this.complete(id, sample.sample_id, account, null, error)
                     );
                     dispatched = true;
                     break;
@@ -943,27 +1108,17 @@ export class BenchExecutionService {
             }
         } while (dispatched);
     }
-    private async execute(
-        run: ExecutionRun,
-        runtime: RunRuntime,
-        sample: ExecutionSample
-    ): Promise<RecordValue | null> {
+    private async execute(run: ExecutionRun, runtime: RunRuntime, sample: ExecutionSample): Promise<RecordValue | null> {
         const target = runtime.targets.get(sample.target_id)!,
             route = runtime.bindings.get(sample.target_id)!,
-            client = this.routes.create_client ? this.routes.create_client(clone(route)) : this.client_factory(route.base_url, route.api_key);
+            client = this.routes.create_client
+                ? this.routes.create_client(clone(route))
+                : this.client_factory(route.base_url, route.api_key);
         const identity: Record<string, string> = {};
-        for (const key of [
-            'run_id',
-            'sample_id',
-            'attempt_id',
-            'target_id',
-            'route_id',
-            'account_ref',
-            'account_evidence'
-        ] as const)
+        for (const key of ['run_id', 'sample_id', 'attempt_id', 'target_id', 'route_id', 'account_ref', 'account_evidence'] as const)
             identity[key] = sample[key];
         const journal = new SampleJournal(runtime.journal, identity, () => this.fail_storage());
-        const effectiveLimits = object(sample.retry_limits) ? sample.retry_limits as Limits : run.plan.limits;
+        const effectiveLimits = object(sample.retry_limits) ? (sample.retry_limits as Limits) : run.plan.limits;
         const { max_output_tokens, max_turns, max_tool_calls, timeout, timeout_scope } = effectiveLimits;
         const max_api_retries = effectiveLimits.max_api_retries ?? 3;
         await run_assessment_sample(
@@ -980,31 +1135,34 @@ export class BenchExecutionService {
         );
         return journal.observation;
     }
-    private complete(
-        id: string,
-        sample_id: string,
-        account: string,
-        observation: RecordValue | null,
-        error?: unknown
-    ): void {
+    private complete(id: string, sample_id: string, account: string, observation: RecordValue | null, error?: unknown): void {
         const run = this._runs.get(id)!,
             runtime = this._runtime.get(id)!,
-            sample = run.samples.find((value) => value.sample_id === sample_id)!;
+            sample = run.samples.find(value => value.sample_id === sample_id)!;
         try {
             if (error) throw error;
             if (!observation) throw new TypeError('Missing sample observation');
-            Object.assign(sample, observation, { latest_attempt_usage: observation.usage, latest_attempt_cost_usd: observation.estimated_uncached_cost_usd });
-            const attempts = Array.isArray(sample.attempts) ? sample.attempts as RecordValue[] : [];
+            Object.assign(sample, observation, {
+                latest_attempt_usage: observation.usage,
+                latest_attempt_cost_usd: observation.estimated_uncached_cost_usd
+            });
+            const attempts = Array.isArray(sample.attempts) ? (sample.attempts as RecordValue[]) : [];
             if (attempts.length) {
                 // Attempts that sent no request (empty calls) consumed nothing: a known zero, not unknown.
                 const all = [...attempts, observation].filter(item => !(Array.isArray(item.calls) && item.calls.length === 0));
-                const costs = all.map(item => Object.hasOwn(item, 'latest_attempt_cost_usd') ? item.latest_attempt_cost_usd : item.estimated_uncached_cost_usd);
-                const usages = all.map(item => Object.hasOwn(item, 'latest_attempt_usage') ? item.latest_attempt_usage : item.usage);
-                sample.estimated_uncached_cost_usd = costs.every(value => typeof value === 'number') ? costs.reduce<number>((sum, value) => sum + Number(value), 0) : null;
-                sample.usage = usages.every(object) ? {
-                    input_tokens: usages.reduce((sum, usage) => sum + Number(usage.input_tokens), 0),
-                    output_tokens: usages.reduce((sum, usage) => sum + Number(usage.output_tokens), 0)
-                } : null;
+                const costs = all.map(item =>
+                    Object.hasOwn(item, 'latest_attempt_cost_usd') ? item.latest_attempt_cost_usd : item.estimated_uncached_cost_usd
+                );
+                const usages = all.map(item => (Object.hasOwn(item, 'latest_attempt_usage') ? item.latest_attempt_usage : item.usage));
+                sample.estimated_uncached_cost_usd = costs.every(value => typeof value === 'number')
+                    ? costs.reduce<number>((sum, value) => sum + Number(value), 0)
+                    : null;
+                sample.usage = usages.every(object)
+                    ? {
+                          input_tokens: usages.reduce((sum, usage) => sum + Number(usage.input_tokens), 0),
+                          output_tokens: usages.reduce((sum, usage) => sum + Number(usage.output_tokens), 0)
+                      }
+                    : null;
             }
         } catch (error) {
             Object.assign(sample, {
@@ -1036,6 +1194,6 @@ export class BenchExecutionService {
         }
         for (const runtime of this._runtime.values()) runtime.cancel.value = true;
         this.schedule();
-        if (wait) await Promise.all(ids.map((id) => this.wait_for_run(id)));
+        if (wait) await Promise.all(ids.map(id => this.wait_for_run(id)));
     }
 }

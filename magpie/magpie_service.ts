@@ -4,6 +4,9 @@ import { validateMagpieAccountBindings } from './magpie_accounts.ts';
 
 /** Assemble the host adapter and the generic service in Magpie's existing Bun process. */
 export function startMagpieBenchService(options: MiniBenchOptions & { accounts?: unknown }) {
-    const accounts = validateMagpieAccountBindings(options.accounts);
-    return startMiniBenchService({ ...options, adapter: options.adapter ?? new MagpieBenchAdapter(undefined, undefined, undefined, accounts) });
+  const accounts = validateMagpieAccountBindings(options.accounts);
+  return startMiniBenchService({
+    ...options,
+    adapter: options.adapter ?? new MagpieBenchAdapter(undefined, undefined, undefined, accounts)
+  });
 }

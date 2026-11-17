@@ -8,22 +8,48 @@ const accountIdentity = record => record.accountId ?? record.account;
 /** Model labels come from supplied display names, never route path parsing. */
 export const modelFilterLabel = record => record.modelDisplayName ?? record.model;
 /** Normalize display model spelling for cross-channel facets, preserving request IDs. */
-export const modelFilterIdentity = record => String(modelFilterLabel(record)).normalize('NFKC').trim().toLocaleLowerCase().replace(/[\s_-]+/g, '-');
-const normalizeSearch = value => String(value ?? '').normalize('NFKC').toLocaleLowerCase().replace(/[^\p{L}\p{N}]+/gu, '');
+export const modelFilterIdentity = record =>
+  String(modelFilterLabel(record))
+    .normalize('NFKC')
+    .trim()
+    .toLocaleLowerCase()
+    .replace(/[\s_-]+/g, '-');
+const normalizeSearch = value =>
+  String(value ?? '')
+    .normalize('NFKC')
+    .toLocaleLowerCase()
+    .replace(/[^\p{L}\p{N}]+/gu, '');
 /** Default omits reasoning and must stay distinct from explicit none. */
-export const thinkingLabel = value => value === 'default' ? '默认（不指定）' : value === 'unknown' ? '未记录' : String(value);
+export const thinkingLabel = value => (value === 'default' ? '默认（不指定）' : value === 'unknown' ? '未记录' : String(value));
 
 /** Unified search uses recorded identity fields, never inferred route segments. */
 export function recordMatchesSearch(record, query) {
   const tokens = query.trim().split(/\s+/).map(normalizeSearch).filter(Boolean);
-  const text = normalizeSearch([record.model, record.modelDisplayName, record.provider, record.providerName, record.providerDisplayId, providerIdentity(record), record.account, record.accountDisplayId, accountIdentity(record), thinkingLabel(record.think), record.think].join(' '));
+  const text = normalizeSearch(
+    [
+      record.model,
+      record.modelDisplayName,
+      record.provider,
+      record.providerName,
+      record.providerDisplayId,
+      providerIdentity(record),
+      record.account,
+      record.accountDisplayId,
+      accountIdentity(record),
+      thinkingLabel(record.think),
+      record.think
+    ].join(' ')
+  );
   return tokens.every(token => text.includes(token));
 }
 let pickerSequence = 0;
 
 /** Shared cross-channel search; omitted selectedKeys means all known leaves, [] means none. */
 export function createDataPicker(container, { records, selectedKeys, mode = 'analysis', onChange = () => {} }) {
-  const leaves = [...new Map(records.map(record => [selectionKey(record), { ...record }])).entries()].map(([key, record]) => ({ ...record, key }));
+  const leaves = [...new Map(records.map(record => [selectionKey(record), { ...record }])).entries()].map(([key, record]) => ({
+    ...record,
+    key
+  }));
   const knownKeys = new Set(leaves.map(leaf => leaf.key));
   let selected = new Set((selectedKeys === undefined ? [...knownKeys] : selectedKeys).filter(key => knownKeys.has(key)));
   let open = false;
@@ -43,7 +69,7 @@ export function createDataPicker(container, { records, selectedKeys, mode = 'ana
     node.addEventListener('click', action);
     return node;
   };
-  const trigger = button('dp-trigger', '', () => open ? hide() : show());
+  const trigger = button('dp-trigger', '', () => (open ? hide() : show()));
   const popup = element('section', 'dp-popup');
   popup.id = `dp-popup-${++pickerSequence}`;
   popup.hidden = true;
@@ -58,7 +84,11 @@ export function createDataPicker(container, { records, selectedKeys, mode = 'ana
   search.type = 'search';
   search.placeholder = '搜索模型、渠道或账号';
   search.setAttribute('aria-label', search.placeholder);
-  const clearSearch = button('dp-clear-search', '×', () => { search.value = ''; render(); search.focus(); });
+  const clearSearch = button('dp-clear-search', '×', () => {
+    search.value = '';
+    render();
+    search.focus();
+  });
   clearSearch.setAttribute('aria-label', '清空搜索');
   searchWrap.append(search, clearSearch);
   const filters = element('div', 'dp-filters');
@@ -93,10 +123,13 @@ export function createDataPicker(container, { records, selectedKeys, mode = 'ana
     filters.append(label);
     return select;
   }
-  const providerOptions = new Map(leaves.map(leaf => [providerIdentity(leaf), leaf.providerName ?? leaf.providerDisplayId ?? leaf.provider]));
+  const providerOptions = new Map(
+    leaves.map(leaf => [providerIdentity(leaf), leaf.providerName ?? leaf.providerDisplayId ?? leaf.provider])
+  );
   const providers = filter('渠道', providerOptions, 'dp-provider-filter');
   const modelLabels = new Map();
-  for (const leaf of leaves) if (!modelLabels.has(modelFilterIdentity(leaf))) modelLabels.set(modelFilterIdentity(leaf), modelFilterLabel(leaf));
+  for (const leaf of leaves)
+    if (!modelLabels.has(modelFilterIdentity(leaf))) modelLabels.set(modelFilterIdentity(leaf), modelFilterLabel(leaf));
   const modelOptions = scope => new Map(scope.map(leaf => [modelFilterIdentity(leaf), modelLabels.get(modelFilterIdentity(leaf))]));
   const models = filter('模型', modelOptions(leaves), 'dp-model-filter');
   function updateModelOptions() {
@@ -106,7 +139,11 @@ export function createDataPicker(container, { records, selectedKeys, mode = 'ana
   const efforts = [...new Set(leaves.map(leaf => leaf.think))];
   const effortOrder = ['default', 'none', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max', 'unknown'];
   efforts.sort((a, b) => (effortOrder.includes(a) ? effortOrder.indexOf(a) : 99) - (effortOrder.includes(b) ? effortOrder.indexOf(b) : 99));
-  const thinking = filter('思考', efforts.map(effort => [effort, thinkingLabel(effort)]), 'dp-thinking-filter');
+  const thinking = filter(
+    '思考',
+    efforts.map(effort => [effort, thinkingLabel(effort)]),
+    'dp-thinking-filter'
+  );
   const resetFilters = button('dp-reset-filters', '重置条件', () => {
     search.value = providers.value = models.value = thinking.value = '';
     updateModelOptions();
@@ -127,12 +164,18 @@ export function createDataPicker(container, { records, selectedKeys, mode = 'ana
   const footer = element('div', 'dp-footer');
   const summary = element('span', 'dp-summary');
   const clear = button('dp-action', '清空全部', () => changeKeys(leaves, false));
-  const done = button('dp-done', '完成', () => { hide(); trigger.focus(); });
+  const done = button('dp-done', '完成', () => {
+    hide();
+    trigger.focus();
+  });
   footer.append(summary, clear, done);
   popup.append(header, searchWrap, filters, resultBar, columnHead, list, footer);
   container.append(trigger);
   document.body.append(popup);
-  search.addEventListener('input', () => { list.scrollTop = 0; render(); });
+  search.addEventListener('input', () => {
+    list.scrollTop = 0;
+    render();
+  });
 
   function matchingLeaves() {
     return leaves.filter(leaf => {
@@ -181,7 +224,13 @@ export function createDataPicker(container, { records, selectedKeys, mode = 'ana
       const route = element('div', 'dp-route');
       route.append(element('span', 'dp-provider-name', record.providerName ?? record.providerDisplayId ?? record.provider));
       route.setAttribute('title', record.providerDisplayId ?? record.providerName ?? record.provider);
-      const account = element('small', 'dp-account-name', record.accountShortName && record.accountDisplayId ? `${record.accountShortName} · ${record.accountDisplayId}` : record.accountShortName ?? record.account);
+      const account = element(
+        'small',
+        'dp-account-name',
+        record.accountShortName && record.accountDisplayId
+          ? `${record.accountShortName} · ${record.accountDisplayId}`
+          : (record.accountShortName ?? record.account)
+      );
       account.setAttribute('title', record.accountDisplayId ?? record.account);
       route.append(account);
       const levels = element('div', 'dp-thinking-list');
@@ -189,7 +238,10 @@ export function createDataPicker(container, { records, selectedKeys, mode = 'ana
         const selectedLeaf = selected.has(leaf.key);
         const level = button('dp-think', thinkingLabel(leaf.think), () => changeKeys([leaf], !selected.has(leaf.key)));
         level.setAttribute('aria-pressed', String(selectedLeaf));
-        level.setAttribute('aria-label', `${leaf.providerName ?? leaf.provider} / ${leaf.account} / ${leaf.model} / ${thinkingLabel(leaf.think)}`);
+        level.setAttribute(
+          'aria-label',
+          `${leaf.providerName ?? leaf.provider} / ${leaf.account} / ${leaf.model} / ${thinkingLabel(leaf.think)}`
+        );
         if (leaf.think === 'default') level.setAttribute('title', '请求中不指定 reasoning，使用上游默认行为；不等于 none');
         for (const field of ['provider', 'account', 'model', 'think']) level.dataset[field] = leaf[field];
         level.dataset.providerId = providerIdentity(leaf);
@@ -200,9 +252,27 @@ export function createDataPicker(container, { records, selectedKeys, mode = 'ana
       }
       row.append(check, route, model, levels);
       if (mode === 'analysis') {
-        const observations = records.filter(leaf => providerIdentity(leaf) === providerIdentity(record) && accountIdentity(leaf) === accountIdentity(record) && leaf.model === record.model && scope.some(visible => visible.think === leaf.think));
-        const note = element('div', 'dp-record-note', `${observations.length} 个结果${observations.some(leaf => leaf.exclusionReason) ? ' · 含未入图记录' : ''}`);
-        note.setAttribute('title', observations.map(leaf => `${thinkingLabel(leaf.think)} · ${leaf.original?.created_at ?? leaf.created_at ?? '时间未记录'}${leaf.exclusionReason ? ` · 未入图：${leaf.exclusionReason}` : ''}`).join('\n'));
+        const observations = records.filter(
+          leaf =>
+            providerIdentity(leaf) === providerIdentity(record) &&
+            accountIdentity(leaf) === accountIdentity(record) &&
+            leaf.model === record.model &&
+            scope.some(visible => visible.think === leaf.think)
+        );
+        const note = element(
+          'div',
+          'dp-record-note',
+          `${observations.length} 个结果${observations.some(leaf => leaf.exclusionReason) ? ' · 含未入图记录' : ''}`
+        );
+        note.setAttribute(
+          'title',
+          observations
+            .map(
+              leaf =>
+                `${thinkingLabel(leaf.think)} · ${leaf.original?.created_at ?? leaf.created_at ?? '时间未记录'}${leaf.exclusionReason ? ` · 未入图：${leaf.exclusionReason}` : ''}`
+            )
+            .join('\n')
+        );
         row.append(note);
       }
       list.append(row);
@@ -220,16 +290,19 @@ export function createDataPicker(container, { records, selectedKeys, mode = 'ana
     selectVisible.disabled = !visibleLeaves.length || visibleLeaves.every(leaf => selected.has(leaf.key));
     resetFilters.disabled = !search.value && !providers.value && !models.value && !thinking.value;
     list.scrollTop = scrollTop;
-    if (focusId) [...popup.querySelectorAll('[data-focus-id]')].find(node => node.dataset.focusId === focusId)?.focus({ preventScroll: true });
+    if (focusId)
+      [...popup.querySelectorAll('[data-focus-id]')].find(node => node.dataset.focusId === focusId)?.focus({ preventScroll: true });
     if (open) position();
   }
   function position() {
     if (!open) return;
     const rect = trigger.getBoundingClientRect();
-    const inset = 16, gap = 8;
+    const inset = 16,
+      gap = 8;
     const width = Math.min(720, window.innerWidth - inset * 2);
     popup.style.width = `${Math.max(0, width)}px`;
-    const fixedHeight = 2 + [...popup.children].filter(child => child !== list).reduce((sum, child) => sum + child.getBoundingClientRect().height, 0);
+    const fixedHeight =
+      2 + [...popup.children].filter(child => child !== list).reduce((sum, child) => sum + child.getBoundingClientRect().height, 0);
     const rowsHeight = [...list.children].reduce((sum, row) => sum + row.getBoundingClientRect().height, 0);
     const lowerEdge = Math.max(inset, Math.min(rect.bottom + gap, window.innerHeight - inset));
     const upperEdge = Math.max(inset, Math.min(rect.top - gap, window.innerHeight - inset));
@@ -238,8 +311,14 @@ export function createDataPicker(container, { records, selectedKeys, mode = 'ana
     const useAbove = below < 320 && above > below;
     const available = useAbove ? above : below;
     // A short viewport needs the whole popup, including filters and footer, inside its bounds.
-    const contentHeight = Math.min(640, Math.max(fixedHeight + rowsHeight, 244 + Math.max(1, visibleRowCount) * (window.innerWidth <= 772 ? 124 : mode === 'tasks' ? 92 : 90)));
-    const compact = available < 300 || (visibleRowCount > 2 && available < Math.min(420, contentHeight)) || (visibleRowCount === 1 && fixedHeight + rowsHeight > available);
+    const contentHeight = Math.min(
+      640,
+      Math.max(fixedHeight + rowsHeight, 244 + Math.max(1, visibleRowCount) * (window.innerWidth <= 772 ? 124 : mode === 'tasks' ? 92 : 90))
+    );
+    const compact =
+      available < 300 ||
+      (visibleRowCount > 2 && available < Math.min(420, contentHeight)) ||
+      (visibleRowCount === 1 && fixedHeight + rowsHeight > available);
     const height = Math.max(0, Math.min(contentHeight, compact ? window.innerHeight - inset * 2 : available));
     popup.style.height = `${height}px`;
     popup.style.left = `${Math.max(inset, Math.min(rect.left, window.innerWidth - width - inset))}px`;
@@ -253,9 +332,21 @@ export function createDataPicker(container, { records, selectedKeys, mode = 'ana
     render();
     search.focus();
   }
-  function hide() { open = false; popup.hidden = true; trigger.setAttribute('aria-expanded', 'false'); }
-  function outsideClick(event) { if (open && !popup.contains(event.target) && !trigger.contains(event.target)) hide(); }
-  function escape(event) { if (open && event.key === 'Escape') { event.preventDefault(); hide(); trigger.focus(); } }
+  function hide() {
+    open = false;
+    popup.hidden = true;
+    trigger.setAttribute('aria-expanded', 'false');
+  }
+  function outsideClick(event) {
+    if (open && !popup.contains(event.target) && !trigger.contains(event.target)) hide();
+  }
+  function escape(event) {
+    if (open && event.key === 'Escape') {
+      event.preventDefault();
+      hide();
+      trigger.focus();
+    }
+  }
   document.addEventListener('pointerdown', outsideClick);
   document.addEventListener('keydown', escape);
   window.addEventListener('resize', position);
@@ -263,7 +354,10 @@ export function createDataPicker(container, { records, selectedKeys, mode = 'ana
   render();
   return {
     getSelection: () => [...selected],
-    setSelection(keys) { selected = new Set([...keys].filter(key => knownKeys.has(key))); render(); },
+    setSelection(keys) {
+      selected = new Set([...keys].filter(key => knownKeys.has(key)));
+      render();
+    },
     show,
     hide,
     destroy() {
@@ -275,6 +369,6 @@ export function createDataPicker(container, { records, selectedKeys, mode = 'ana
       document.removeEventListener('keydown', escape);
       window.removeEventListener('resize', position);
       window.removeEventListener('scroll', position, true);
-    },
+    }
   };
 }

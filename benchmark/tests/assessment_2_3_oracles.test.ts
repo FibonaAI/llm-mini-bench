@@ -16,7 +16,8 @@ describe('Assessment 2.3 independent first-principles oracles', () => {
             swr: 30
         };
         const weakMatch = (a: { weak: boolean; opaque: string }, b: { weak: boolean; opaque: string }) => a.opaque === b.opaque;
-        const strongMatch = (a: { weak: boolean; opaque: string }, b: { weak: boolean; opaque: string }) => !a.weak && !b.weak && a.opaque === b.opaque;
+        const strongMatch = (a: { weak: boolean; opaque: string }, b: { weak: boolean; opaque: string }) =>
+            !a.weak && !b.weak && a.opaque === b.opaque;
 
         function evalGetConditional(inmTags: Array<{ weak: boolean; opaque: string }> | null, imsEpoch: number | null): number {
             if (inmTags !== null) {
@@ -29,7 +30,10 @@ describe('Assessment 2.3 independent first-principles oracles', () => {
             if (!strongMatch(ifRangeTag, stored.etag)) return 200;
             return rangeStart < len ? 206 : 416;
         }
-        function evalPutPreconditions(ifMatch: { wildcard: boolean; tag?: { weak: boolean; opaque: string } } | null, iusEpoch: number | null): number {
+        function evalPutPreconditions(
+            ifMatch: { wildcard: boolean; tag?: { weak: boolean; opaque: string } } | null,
+            iusEpoch: number | null
+        ): number {
             if (ifMatch !== null) {
                 const ok = ifMatch.wildcard ? true : strongMatch(ifMatch.tag!, stored.etag);
                 return ok ? 204 : 412;
@@ -70,10 +74,7 @@ describe('Assessment 2.3 independent first-principles oracles', () => {
                 can_serve_without_revalidation_min_fresh_20_at_t10: canServeMinFreshAt(10, 20),
                 can_serve_without_revalidation_cc_max_age_30_with_pragma_no_cache_at_t10: canServePragmaNoCacheWhenStoredEntryIsFresh(10)
             },
-            swr_states_at_t35_and_t60: [
-                classifySwrState(35),
-                classifySwrState(60)
-            ]
+            swr_states_at_t35_and_t60: [classifySwrState(35), classifySwrState(60)]
         };
 
         const grade = taskMap.K23_HTTP_Conditional_Cache_Precedence!.grade(JSON.stringify(oracleAnswer));
@@ -83,9 +84,9 @@ describe('Assessment 2.3 independent first-principles oracles', () => {
 
     test('K23_IEEE754_ThreeValued_Semantics: live binary64 and SQL 3VL evaluator', () => {
         const u = 2 ** -52;
-        const m1 = (((1.0 + 2 ** -52) * (1.0 - 2 ** -53)) - 1.0) / u;
-        const m2 = ((1.0 / (1.0 - 2 ** -53)) - 1.0) / u;
-        const m3 = (((1.0 + 2 ** -52) + (2 ** -53 - 2 ** -107)) - (1.0 + 2 ** -52)) / u;
+        const m1 = ((1.0 + 2 ** -52) * (1.0 - 2 ** -53) - 1.0) / u;
+        const m2 = (1.0 / (1.0 - 2 ** -53) - 1.0) / u;
+        const m3 = (1.0 + 2 ** -52 + (2 ** -53 - 2 ** -107) - (1.0 + 2 ** -52)) / u;
 
         const minSubnormal = 2 ** -1074;
         const q = (minSubnormal * 1.5) / minSubnormal;
@@ -116,7 +117,9 @@ describe('Assessment 2.3 independent first-principles oracles', () => {
 
         const uniqueAccepted: typeof rows = [];
         for (const r of checkAccepted) {
-            const dup = uniqueAccepted.some(uRow => uRow.x !== null && r.x !== null && uRow.x === r.x && uRow.y !== null && r.y !== null && uRow.y === r.y);
+            const dup = uniqueAccepted.some(
+                uRow => uRow.x !== null && r.x !== null && uRow.x === r.x && uRow.y !== null && r.y !== null && uRow.y === r.y
+            );
             if (!dup) uniqueAccepted.push(r);
         }
 
@@ -131,12 +134,7 @@ describe('Assessment 2.3 independent first-principles oracles', () => {
         const oracleAnswer = {
             midpoint_mul_div_and_double_round_in_ulp52: [m1, m2, m3],
             ieee2019_nan_and_fma: ['3.0', 'NaN', fmaSign, q],
-            sql_3vl_partial_null_unique_and_check: [
-                uniqueAccepted.length,
-                countDistinctXCol,
-                countDistinctXSubquery,
-                sumCoal
-            ]
+            sql_3vl_partial_null_unique_and_check: [uniqueAccepted.length, countDistinctXCol, countDistinctXSubquery, sumCoal]
         };
 
         const grade = taskMap.K23_IEEE754_ThreeValued_Semantics!.grade(JSON.stringify(oracleAnswer));
@@ -147,7 +145,11 @@ describe('Assessment 2.3 independent first-principles oracles', () => {
     test('R23_InContext_Glyph_Morphism: exhaustive parameter induction and 30-state morphism solver', () => {
         type Chirality = 'L' | 'R';
         type Spin = -1 | 0 | 1;
-        interface Cell { c: Chirality; q: number; s: Spin }
+        interface Cell {
+            c: Chirality;
+            q: number;
+            s: Spin;
+        }
         type MuMode = 'any_q1_zero' | 'counter_chiral_any_spin' | 'counter_chiral_nonzero_s1' | 'co_chiral_nonzero_s1';
 
         const flipC = (c: Chirality): Chirality => (c === 'L' ? 'R' : 'L');
@@ -160,11 +162,19 @@ describe('Assessment 2.3 independent first-principles oracles', () => {
         const clampSpin = (n: number): Spin => (n > 0 ? 1 : n < 0 ? -1 : 0);
 
         const twist = (x: Cell, kappa: number): Cell =>
-            x.s === 0
-                ? { c: x.c, q: (x.q + kappa) % 5, s: 1 }
-                : { c: flipC(x.c), q: (5 - x.q) % 5, s: (-x.s) as Spin };
+            x.s === 0 ? { c: x.c, q: (x.q + kappa) % 5, s: 1 } : { c: flipC(x.c), q: (5 - x.q) % 5, s: -x.s as Spin };
 
-        const couple = (a: Cell, b: Cell, kappa: number, mu: MuMode, alpha: number, beta: number, gamma: number, delta: number, omega: Spin): Cell => {
+        const couple = (
+            a: Cell,
+            b: Cell,
+            kappa: number,
+            mu: MuMode,
+            alpha: number,
+            beta: number,
+            gamma: number,
+            delta: number,
+            omega: Spin
+        ): Cell => {
             if (a.q === 0) {
                 const mirror =
                     mu === 'any_q1_zero'
@@ -190,7 +200,16 @@ describe('Assessment 2.3 independent first-principles oracles', () => {
             return { c: cOut, q: qOut, s: sOut };
         };
 
-        const reduceStep = (arr: Cell[], kappa: number, mu: MuMode, alpha: number, beta: number, gamma: number, delta: number, omega: Spin): Cell[] => {
+        const reduceStep = (
+            arr: Cell[],
+            kappa: number,
+            mu: MuMode,
+            alpha: number,
+            beta: number,
+            gamma: number,
+            delta: number,
+            omega: Spin
+        ): Cell[] => {
             let idx = -1;
             let isAnnihilation = false;
             for (let i = 0; i < arr.length - 1; i++) {
@@ -226,7 +245,16 @@ describe('Assessment 2.3 independent first-principles oracles', () => {
             return next;
         };
 
-        const reduceAll = (arr: Cell[], kappa: number, mu: MuMode, alpha: number, beta: number, gamma: number, delta: number, omega: Spin) => {
+        const reduceAll = (
+            arr: Cell[],
+            kappa: number,
+            mu: MuMode,
+            alpha: number,
+            beta: number,
+            gamma: number,
+            delta: number,
+            omega: Spin
+        ) => {
             let cur = [...arr];
             const steps: string[][] = [];
             while (cur.length > 1) {
@@ -312,7 +340,7 @@ describe('Assessment 2.3 independent first-principles oracles', () => {
         const yNat = (u: number) => (2 * u + 1) % 4;
         const zNat = (u: number) => Math.abs(xNat(u) - yNat(u));
 
-        const matchingLambdas = [1, 2, 3].filter(lam => ((yNat(0) - lam * (2 - xNat(0)) + 16) % 4) === 3);
+        const matchingLambdas = [1, 2, 3].filter(lam => (yNat(0) - lam * (2 - xNat(0)) + 16) % 4 === 3);
         expect(matchingLambdas).toEqual([2]);
         const lambda = matchingLambdas[0]!;
 
@@ -333,8 +361,14 @@ describe('Assessment 2.3 independent first-principles oracles', () => {
             return { regime: 'free' as const, y, z, fOut: 0, uNext, delta };
         }
 
-        const clamp0Z = new AssessmentFraction(weights.reduce((s, w, u) => s + w * stepLattice(u, 0, 0).z, 0), 18);
-        const clamp2Z = new AssessmentFraction(weights.reduce((s, w, u) => s + w * stepLattice(u, 0, 2).z, 0), 18);
+        const clamp0Z = new AssessmentFraction(
+            weights.reduce((s, w, u) => s + w * stepLattice(u, 0, 0).z, 0),
+            18
+        );
+        const clamp2Z = new AssessmentFraction(
+            weights.reduce((s, w, u) => s + w * stepLattice(u, 0, 2).z, 0),
+            18
+        );
         expect(clamp2Z.toString()).toBe('14/9');
 
         const surv0 = [0, 1, 2, 3, 4, 5].filter(u => stepLattice(u, 0, 0).z === 4);
@@ -731,11 +765,13 @@ describe('Assessment 2.3 independent first-principles oracles', () => {
         for (const [record_id, approval_handle] of Object.entries(assignment)) {
             expect(sim.call('release_record', { record_id, approval_handle }).ok).toBe(true);
         }
-        const grade = sim.grade(JSON.stringify({
-            released: ['A', 'B', 'C', 'D', 'E', 'F', 'G', 'H'],
-            pending: [],
-            root_uses_remaining: 0
-        }));
+        const grade = sim.grade(
+            JSON.stringify({
+                released: ['A', 'B', 'C', 'D', 'E', 'F', 'G', 'H'],
+                pending: [],
+                root_uses_remaining: 0
+            })
+        );
         expect(grade.content_score).toBe(1);
         expect(grade.outcome).toBe('correct');
         expect(grade.tool_checks?.no_invalid_attempts).toBe(true);

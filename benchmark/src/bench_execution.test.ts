@@ -31,12 +31,12 @@ class FakeRoutes implements ExecutionRoutes {
         return structuredClone(this.configs[id]!);
     }
     public_routes() {
-        return Object.keys(this.configs).map((id) => ({ id, label: id }));
+        return Object.keys(this.configs).map(id => ({ id, label: id }));
     }
 }
 function deferred() {
     let resolve!: () => void;
-    const promise = new Promise<void>((done) => {
+    const promise = new Promise<void>(done => {
         resolve = done;
     });
     return { promise, resolve };
@@ -57,7 +57,7 @@ class FakeGateway {
     }
     wait_calls(count: number): Promise<void> {
         if (this.calls.length >= count) return Promise.resolve();
-        return new Promise((resolve) => {
+        return new Promise(resolve => {
             this.waiting.push({ count, resolve });
         });
     }
@@ -73,12 +73,7 @@ class FakeGateway {
                 await this.release.promise;
                 if (this.fail) throw new Error('secret should never be logged: ' + api_key);
                 let output: unknown[];
-                if (
-                    body.tools &&
-                    !(body.input as Array<Record<string, unknown>>).some(
-                        (item) => item.type === 'function_call_output'
-                    )
-                )
+                if (body.tools && !(body.input as Array<Record<string, unknown>>).some(item => item.type === 'function_call_output'))
                     output = [
                         {
                             type: 'function_call',
@@ -89,9 +84,7 @@ class FakeGateway {
                     ];
                 else {
                     let text = JSON.stringify(
-                        body.tools
-                            ? { status: 'impossible', max_C: 3 }
-                            : { posterior_A: '1/2', stop_at_3: '7/12', expected_draws: '41/12' }
+                        body.tools ? { status: 'impossible', max_C: 3 } : { posterior_A: '1/2', stop_at_3: '7/12', expected_draws: '41/12' }
                     );
                     if (this.echo_secret) text += '\n' + api_key + '\n' + base_url;
                     output = [{ type: 'message', content: [{ type: 'output_text', text }] }];
@@ -101,8 +94,7 @@ class FakeGateway {
                     output,
                     usage: { input_tokens: 20, output_tokens: 40 }
                 };
-                if (this.echo_secret)
-                    response.provider_debug = { secret: api_key, nested: [api_key], [api_key]: base_url };
+                if (this.echo_secret) response.provider_debug = { secret: api_key, nested: [api_key], [api_key]: base_url };
                 return [200, 0.001, {}, response];
             } finally {
                 this.active.set(api_key, this.active.get(api_key)! - 1);
@@ -160,7 +152,11 @@ describe('durable execution and admission (fully offline)', () => {
     });
     test('optional catalog identity is frozen in plans and runs without inferring missing metadata', async () => {
         const { service, routes, directory } = fixture();
-        Object.assign(routes.configs.a!, { provider_id: 'chatgpt-api-2', provider_evidence: 'gateway_catalog', model_display_name: 'Display model' });
+        Object.assign(routes.configs.a!, {
+            provider_id: 'chatgpt-api-2',
+            provider_evidence: 'gateway_catalog',
+            model_display_name: 'Display model'
+        });
         const plan = await service.plan(request());
         expect(plan.targets[0]!.provider_id).toBe('chatgpt-api-2');
         expect(plan.targets[0]!.provider_evidence).toBe('gateway_catalog');
@@ -220,21 +216,17 @@ describe('durable execution and admission (fully offline)', () => {
         expect(gateway.total_maximum).toBe(2);
         gateway.release.resolve();
         const run = await finish(service, id);
-        expect(new Set(run.samples.map((sample) => sample.sample_id)).size).toBe(2);
-        expect(new Set(run.samples.map((sample) => sample.account_ref))).toEqual(
-            new Set(['account-a', 'account-b'])
-        );
-        expect(
-            run.samples.every((sample) => (sample.grade as { content_score: number }).content_score === 1)
-        ).toBe(true);
+        expect(new Set(run.samples.map(sample => sample.sample_id)).size).toBe(2);
+        expect(new Set(run.samples.map(sample => sample.account_ref))).toEqual(new Set(['account-a', 'account-b']));
+        expect(run.samples.every(sample => (sample.grade as { content_score: number }).content_score === 1)).toBe(true);
         const records = readFileSync(join(directory, id, 'journal.jsonl'), 'utf8')
             .trim()
             .split('\n')
-            .map((line) => JSON.parse(line) as Record<string, unknown>);
-        expect(records.every((record) => record.run_id === id && record.attempt_id)).toBe(true);
-        expect(
-            new Set(records.filter((record) => record.type === 'call').map((record) => record.call_id))
-        ).toEqual(new Set(run.samples.flatMap((sample) => sample.calls as string[])));
+            .map(line => JSON.parse(line) as Record<string, unknown>);
+        expect(records.every(record => record.run_id === id && record.attempt_id)).toBe(true);
+        expect(new Set(records.filter(record => record.type === 'call').map(record => record.call_id))).toEqual(
+            new Set(run.samples.flatMap(sample => sample.calls as string[]))
+        );
         run.samples = [];
         expect(service.get_run(id)!.samples.length).toBe(2);
     });
@@ -247,7 +239,7 @@ describe('durable execution and admission (fully offline)', () => {
         await gateway.wait_calls(2);
         expect(service.get_run(second)!.samples[0]!.status).toBe('pending');
         gateway.release.resolve();
-        await Promise.all([first, second, third].map((id) => finish(service, id)));
+        await Promise.all([first, second, third].map(id => finish(service, id)));
         expect(gateway.maximum.get('private-secret-account-a')).toBe(1);
         expect(gateway.total_maximum).toBe(2);
     });
@@ -257,11 +249,7 @@ describe('durable execution and admission (fully offline)', () => {
         const { service, gateway } = fixture(new FakeGateway(true), 4, routes);
         const id = await service.start_run(request({ rounds: 3 }));
         await gateway.wait_calls(1);
-        expect(service.get_run(id)!.samples.map((sample) => sample.status)).toEqual([
-            'running',
-            'pending',
-            'pending'
-        ]);
+        expect(service.get_run(id)!.samples.map(sample => sample.status)).toEqual(['running', 'pending', 'pending']);
         gateway.release.resolve();
         await finish(service, id);
         expect(gateway.maximum.get('private-secret-account-a')).toBe(1);
@@ -276,9 +264,7 @@ describe('durable execution and admission (fully offline)', () => {
             })
         );
         await second.gateway.wait_calls(1);
-        expect(
-            second.service.get_run(id2)!.samples.filter((sample) => sample.status === 'running').length
-        ).toBe(1);
+        expect(second.service.get_run(id2)!.samples.filter(sample => sample.status === 'running').length).toBe(1);
         second.gateway.release.resolve();
         await finish(second.service, id2);
         expect(second.gateway.total_maximum).toBe(1);
@@ -287,7 +273,7 @@ describe('durable execution and admission (fully offline)', () => {
         const { service, gateway } = fixture();
         const id = await service.start_run(
             request({
-                targets: ['default', 'none', 'high'].map((thinking) => ({
+                targets: ['default', 'none', 'high'].map(thinking => ({
                     id: thinking,
                     route_id: 'a',
                     thinking
@@ -295,11 +281,7 @@ describe('durable execution and admission (fully offline)', () => {
             })
         );
         await finish(service, id);
-        expect(gateway.calls.map((call) => call.body.reasoning)).toEqual([
-            undefined,
-            { effort: 'none' },
-            { effort: 'high' }
-        ]);
+        expect(gateway.calls.map(call => call.body.reasoning)).toEqual([undefined, { effort: 'none' }, { effort: 'high' }]);
     });
     test('cancellation blocks tool continuation and pending samples, preserves raw response', async () => {
         const { service, gateway, directory } = fixture(new FakeGateway(true));
@@ -310,30 +292,25 @@ describe('durable execution and admission (fully offline)', () => {
         const run = await finish(service, id);
         expect(run.status).toBe('cancelled');
         expect(gateway.calls.length).toBe(1);
-        expect(new Set(run.samples.map((sample) => sample.status))).toEqual(new Set(['cancelled']));
+        expect(new Set(run.samples.map(sample => sample.status))).toEqual(new Set(['cancelled']));
         const records = readFileSync(join(directory, id, 'journal.jsonl'), 'utf8')
             .trim()
             .split('\n')
-            .map((line) => JSON.parse(line));
-        expect(records.map((record) => record.type)).toEqual(['call', 'observation']);
+            .map(line => JSON.parse(line));
+        expect(records.map(record => record.type)).toEqual(['call', 'observation']);
         expect(service.get_run('unknown')).toBeNull();
         expect(service.cancel_run('unknown')).toBe(false);
         expect(await service.wait_for_run('unknown', 0)).toBe(false);
     });
     test('tool requests use per-call budgets and retain ungraded budget failures', async () => {
         const { service } = fixture();
-        const first = await finish(
-            service,
-            await service.start_run(request({ task_ids: ['T02_Inventory_Impossible'] }))
-        );
+        const first = await finish(service, await service.start_run(request({ task_ids: ['T02_Inventory_Impossible'] })));
         expect(first.samples[0]!.calls).toHaveLength(2);
         expect(first.samples[0]!.tool_trace).toHaveLength(1);
         expect((first.samples[0]!.grade as { content_score: number }).content_score).toBe(1);
         const second = await finish(
             service,
-            await service.start_run(
-                request({ task_ids: ['T02_Inventory_Impossible'], limits: { max_requests: 1 } })
-            )
+            await service.start_run(request({ task_ids: ['T02_Inventory_Impossible'], limits: { max_requests: 1 } }))
         );
         expect(second.status).toBe('incomplete');
         expect(second.samples[0]!.status).toBe('budget_not_admitted');
@@ -342,10 +319,7 @@ describe('durable execution and admission (fully offline)', () => {
     });
     test('optional cost preflight rejects before transport and explicit zero disables API retries', async () => {
         const { service, gateway } = fixture();
-        const first = await finish(
-            service,
-            await service.start_run(request({ limits: { max_cost_usd: 0.000001 } }))
-        );
+        const first = await finish(service, await service.start_run(request({ limits: { max_cost_usd: 0.000001 } })));
         expect(gateway.calls.length).toBe(0);
         expect(first.samples[0]!.status).toBe('budget_not_admitted');
         gateway.fail = true;
@@ -370,20 +344,17 @@ describe('durable execution and admission (fully offline)', () => {
         const { service, gateway, directory } = fixture(new FakeGateway(true));
         const id = await service.start_run(request());
         await gateway.wait_calls(1);
-        service._runtime
-            .get(id)!
-            .journal.write({
-                type: 'call',
-                raw_response_text: '{"secret":"\\u0070rivate-secret-account-a","usage":{"input_tokens":10.0}}'
-            });
+        service._runtime.get(id)!.journal.write({
+            type: 'call',
+            raw_response_text: '{"secret":"\\u0070rivate-secret-account-a","usage":{"input_tokens":10.0}}'
+        });
         gateway.release.resolve();
         await finish(service, id);
         const rows = readFileSync(join(directory, id, 'journal.jsonl'), 'utf8')
             .trim()
             .split('\n')
-            .map((line) => JSON.parse(line) as Record<string, unknown>);
-        const source = rows.find((row) => typeof row.raw_response_text === 'string')!
-            .raw_response_text as string;
+            .map(line => JSON.parse(line) as Record<string, unknown>);
+        const source = rows.find(row => typeof row.raw_response_text === 'string')!.raw_response_text as string;
         expect(source).toContain('"input_tokens":10.0');
         expect(source).toContain('[REDACTED]');
         expect(source).not.toContain('rivate-secret-account-a');
@@ -400,8 +371,8 @@ describe('durable execution and admission (fully offline)', () => {
         const tool = journal
             .trim()
             .split('\n')
-            .map((line) => JSON.parse(line) as Record<string, unknown>)
-            .find((record) => record.type === 'tool_result')!;
+            .map(line => JSON.parse(line) as Record<string, unknown>)
+            .find(record => record.type === 'tool_result')!;
         expect(tool.name).toBe('[REDACTED]');
         expect(tool.call_id).toBe('[REDACTED]');
         expect(tool.run_id).toBe(id);
@@ -436,12 +407,14 @@ describe('durable execution and admission (fully offline)', () => {
         await gateway.wait_calls(1);
         const second = await service.start_run(request());
         gateway.release.resolve();
-        await Promise.all([first, second].map((id) => finish(service, id)));
-        expect(
-            gateway.calls.map(
-                (call) => (call.body.reasoning as { effort: string } | undefined)?.effort ?? 'default'
-            )
-        ).toEqual(['default', 'none', 'high', 'default', 'high']);
+        await Promise.all([first, second].map(id => finish(service, id)));
+        expect(gateway.calls.map(call => (call.body.reasoning as { effort: string } | undefined)?.effort ?? 'default')).toEqual([
+            'default',
+            'none',
+            'high',
+            'default',
+            'high'
+        ]);
     });
     test('all provenance files are private and restart interrupts without resubmission', async () => {
         const { service, directory } = fixture();
@@ -468,7 +441,7 @@ describe('durable execution and admission (fully offline)', () => {
         try {
             const run = restored.get_run(id)!;
             expect(run.status).toBe('interrupted');
-            expect(run.samples.map((sample) => sample.status)).toEqual(['interrupted', 'interrupted']);
+            expect(run.samples.map(sample => sample.status)).toEqual(['interrupted', 'interrupted']);
             expect(gateway.calls).toHaveLength(0);
             expect(restored.list_runs()).toHaveLength(1);
             expect(await restored.wait_for_run(id, 0)).toBe(true);
@@ -502,7 +475,7 @@ describe('durable execution and admission (fully offline)', () => {
         await service.close(false);
         gateway.release.resolve();
         await service.close();
-        expect(ids.every((id) => service.get_run(id)!.status === 'cancelled')).toBe(true);
+        expect(ids.every(id => service.get_run(id)!.status === 'cancelled')).toBe(true);
         await expect(service.start_run(request())).rejects.toThrow('closed');
     });
     test('global limit permits sixteen', async () => {

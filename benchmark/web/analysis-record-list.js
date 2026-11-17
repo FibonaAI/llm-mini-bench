@@ -13,7 +13,10 @@ function compactRecordTime(date, includeYear) {
 }
 
 /** Render matching and excluded records with one compact list; full identity stays in the inspector. */
-export function renderAnalysisRecordList(records, { axis, exclusionReason, escapeHtml, formatDate, currentYear = new Date().getFullYear() }) {
+export function renderAnalysisRecordList(
+  records,
+  { axis, exclusionReason, escapeHtml, formatDate, currentYear = new Date().getFullYear() }
+) {
   if (!records.length) return '<p class="empty">没有匹配结果，请调整筛选条件。</p>';
   const dates = records.map(recordDate);
   const includeYear = dates.some(date => date && date.getFullYear() !== currentYear);
@@ -26,14 +29,22 @@ export function renderAnalysisRecordList(records, { axis, exclusionReason, escap
     const source = record.source === 'baseline' ? '基线' : '我的运行';
     const channel = record.providerName || record.provider;
     const knownAccount = record.accountId && record.accountId !== 'unknown-account' && !record.accountId.startsWith('gateway-binding:');
-    const identity = [channel, knownAccount ? record.account : null, record.source === 'baseline' ? source : null].filter(Boolean).join(' · ');
+    const identity = [channel, knownAccount ? record.account : null, record.source === 'baseline' ? source : null]
+      .filter(Boolean)
+      .join(' · ');
     const score = Number.isFinite(record.score) ? `${record.score.toFixed(1)} 分` : '无完整均分';
     const bound = record.usageIncomplete ? '≥ ' : '';
-    const quantity = Number.isFinite(record.cost) ? axis === 'tokens'
-      ? `${bound}${Math.round(record.cost).toLocaleString('zh-CN')} tokens / 轮` : `${bound}$${record.cost.toFixed(4)} / 轮` : '';
-    const note = reason || (record.usageIncomplete ? `用量不完整：${record.usageIncomplete.unknownAttempts} 次尝试未返回用量，按已知下限绘制` : '');
-    const retry = reason && record.source === 'run' && record.run_id && /API 失败或超时/.test(reason)
-      ? ` <button class="text-control" type="button" data-open-run="${escapeHtml(record.run_id)}">去任务页重试</button>` : '';
+    const quantity = Number.isFinite(record.cost)
+      ? axis === 'tokens'
+        ? `${bound}${Math.round(record.cost).toLocaleString('zh-CN')} tokens / 轮`
+        : `${bound}$${record.cost.toFixed(4)} / 轮`
+      : '';
+    const note =
+      reason || (record.usageIncomplete ? `用量不完整：${record.usageIncomplete.unknownAttempts} 次尝试未返回用量，按已知下限绘制` : '');
+    const retry =
+      reason && record.source === 'run' && record.run_id && /API 失败或超时/.test(reason)
+        ? ` <button class="text-control" type="button" data-open-run="${escapeHtml(record.run_id)}">去任务页重试</button>`
+        : '';
     const label = `${model} · ${thinking} · ${source} · ${fullTime}`;
     return `<li class="analysis-record-row"><div class="analysis-record-main"><button class="text-control" type="button" data-inspect-observation="${escapeHtml(record.id)}" aria-label="${escapeHtml(label)}">${escapeHtml(model)} <span class="analysis-record-thinking">· ${escapeHtml(thinking)}</span></button><span class="analysis-record-meta">${escapeHtml(identity)} · <time ${dates[index] ? `datetime="${escapeHtml(record.created_at)}"` : ''} title="${escapeHtml(fullTime)}" aria-label="${escapeHtml(fullTime)}">${escapeHtml(time)}</time></span></div><div class="analysis-record-metrics"><span>${escapeHtml(score)}</span>${quantity ? `<span>${escapeHtml(quantity)}</span>` : ''}</div>${note ? `<p class="analysis-record-reason${reason ? '' : ' is-note'}">${escapeHtml(note)}${retry}</p>` : ''}</li>`;
   });

@@ -16,7 +16,13 @@ const portInUse = (error: unknown) => error instanceof Error && 'code' in error 
  * plugin permanently: the start is retried in the background until the port frees or
  * the retry budget runs out. Any newer configuration or stop cancels that retry.
  */
-export function createMagpieBenchPlugin(startService: MiniBenchStarter, { sleep = (ms: number) => new Promise<void>(resolve => setTimeout(resolve, ms)), delays = PORT_RETRY_DELAYS_MS }: { sleep?: Sleep; delays?: readonly number[] } = {}) {
+export function createMagpieBenchPlugin(
+  startService: MiniBenchStarter,
+  {
+    sleep = (ms: number) => new Promise<void>(resolve => setTimeout(resolve, ms)),
+    delays = PORT_RETRY_DELAYS_MS
+  }: { sleep?: Sleep; delays?: readonly number[] } = {}
+) {
   let active: { handle: MiniBenchHandle; token: string; port: number; accounts: string } | undefined;
   let waiting: { token: string; port: number; accounts: string } | undefined;
   let generation = 0;
@@ -34,7 +40,11 @@ export function createMagpieBenchPlugin(startService: MiniBenchStarter, { sleep 
       active = undefined;
     }
   };
-  const retryBusyPort = (config: { token: string; port: number; accounts: string }, options: { token: string; port: number; accounts?: unknown }, mine: number) => {
+  const retryBusyPort = (
+    config: { token: string; port: number; accounts: string },
+    options: { token: string; port: number; accounts?: unknown },
+    mine: number
+  ) => {
     void (async () => {
       for (const delay of delays) {
         await sleep(delay);
@@ -63,36 +73,38 @@ export function createMagpieBenchPlugin(startService: MiniBenchStarter, { sleep 
   return {
     plugin: {
       id: 'magpie-mini-bench',
-      server: async (_input: unknown, options: MagpieBenchOptions = {}) => enqueue(async () => {
-        const token = typeof options.token === 'string' ? options.token : '';
-        if (token.length < 32) {
+      server: async (_input: unknown, options: MagpieBenchOptions = {}) =>
+        enqueue(async () => {
+          const token = typeof options.token === 'string' ? options.token : '';
+          if (token.length < 32) {
+            await stopActive();
+            // The page creates and persists its private settings through Magpie's bridge.
+            // First installation waits for that handshake instead of requiring manual setup.
+            return {};
+          }
+          const port = Number(options.port ?? 3481);
+          if (!Number.isInteger(port) || port < 1 || port > 65535) {
+            throw new Error('LLM Mini Bench port must be between 1 and 65535.');
+          }
+          const bindings = validateMagpieAccountBindings(options.accounts);
+          const accounts = JSON.stringify(bindings);
+          const same = (value?: { token: string; port: number; accounts: string }) =>
+            value?.port === port && value.token === token && value.accounts === accounts;
+          if (same(active) || same(waiting)) return {};
           await stopActive();
-          // The page creates and persists its private settings through Magpie's bridge.
-          // First installation waits for that handshake instead of requiring manual setup.
+          const config = { token, port, accounts };
+          const startOptions = { token, port, ...(options.accounts !== undefined ? { accounts: bindings } : {}) };
+          try {
+            const handle = await startService(startOptions);
+            active = { handle, ...config };
+          } catch (error) {
+            if (!portInUse(error)) throw error;
+            waiting = config;
+            retryBusyPort(config, startOptions, generation);
+          }
           return {};
-        }
-        const port = Number(options.port ?? 3481);
-        if (!Number.isInteger(port) || port < 1 || port > 65535) {
-          throw new Error('LLM Mini Bench port must be between 1 and 65535.');
-        }
-        const bindings = validateMagpieAccountBindings(options.accounts);
-        const accounts = JSON.stringify(bindings);
-        const same = (value?: { token: string; port: number; accounts: string }) => value?.port === port && value.token === token && value.accounts === accounts;
-        if (same(active) || same(waiting)) return {};
-        await stopActive();
-        const config = { token, port, accounts };
-        const startOptions = { token, port, ...(options.accounts !== undefined ? { accounts: bindings } : {}) };
-        try {
-          const handle = await startService(startOptions);
-          active = { handle, ...config };
-        } catch (error) {
-          if (!portInUse(error)) throw error;
-          waiting = config;
-          retryBusyPort(config, startOptions, generation);
-        }
-        return {};
-      }),
+        })
     },
-    stop: () => enqueue(stopActive),
+    stop: () => enqueue(stopActive)
   };
 }

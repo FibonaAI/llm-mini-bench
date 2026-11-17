@@ -22,8 +22,9 @@ describe('Assessment 2.2 final experimental bank', () => {
         expect(bank.task_sha256).not.toBe(load_assessment_bank('2.1').task_sha256);
     });
 
-    for (const task of bank.tasks.filter(task => task.kind === 'text')) test(`${task.id} does not turn a missing text answer into a zero score`, () => {
-        const grade = task.grade('');
-        expect(grade.content_score).toBeNull();
-    });
+    for (const task of bank.tasks.filter(task => task.kind === 'text'))
+        test(`${task.id} does not turn a missing text answer into a zero score`, () => {
+            const grade = task.grade('');
+            expect(grade.content_score).toBeNull();
+        });
 });
