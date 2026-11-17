@@ -15,12 +15,12 @@
     const validPort = Number.isInteger(configured) && configured > 0 && configured < 65536;
     if (token.length < 32 || !validPort) {
       // Persist through the host's own bridge. Never expose a token-discovery API on loopback.
-      const next = {...options};
+      const next = { ...options };
       if (token.length < 32) {
         const bytes = crypto.getRandomValues(new Uint8Array(32));
         next.token = [...bytes].map(value => value.toString(16).padStart(2, '0')).join('');
       }
-      if (!validPort) next.port = 49152 + crypto.getRandomValues(new Uint16Array(1))[0] % 16384;
+      if (!validPort) next.port = 49152 + (crypto.getRandomValues(new Uint16Array(1))[0] % 16384);
       status.textContent = '正在初始化本地评测服务…';
       await window.magpie.options.set(next);
       // The host restarts its plugin runtime after setting options. Reload only our frame
@@ -47,6 +47,37 @@
   target.searchParams.set('theme', theme);
   target.searchParams.set('magpie', JSON.stringify(magpieTokens));
   target.searchParams.set('view', 'analysis');
-  target.hash = new URLSearchParams({token}).toString();
-  location.replace(target.href);
+  target.hash = new URLSearchParams({ token }).toString();
+  // Magpie serves plugin pages with CSP connect-src 'self', so this page cannot probe the service
+  // with fetch; navigation is the only allowed check. A successful navigation unloads this page,
+  // and with it these timers. A failed one can leave this document in place (observed in Magpie's
+  // WebKit frame), so if we are still here the service did not answer: retry while the plugin's
+  // own busy-port retry (about two minutes) runs, then offer a manual retry.
+  const RETRY_DELAYS_MS = [4000, 5000, 5000, 8000, 10000, 15000, 15000, 30000, 30000];
+  let tries = 0;
+  const showFailure = () => {
+    status.textContent = `无法连接本地评测服务（端口 ${target.port || port}）。可能是端口被其他程序占用，或插件启动失败。`;
+    const retry = document.createElement('button');
+    retry.type = 'button';
+    retry.textContent = '重试';
+    retry.addEventListener('click', () => {
+      actions.remove();
+      tries = 0;
+      status.textContent = '正在连接 LLM Mini Bench 本地服务…';
+      attempt();
+    });
+    const actions = document.createElement('p');
+    actions.append(retry);
+    status.after(actions);
+  };
+  const attempt = () => {
+    location.replace(target.href);
+    const delay = RETRY_DELAYS_MS[tries++];
+    setTimeout(() => {
+      if (delay === undefined) return showFailure();
+      status.textContent = '本地服务尚未就绪，正在等待启动…（常见于插件刚重启或端口暂被占用）';
+      attempt();
+    }, delay ?? 8000);
+  };
+  attempt();
 })();

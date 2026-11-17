@@ -9,13 +9,27 @@ import { join } from 'node:path';
 
 const source = readFileSync(new URL('../page/boot.js', import.meta.url), 'utf8');
 function harness(initial: Record<string, unknown> = {}, overrides: { setError?: boolean; remote?: string; hostname?: string } = {}) {
-  let options = structuredClone(initial), writes = 0, reloads = 0;
+  let options = structuredClone(initial),
+    writes = 0,
+    reloads = 0;
   const redirects: string[] = [];
-  const status = { textContent: '' };
+  const status: { textContent: string; after?: (node: unknown) => void } = {
+    textContent: '',
+    after: () => {
+      actions++;
+    }
+  };
+  // Pending timers run only when a test asks: a successful navigation would have unloaded the page.
+  const timers: (() => void)[] = [];
+  let actions = 0;
   const starts: { token: string; port: number; accounts?: unknown }[] = [];
-  const lifecycle = createMagpieBenchPlugin(async value => { starts.push(value); return { port: value.port, stop() {} }; });
+  const lifecycle = createMagpieBenchPlugin(async value => {
+    starts.push(value);
+    return { port: value.port, stop() {} };
+  });
   const bridge = {
-    ready: Promise.resolve({ dark: true, tokens: {} }), service: overrides.remote ?? '',
+    ready: Promise.resolve({ dark: true, tokens: {} }),
+    service: overrides.remote ?? '',
     options: {
       get: async () => structuredClone(options),
       set: async (next: Record<string, unknown>) => {
@@ -27,12 +41,52 @@ function harness(initial: Record<string, unknown> = {}, overrides: { setError?: 
       }
     }
   };
-  const run = () => runInNewContext(source, {
-    window: { magpie: bridge }, crypto, Uint8Array, Uint16Array, URL, URLSearchParams,
-    document: { getElementById: () => status },
-    location: { hostname: overrides.hostname ?? 'localhost', reload() { reloads++; }, replace(value: string) { redirects.push(value); } }
-  });
-  return { run, status, starts, lifecycle, redirects, get options() { return options; }, get writes() { return writes; }, get reloads() { return reloads; } };
+  const run = () =>
+    runInNewContext(source, {
+      window: { magpie: bridge },
+      crypto,
+      Uint8Array,
+      Uint16Array,
+      URL,
+      URLSearchParams,
+      // Magpie's plugin-page CSP (connect-src 'self') blocks fetch to the service port.
+      fetch: async () => {
+        throw new TypeError('Refused to connect: Content Security Policy');
+      },
+      setTimeout: (callback: () => void) => {
+        timers.push(callback);
+      },
+      document: { getElementById: () => status, createElement: () => ({ addEventListener() {}, append() {}, remove() {} }) },
+      location: {
+        hostname: overrides.hostname ?? 'localhost',
+        reload() {
+          reloads++;
+        },
+        replace(value: string) {
+          redirects.push(value);
+        }
+      }
+    });
+  return {
+    run,
+    status,
+    starts,
+    lifecycle,
+    redirects,
+    timers,
+    get actions() {
+      return actions;
+    },
+    get options() {
+      return options;
+    },
+    get writes() {
+      return writes;
+    },
+    get reloads() {
+      return reloads;
+    }
+  };
 }
 
 test('first plugin open generates private settings through the host bridge, then reconnects without user input', async () => {
@@ -54,21 +108,48 @@ test('first plugin open generates private settings through the host bridge, then
     expect(target.searchParams.get('theme')).toBe('dark');
     expect(target.searchParams.has('token')).toBe(false);
     expect(target.searchParams.has('v')).toBe(false);
-  } finally { await h.lifecycle.stop(); }
+  } finally {
+    await h.lifecycle.stop();
+  }
 });
 
 test('empty settings reach an authenticated real service through the automatic page handshake', async () => {
   const directory = mkdtempSync(join(tmpdir(), 'llm-mini-bench-auto-start-'));
-  let options: Record<string, unknown> = {}, reloads = 0;
+  let options: Record<string, unknown> = {},
+    reloads = 0;
   const redirects: string[] = [];
   const lifecycle = createMagpieBenchPlugin(value => startMagpieBenchService({ ...value, data_dir: directory }));
   const context = {
-    window: { magpie: { ready: Promise.resolve({ dark: false }), options: {
-      get: async () => options,
-      set: async (next: Record<string, unknown>) => { options = structuredClone(next); await lifecycle.plugin.server({}, options); return options; }
-    } } }, crypto, Uint8Array, Uint16Array, URL, URLSearchParams,
+    window: {
+      magpie: {
+        ready: Promise.resolve({ dark: false }),
+        options: {
+          get: async () => options,
+          set: async (next: Record<string, unknown>) => {
+            options = structuredClone(next);
+            await lifecycle.plugin.server({}, options);
+            return options;
+          }
+        }
+      }
+    },
+    crypto,
+    Uint8Array,
+    Uint16Array,
+    URL,
+    URLSearchParams,
+    // Navigation succeeds against the real listener, so no retry timer would survive.
+    setTimeout: () => {},
     document: { getElementById: () => ({ textContent: '' }) },
-    location: { hostname: 'localhost', reload() { reloads++; }, replace(value: string) { redirects.push(value); } }
+    location: {
+      hostname: 'localhost',
+      reload() {
+        reloads++;
+      },
+      replace(value: string) {
+        redirects.push(value);
+      }
+    }
   };
   try {
     await lifecycle.plugin.server({}, {});
@@ -82,11 +163,18 @@ test('empty settings reach an authenticated real service through the automatic p
     expect(response.headers.get('Access-Control-Allow-Origin')).toBe('null');
     expect((await response.json()).banks[0].tasks).toHaveLength(14);
     expect((await fetch(target.origin + '/api/bench/banks')).status).toBe(403);
-  } finally { await lifecycle.stop(); rmSync(directory, { recursive: true, force: true }); }
+  } finally {
+    await lifecycle.stop();
+    rmSync(directory, { recursive: true, force: true });
+  }
 });
 
 test('existing settings and account bindings are retained without regenerating authentication', async () => {
-  const saved = { token: 'existing-private-token-0000000000000000', port: 3481, accounts: [{ provider_id: 'fixture', account: 'a', account_ref: 'a' }] };
+  const saved = {
+    token: 'existing-private-token-0000000000000000',
+    port: 3481,
+    accounts: [{ provider_id: 'fixture', account: 'a', account_ref: 'a' }]
+  };
   const h = harness(saved);
   await h.run();
   expect(h.options).toEqual(saved);
@@ -96,13 +184,16 @@ test('existing settings and account bindings are retained without regenerating a
 });
 
 test('separate plugin installations get different secrets and preserve unrelated options', async () => {
-  const a = harness({ accounts: [], custom: 'kept' }), b = harness();
+  const a = harness({ accounts: [], custom: 'kept' }),
+    b = harness();
   try {
     await Promise.all([a.run(), b.run()]);
     expect(a.options.token).not.toBe(b.options.token);
     expect(a.options.custom).toBe('kept');
     expect(a.options.accounts).toEqual([]);
-  } finally { await Promise.all([a.lifecycle.stop(), b.lifecycle.stop()]); }
+  } finally {
+    await Promise.all([a.lifecycle.stop(), b.lifecycle.stop()]);
+  }
 });
 
 test('failed host persistence never redirects or reveals exception details', async () => {
@@ -115,10 +206,31 @@ test('failed host persistence never redirects or reveals exception details', asy
 });
 
 test('remote host proxy remains in use after automatic setup', async () => {
-  const h = harness({ token: 'existing-private-token-0000000000000000', port: 50001 }, { remote: 'https://host.example/_magpie/service/', hostname: 'host.example' });
+  const h = harness(
+    { token: 'existing-private-token-0000000000000000', port: 50001 },
+    { remote: 'https://host.example/_magpie/service/', hostname: 'host.example' }
+  );
   await h.run();
   const target = new URL(h.redirects[0]!);
   expect(target.origin).toBe('https://host.example');
   expect(target.pathname).toBe('/_magpie/service/');
   expect(h.writes).toBe(0);
+});
+
+test('the page navigates without probing and retries only while the failed frame stays', async () => {
+  const h = harness({ token: 'a'.repeat(64), port: 49999 });
+  await h.run();
+  // Navigation happens at once; fetch (blocked by Magpie's CSP) is never used.
+  expect(h.redirects).toHaveLength(1);
+  expect(h.timers).toHaveLength(1);
+  // Each pending timer means the previous navigation did not unload the page: try again.
+  h.timers.shift()!();
+  expect(h.redirects).toHaveLength(2);
+  expect(h.status.textContent).toContain('正在等待启动');
+  while (h.timers.length) h.timers.shift()!();
+  expect(h.redirects).toHaveLength(10);
+  expect(h.status.textContent).toContain('无法连接本地评测服务（端口 49999）');
+  expect(h.actions).toBe(1);
+  expect(h.status.textContent).not.toContain('a'.repeat(64));
+  expect(new Set(h.redirects).size).toBe(1);
 });

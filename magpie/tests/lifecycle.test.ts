@@ -63,3 +63,37 @@ describe('Magpie in-process service lifecycle', () => {
     expect(stops).toBe(1);
   });
 });
+
+describe('busy port recovery', () => {
+  const busy = () => Object.assign(new Error('Failed to start server. Is port in use?'), { code: 'EADDRINUSE' });
+  const manualSleep = () => {
+    const waits: (() => void)[] = [];
+    return { waits, sleep: () => new Promise<void>(resolve => waits.push(resolve)), tick: async () => { waits.shift()?.(); for (let i = 0; i < 5; i++) await Promise.resolve(); await new Promise(r => setTimeout(r, 0)); } };
+  };
+
+  test('a port held by an old host is retried in the background until it frees', async () => {
+    let attempts = 0;
+    const clock = manualSleep();
+    const lifecycle = createMagpieBenchPlugin(async ({ port }) => { if (++attempts < 3) throw busy(); return { port, stop() {} }; }, { sleep: clock.sleep, delays: [1, 1, 1] });
+    expect(await lifecycle.plugin.server({}, { token, port: 3499 })).toEqual({});
+    expect(attempts).toBe(1);
+    // Same configuration while waiting does not start a second retry loop.
+    await lifecycle.plugin.server({}, { token, port: 3499 });
+    expect(attempts).toBe(1);
+    await clock.tick(); expect(attempts).toBe(2);
+    await clock.tick(); expect(attempts).toBe(3);
+    await clock.tick(); expect(attempts).toBe(3);
+  });
+
+  test('a newer configuration or stop cancels the pending retry; other errors still fail', async () => {
+    const ports: number[] = [];
+    const clock = manualSleep();
+    const lifecycle = createMagpieBenchPlugin(async ({ port }) => { ports.push(port); if (port === 3499) throw busy(); return { port, stop() {} }; }, { sleep: clock.sleep, delays: [1, 1] });
+    await lifecycle.plugin.server({}, { token, port: 3499 });
+    await lifecycle.plugin.server({}, { token, port: 3500 });
+    await clock.tick(); await clock.tick();
+    expect(ports).toEqual([3499, 3500]);
+    const failing = createMagpieBenchPlugin(async () => { throw new Error('boom'); });
+    await expect(failing.plugin.server({}, { token, port: 3501 })).rejects.toThrow('boom');
+  });
+});
