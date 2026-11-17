@@ -45,7 +45,7 @@ export function recordMatchesSearch(record, query) {
 let pickerSequence = 0;
 
 /** Shared cross-channel search; omitted selectedKeys means all known leaves, [] means none. */
-export function createDataPicker(container, { records, selectedKeys, mode = 'analysis', onChange = () => {} }) {
+export function createDataPicker(container, { records, selectedKeys, mode = 'analysis', onChange = _keys => {} }) {
   const leaves = [...new Map(records.map(record => [selectionKey(record), { ...record }])).entries()].map(([key, record]) => ({
     ...record,
     key
@@ -191,7 +191,7 @@ export function createDataPicker(container, { records, selectedKeys, mode = 'ana
     onChange([...selected]);
   }
   function render() {
-    const focusId = document.activeElement?.dataset?.focusId;
+    const focusId = /** @type {HTMLElement | null} */ (document.activeElement)?.dataset?.focusId;
     const scrollTop = list.scrollTop;
     visibleLeaves = matchingLeaves();
     const groups = new Map();

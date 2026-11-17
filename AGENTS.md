@@ -73,7 +73,7 @@ Run from the repository root. Use Bun 1.4.0 or later and install development dep
 # Backend, bank, simulator, protocol, baseline, HTTP, CLI, and adapter tests; mocked gateways
 bun run test
 
-# TypeScript checks; no build output
+# TypeScript checks for .ts plus relaxed checkJs for the browser JavaScript (tsconfig.web.json); no build output
 bun run typecheck
 
 # Optional install-channel acceptance; requires Git, uses a loopback registry and temporary repo

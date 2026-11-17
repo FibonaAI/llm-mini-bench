@@ -10,7 +10,7 @@
   window.addEventListener(
     'error',
     event => {
-      const resource = event.target;
+      const resource = /** @type {any} */ (event.target);
       if (resource && resource !== window && (resource.src || resource.href)) {
         let file = '页面资源';
         try {

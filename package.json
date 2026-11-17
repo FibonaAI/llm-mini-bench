@@ -40,7 +40,7 @@
   },
   "scripts": {
     "test": "bun test ./benchmark ./magpie",
-    "typecheck": "tsc --noEmit",
+    "typecheck": "tsc --noEmit && tsc --noEmit -p tsconfig.web.json",
     "test:browser": "bun benchmark/tests/assessment_web_browser.mjs",
     "test:browser:sandbox": "bun benchmark/tests/assessment_sandbox_browser.mjs",
     "test:install": "bun benchmark/tests/assessment_install_channels.ts",

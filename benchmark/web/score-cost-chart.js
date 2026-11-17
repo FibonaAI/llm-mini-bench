@@ -81,7 +81,7 @@ function svgNode(tag, attributes = {}, text) {
 }
 
 /** Native score / USD cost scatter plot. render is synchronous; exportSvg returns standalone SVG text. */
-export function createScoreCostChart(container, { onSelect = () => {}, catalog = [] } = {}) {
+export function createScoreCostChart(container, { onSelect = _id => {}, catalog = [] } = {}) {
   const colors = createChartColorRegistry(catalog);
   container.classList.add('score-cost-chart');
   const clipId = `score-cost-clip-${++chartSequence}`;

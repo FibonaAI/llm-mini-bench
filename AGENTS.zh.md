@@ -72,7 +72,7 @@ TypeScript 在 Bun 上实现评测引擎和 HTTP 服务，原生浏览器 JavaSc
 # 后端、题库、模拟器、协议、基线、HTTP、CLI 和适配器测试；网关均为 mock
 bun run test
 
-# TypeScript 类型检查，不生成构建产物
+# .ts 的 TypeScript 检查，以及浏览器 JavaScript 的宽松 checkJs 检查（tsconfig.web.json）；不产生构建输出
 bun run typecheck
 
 # 可选安装渠道验收，需要 Git，使用 loopback registry 和临时仓库

@@ -160,7 +160,7 @@
     document.title = `LLM Mini Bench · ${title}`;
     window.dispatchEvent(new CustomEvent('mini-bench:view', { detail: view }));
   }
-  document.querySelectorAll('[data-view-link]').forEach(button =>
+  document.querySelectorAll(/** @type {'[data-view-link]'} */ ('[data-view-link]')).forEach((/** @type {HTMLElement} */ button) =>
     button.addEventListener('click', () => {
       location.hash = button.dataset.viewLink;
     })

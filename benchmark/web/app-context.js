@@ -26,17 +26,18 @@
  * activeStatus, statusText and formatDate come from the classic API bootstrap.
  * No token is placed in shared context data or event payloads.
  *
- * @typedef {Object} MiniBenchEvents
- * @property {'analysis'|'runs'} mini-bench:view Active page.
- * @property {{keys: string[]}} mini-bench:select-targets Exact advertised leaf identities.
- * @property {string} mini-bench:select-run Persisted run ID, never a model name.
- * @property {Object} mini-bench:banks-changed Current bank manifest with tasks.
- * @property {undefined} mini-bench:targets-changed Selection/catalog changed.
- * @property {undefined} mini-bench:routes-changed Catalog changed; not historical identity.
- * @property {undefined} mini-bench:history-changed Run-to-task membership refreshed.
- * @property {undefined} mini-bench:observations-changed Persisted observations need reloading.
- * @property {undefined} mini-bench:refresh Explicit user refresh.
- * @property {undefined} mini-bench:theme-changed Presentation-only invalidation.
+ * @typedef {{
+ *   'mini-bench:view': 'analysis'|'runs', // Active page.
+ *   'mini-bench:select-targets': {keys: string[]}, // Exact advertised leaf identities.
+ *   'mini-bench:select-run': string, // Persisted run ID, never a model name.
+ *   'mini-bench:banks-changed': Object, // Current bank manifest with tasks.
+ *   'mini-bench:targets-changed': undefined, // Selection/catalog changed.
+ *   'mini-bench:routes-changed': undefined, // Catalog changed; not historical identity.
+ *   'mini-bench:history-changed': undefined, // Run-to-task membership refreshed.
+ *   'mini-bench:observations-changed': undefined, // Persisted observations need reloading.
+ *   'mini-bench:refresh': undefined, // Explicit user refresh.
+ *   'mini-bench:theme-changed': undefined, // Presentation-only invalidation.
+ * }} MiniBenchEvents
  */
 
 /**

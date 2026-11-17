@@ -101,7 +101,7 @@ export function createChartLegend(container, id) {
     dimension = null,
     signature = '',
     compactButtons = [],
-    highlight = () => {},
+    highlight = _key => {},
     activeKey = null;
 
   function setHighlight(key) {
@@ -109,7 +109,7 @@ export function createChartLegend(container, id) {
     highlight(key);
   }
   function focusedKey() {
-    const button = document.activeElement?.closest('[data-legend-key]');
+    const button = /** @type {HTMLElement | null} */ (document.activeElement?.closest('[data-legend-key]'));
     return button && root.contains(button) ? button.dataset.legendKey : null;
   }
   function makeButton(entry, expanded) {

@@ -100,9 +100,9 @@ export function createAnalysisFilters(container, { onChange = () => {} } = {}) {
     }
   }
   function render() {
-    const focused = document.activeElement;
+    const focused = /** @type {HTMLElement | null} */ (document.activeElement);
     const focusValue = focused?.dataset.value;
-    const focusFacet = focused?.closest('.af-facet')?.dataset.facet;
+    const focusFacet = /** @type {HTMLElement | null} */ (focused?.closest('.af-facet'))?.dataset.facet;
     const focusOnly = focused?.classList.contains('af-only');
     conditions.replaceChildren();
     if (state.query)
