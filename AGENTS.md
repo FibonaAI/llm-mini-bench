@@ -45,6 +45,7 @@ TypeScript implements the assessment engine and HTTP service on Bun; plain brows
 | `benchmark/src/assessment_provenance.ts` | Unified execution source closure and byte/hash capture; includes unconditional loader dependencies even for production 1.0 |
 | `benchmark/src/run_protocol.ts` | Request configuration normalization and shared sample protocol identity, retaining omitted/null/stream semantics |
 | `benchmark/src/assessment_response.ts` | Visible answer extraction and explicit unit price parsing |
+| `benchmark/src/production_bank.ts` | Single source of the production bank version; UI, default tasks and the chart read it |
 | `benchmark/src/assessment_answer_protocol.ts` | Opt-in `submit-answer-tool-v1`: per-task `answer_schema`, last valid submission graded, no submission scores zero; new banks should adopt it |
 | `benchmark/src/client.ts` | Responses HTTP client; no Chat Completions fallback |
 | `benchmark/src/bench_routes.ts`, `benchmark/src/bench_adapter.ts` | Explicit routes and generic adapter contract |
@@ -60,7 +61,7 @@ TypeScript implements the assessment engine and HTTP service on Bun; plain brows
 | `benchmark/web/analysis.js`, `analysis-model.js` | Analysis coordination and cached axis-specific metric derivation; presentation and history membership changes do not rescan task samples |
 | `benchmark/web/` | Analysis chart and shared cross-channel search picker with channel/model/thinking filters, using `/api/bench/`; task details remain available without a separate bank page |
 | `package.json`, `magpie/index.ts`, `magpie/page/` | Magpie plugin declaration, backend lifecycle, and page bootstrap |
-| `benchmark/tools/` | Offline analysis and baseline import; no requests at module import time |
+| `benchmark/tools/` | Offline analysis, baseline import and read-only calibration import (`import_calibration.ts`, never retried or promoted); no requests at module import time |
 | `benchmark/tests/` | Offline Bun test suite and frontend validation |
 
 ## Local validation

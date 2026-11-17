@@ -25,6 +25,14 @@ bun benchmark/tools/report_assessment_completion.ts \
 
 缺失、重复或非预定样本会被拒绝。重复传入 `--input` 只能合并不同目标，且题库内容、源码哈希、配置和轮次计划必须一致。报告记录输入和报告源码摘要，不自行重放评分器，也不覆盖已有文件。原始记录、生产分析图入选条件和基线规则保持不变。
 
+## 在工作区查看校准结果
+
+```sh
+bun benchmark/tools/import_calibration.ts --input INPUT.jsonl [--data-dir DIR]
+```
+
+把一份 `benchmark/calibrate_assessment.ts` 的 JSONL 转成个人工作区里的只读运行（默认 `MAGPIE_BENCH_DATA_DIR` 或 `~/.local/share/magpie-mini-bench`），任务页和分析页就能看到它的逐题矩阵、失败原因和得分。原始字节原样复制为运行日志，并记录输入文件摘要；同一文件重复导入不会生效。导入的运行标为“校准导入”，没有路由身份，不能重试，也不能升级为基线。实验题库仍不会出现在正式图表里。运行在服务启动时加载，导入后需要重载插件或重启服务。
+
 ## 从完整运行导入基线
 
 ```sh

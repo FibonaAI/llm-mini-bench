@@ -45,6 +45,7 @@ TypeScript 在 Bun 上实现评测引擎和 HTTP 服务，原生浏览器 JavaSc
 | `benchmark/src/assessment_provenance.ts` | 统一执行源码依赖闭包与字节／哈希捕获，生产 1.0 也包含加载器的无条件依赖 |
 | `benchmark/src/run_protocol.ts` | 请求配置标准化与共用样本协议身份构建，保留省略、null 和 stream 语义 |
 | `benchmark/src/assessment_response.ts` | 可见回答提取与明确单价解析 |
+| `benchmark/src/production_bank.ts` | 正式题库版本的唯一来源；界面、默认任务和入图都从这里读取 |
 | `benchmark/src/assessment_answer_protocol.ts` | 可选的 `submit-answer-tool-v1`：逐题 `answer_schema`，以最后一次有效提交评分，未提交计 0 分；新题库应采用 |
 | `benchmark/src/client.ts` | Responses HTTP 客户端，不做 Chat Completions 回退 |
 | `benchmark/src/bench_routes.ts`、`benchmark/src/bench_adapter.ts` | 显式路由与通用适配器接口 |
@@ -60,7 +61,7 @@ TypeScript 在 Bun 上实现评测引擎和 HTTP 服务，原生浏览器 JavaSc
 | `benchmark/web/analysis.js`、`analysis-model.js` | 分析协调与按轴缓存的指标派生；呈现和历史归属变化不重新扫描逐题样本 |
 | `benchmark/web/` | 分析图与共用的跨渠道统一搜索选择器，支持渠道／模型／思考筛选，统一使用 `/api/bench/`；保留逐题详情，不设独立题库页 |
 | `package.json`、`magpie/index.ts`、`magpie/page/` | Magpie 插件声明、后端生命周期和页面引导 |
-| `benchmark/tools/` | 离线分析与基线导入，不在导入模块时发请求 |
+| `benchmark/tools/` | 离线分析、基线导入和只读校准导入（`import_calibration.ts`，不可重试、不可升级为基线），不在导入模块时发请求 |
 | `benchmark/tests/` | 离线 Bun 测试与前端验证 |
 
 ## 本地验证

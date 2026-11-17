@@ -726,6 +726,7 @@ export class BenchExecutionService {
     /** Explicitly retry API-failed samples, retaining successes and immutable prior evidence. */
     async retry_run(id: string, request_id: string, policy?: 'sample-timeout-v1'): Promise<string> {
         if (policy !== undefined && policy !== 'sample-timeout-v1') throw new TypeError('Unknown rerun policy');
+        if (this._runs.get(id)?.execution_kind === 'calibration-import-v1') throw new TypeError('Imported calibration runs are read-only and cannot be retried');
         if (!/^[a-f0-9]{32}$/.test(request_id)) throw new TypeError('retry request_id must be 32 lowercase hex characters');
         const run = this._runs.get(id);
         if (!run) throw new TypeError('Run not found');

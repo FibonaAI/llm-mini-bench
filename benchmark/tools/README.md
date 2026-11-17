@@ -26,6 +26,14 @@ An old `SampleTimeout` or `TimeoutError` alone is an unattributed timeout except
 
 Missing, duplicate or unexpected samples are rejected. Repeated `--input` flags may combine distinct targets only when bank content, source hashes, configuration and round plans match. The report records input and report-source digests, does not replay graders itself, and refuses to overwrite a file. It leaves raw records, production chart eligibility and baseline rules unchanged.
 
+## Show a calibration in the workspace
+
+```sh
+bun benchmark/tools/import_calibration.ts --input INPUT.jsonl [--data-dir DIR]
+```
+
+Converts one `benchmark/calibrate_assessment.ts` journal into a read-only run in the personal workspace (default `MAGPIE_BENCH_DATA_DIR` or `~/.local/share/magpie-mini-bench`), so the task page and analysis page can show its matrix, failure causes and scores. The original bytes are copied unchanged as the run journal, and the input digest is recorded; importing the same file again does nothing. Imported runs are labelled 校准导入, have no route identity, can never be retried and can never be promoted to baselines. Experimental banks stay off the production chart. Reload the plugin (or restart the service) afterwards, because runs are loaded at startup.
+
 ## Import a baseline from a complete run
 
 

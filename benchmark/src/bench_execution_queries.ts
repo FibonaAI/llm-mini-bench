@@ -5,6 +5,8 @@ const clone = <T>(value: T): T => structuredClone(value);
 
 /** Retry eligibility is a projection only; coordinator admission still rechecks every condition. */
 export function execution_retryable_samples(run: ExecutionRun): number {
+    // Imported calibration journals have no route identity and are never retried.
+    if (run.execution_kind === 'calibration-import-v1') return 0;
     return run.samples.filter(sample => sample.status === 'api_failure' || sample.status === 'budget_not_admitted' && ['transport_failure', 'missing_usage_cost'].includes(run.stop_reason ?? '')).length;
 }
 
@@ -41,7 +43,8 @@ export function execution_run_summary(run: ExecutionRun, budget: RecordValue = r
         created_at: run.created_at,
         updated_at: run.updated_at,
         stop_reason: run.stop_reason,
-        ...(run.task_id ? { task_id: run.task_id, execution_kind: run.execution_kind } : {}),
+        ...(run.task_id ? { task_id: run.task_id } : {}),
+        ...(run.execution_kind ? { execution_kind: run.execution_kind } : {}),
         targets: clone(run.plan.targets),
         bank_version: run.plan.bank_version,
         sample_count: run.samples.length,
