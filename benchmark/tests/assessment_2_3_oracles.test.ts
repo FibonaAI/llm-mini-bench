@@ -208,7 +208,9 @@ describe('Assessment 2.3 independent first-principles oracles', () => {
             beta: number,
             gamma: number,
             delta: number,
-            omega: Spin
+            omega: Spin,
+            echoChargeRule: 'plus_1' | 'plus_qR' | 'inv_plus_qR' = 'plus_qR',
+            echoSpinRule: 'preserve' | 'zero' | 'chiral_match' = 'chiral_match'
         ): Cell[] => {
             let idx = -1;
             let isAnnihilation = false;
@@ -235,10 +237,18 @@ describe('Assessment 2.3 independent first-principles oracles', () => {
                 }
                 if (preRightSpin === 0 && idx - 1 >= 0) {
                     const left = next[idx - 1]!;
+                    const qEcho =
+                        echoChargeRule === 'plus_1'
+                            ? (left.q + 1) % 5
+                            : echoChargeRule === 'plus_qR'
+                              ? (left.q + preRightCharge) % 5
+                              : (5 - left.q + preRightCharge) % 5;
+                    const sEcho: Spin =
+                        echoSpinRule === 'preserve' ? left.s : echoSpinRule === 'zero' ? 0 : left.c === preRightChirality ? left.s : 0;
                     next[idx - 1] = {
                         c: flipC(left.c),
-                        q: (left.q + preRightCharge) % 5,
-                        s: left.c === preRightChirality ? left.s : 0
+                        q: qEcho,
+                        s: sEcho
                     };
                 }
             }
@@ -290,6 +300,31 @@ describe('Assessment 2.3 independent first-principles oracles', () => {
         expect(matchingParams).toEqual([[3, 'counter_chiral_nonzero_s1', 2, 4, 3, 2, -1]]);
         const [K, M, A, B, G, D, W] = matchingParams[0]!;
 
+        const matchingEchoRules: Array<[string, string]> = [];
+        for (const qRule of ['plus_1', 'plus_qR', 'inv_plus_qR'] as const) {
+            for (const sRule of ['preserve', 'zero', 'chiral_match'] as const) {
+                const c1 = reduceStep(['L1:+1', 'L1:+1', 'L0:-1', 'R2:+1'].map(parseCell), K, M, A, B, G, D, W, qRule, sRule).map(
+                    formatCell
+                );
+                const c2 = reduceStep(['R3:+1', 'L1:+1', 'L0:-1', 'R2:0'].map(parseCell), K, M, A, B, G, D, W, qRule, sRule).map(
+                    formatCell
+                );
+                const c3 = reduceStep(['L4:0', 'L1:+1', 'L0:-1', 'L3:0'].map(parseCell), K, M, A, B, G, D, W, qRule, sRule).map(formatCell);
+                const c4 = reduceStep(['L2:+1', 'L1:+1', 'L0:-1', 'R4:0'].map(parseCell), K, M, A, B, G, D, W, qRule, sRule).map(
+                    formatCell
+                );
+                if (
+                    JSON.stringify(c1) === JSON.stringify(['L1:+1', 'R0:-1', 'L3:-1']) &&
+                    JSON.stringify(c2) === JSON.stringify(['L0:+1', 'R0:-1', 'R0:+1']) &&
+                    JSON.stringify(c3) === JSON.stringify(['R2:0', 'R0:-1', 'L1:+1']) &&
+                    JSON.stringify(c4) === JSON.stringify(['R1:0', 'R0:-1', 'R2:+1'])
+                ) {
+                    matchingEchoRules.push([qRule, sRule]);
+                }
+            }
+        }
+        expect(matchingEchoRules).toEqual([['plus_qR', 'chiral_match']]);
+
         const allCells: string[] = [];
         for (const c of ['L', 'R'] as Chirality[]) {
             for (const q of [0, 1, 2, 3, 4]) {
@@ -340,26 +375,62 @@ describe('Assessment 2.3 independent first-principles oracles', () => {
         const yNat = (u: number) => (2 * u + 1) % 4;
         const zNat = (u: number) => Math.abs(xNat(u) - yNat(u));
 
-        const matchingLambdas = [1, 2, 3].filter(lam => (yNat(0) - lam * (2 - xNat(0)) + 16) % 4 === 3);
-        expect(matchingLambdas).toEqual([2]);
-        const lambda = matchingLambdas[0]!;
+        type Precedence = 'null_impulse_first' | 'resonant_pinning_first';
+        type RatchetRule = 'all_positive_delta' | 'free_recoil_positive_only' | 'all_free_recoil';
 
-        function stepLattice(u: number, fIn: number, k: number) {
+        function evalStep(u: number, fIn: number, k: number, lam: number, prec: Precedence, ratchet: RatchetRule, disc: number) {
             const xn = xNat(u);
             const yn = yNat(u);
             const delta = k - xn;
-            if ((u + k) % 3 === 0) {
-                return { regime: 'resonant' as const, y: yn, z: Math.abs(k - yn) + 1, fOut: fIn + 1, uNext: u, delta };
+            const isNull = delta === 0;
+            const isRes = (u + k) % 3 === 0;
+            const applyNull = isNull && (!isRes || prec === 'null_impulse_first');
+            const applyRes = isRes && (!isNull || prec === 'resonant_pinning_first');
+
+            if (applyNull) {
+                const uNext = ratchet === 'all_positive_delta' && delta > 0 ? (u + 1) % 6 : u;
+                return { regime: 'null' as const, y: yn, z: zNat(u), fOut: fIn, uNext, delta };
             }
-            if (delta === 0) {
-                return { regime: 'null' as const, y: yn, z: zNat(u), fOut: fIn, uNext: u, delta: 0 };
+            if (applyRes) {
+                const uNext = ratchet === 'all_positive_delta' && delta > 0 ? (u + 1) % 6 : u;
+                return { regime: 'resonant' as const, y: yn, z: Math.abs(k - yn) + 1, fOut: fIn + 1, uNext, delta };
             }
-            const y = u % 2 === 0 ? (((yn - lambda * delta) % 4) + 16) % 4 : delta > 0 ? 3 - yn : yn ^ 1;
+            const y = u % 2 === 0 ? (((yn - lam * delta) % 4) + 16) % 4 : delta > 0 ? 3 - yn : yn ^ 1;
             const baseZ = Math.abs(k - y) + (delta < 0 ? 1 : 0);
-            const z = baseZ + 2 * fIn;
-            const uNext = delta > 0 ? (u + 1) % 6 : u;
+            const z = baseZ + disc * fIn;
+            const shouldRatchet =
+                ratchet === 'all_positive_delta' ? delta > 0 : ratchet === 'free_recoil_positive_only' ? delta > 0 : delta !== 0;
+            const uNext = shouldRatchet ? (u + 1) % 6 : u;
             return { regime: 'free' as const, y, z, fOut: 0, uNext, delta };
         }
+
+        const matchingLaws: Array<[number, Precedence, RatchetRule, number]> = [];
+        for (const lam of [1, 2, 3]) {
+            for (const prec of ['null_impulse_first', 'resonant_pinning_first'] as Precedence[]) {
+                for (const ratchet of ['all_positive_delta', 'free_recoil_positive_only', 'all_free_recoil'] as RatchetRule[]) {
+                    for (const disc of [1, 2, 3]) {
+                        const obsA = evalStep(0, 0, 2, lam, prec, ratchet, disc).y === 3;
+                        const obsB =
+                            new AssessmentFraction(
+                                weights.reduce((s, w, u) => s + w * evalStep(u, 0, 2, lam, prec, ratchet, disc).z, 0),
+                                18
+                            ).toString() === '14/9';
+                        const s2States = [0, 1, 2, 3, 4, 5].filter(u => evalStep(u, 0, 2, lam, prec, ratchet, disc).z === 2);
+                        const wSum = s2States.reduce((s, u) => s + weights[u]!, 0);
+                        const z2Sum = s2States.reduce((s, u) => {
+                            const st1 = evalStep(u, 0, 2, lam, prec, ratchet, disc);
+                            const st2 = evalStep(st1.uNext, st1.fOut, 3, lam, prec, ratchet, disc);
+                            return s + weights[u]! * st2.z;
+                        }, 0);
+                        const obsC = wSum > 0 && new AssessmentFraction(z2Sum, wSum).toString() === '3';
+                        if (obsA && obsB && obsC) matchingLaws.push([lam, prec, ratchet, disc]);
+                    }
+                }
+            }
+        }
+        expect(matchingLaws).toEqual([[2, 'resonant_pinning_first', 'free_recoil_positive_only', 2]]);
+        const [lambda, prec, ratchet, disc] = matchingLaws[0]!;
+        const stepLattice = (u: number, fIn: number, k: number) => evalStep(u, fIn, k, lambda, prec, ratchet, disc);
 
         const clamp0Z = new AssessmentFraction(
             weights.reduce((s, w, u) => s + w * stepLattice(u, 0, 0).z, 0),
@@ -657,33 +728,311 @@ describe('Assessment 2.3 independent first-principles oracles', () => {
     });
 
     test('I23_MultiAgent_DAG_Orchestration: discrete-event multi-slot lock and speculative cancellation simulator', () => {
-        const startTimes: Record<string, number> = {
-            J1: 0,
-            J2: 20,
-            J3: 0,
-            J4: 20,
-            J5: 45,
-            J7: 25,
-            J8: 60,
-            J9: 40,
-            J10: 80
+        const modeRank: Record<string, number> = {
+            'approval-required': 1,
+            auto: 2,
+            'auto-accept-edits': 3,
+            'full-access': 4
         };
-        const j3SpeculativeTokens = 500 + 25;
-        const j5ProRataTokens = Math.floor((800 * (55 - 45)) / 40) + 50;
-        const j9ProRataTokens = Math.floor((600 * (55 - 40)) / 30) + 50;
-        const committedTokens = 600 + 900 + 450 + (400 + 100) + 450 + 350;
-        const totalTokens = committedTokens + j3SpeculativeTokens + j5ProRataTokens + j9ProRataTokens;
+        const parentRank = modeRank['auto-accept-edits']!;
+
+        interface JobSpec {
+            id: string;
+            priority: number;
+            role: 'worker' | 'verifier';
+            requested_mode: string;
+            fallback: { duration: number; tokens: number } | null;
+            requires_signoff: boolean;
+            deps: string[];
+            speculative_on?: 'clean' | 'not_failed';
+            condition?: 'degraded';
+            locks: string[];
+            duration: number;
+            tokens: number;
+        }
+
+        const specs: JobSpec[] = [
+            {
+                id: 'J1',
+                priority: 1,
+                role: 'worker',
+                requested_mode: 'auto',
+                fallback: null,
+                requires_signoff: false,
+                deps: [],
+                locks: ['core'],
+                duration: 20,
+                tokens: 600
+            },
+            {
+                id: 'J2',
+                priority: 2,
+                role: 'worker',
+                requested_mode: 'auto-accept-edits',
+                fallback: null,
+                requires_signoff: false,
+                deps: ['J1'],
+                locks: ['core'],
+                duration: 35,
+                tokens: 900
+            },
+            {
+                id: 'J3',
+                priority: 3,
+                role: 'worker',
+                requested_mode: 'auto',
+                fallback: null,
+                requires_signoff: false,
+                deps: [],
+                speculative_on: 'clean',
+                locks: ['cache'],
+                duration: 25,
+                tokens: 500
+            },
+            {
+                id: 'J4',
+                priority: 4,
+                role: 'verifier',
+                requested_mode: 'full-access',
+                fallback: { duration: 20, tokens: 450 },
+                requires_signoff: false,
+                deps: ['J1'],
+                locks: ['audit'],
+                duration: 10,
+                tokens: 250
+            },
+            {
+                id: 'J5',
+                priority: 5,
+                role: 'worker',
+                requested_mode: 'auto',
+                fallback: null,
+                requires_signoff: false,
+                deps: ['J3'],
+                locks: ['audit'],
+                duration: 40,
+                tokens: 800
+            },
+            {
+                id: 'J6',
+                priority: 6,
+                role: 'worker',
+                requested_mode: 'full-access',
+                fallback: null,
+                requires_signoff: false,
+                deps: ['J1'],
+                locks: ['cache'],
+                duration: 15,
+                tokens: 350
+            },
+            {
+                id: 'J7',
+                priority: 7,
+                role: 'worker',
+                requested_mode: 'auto',
+                fallback: null,
+                requires_signoff: true,
+                deps: ['J1'],
+                speculative_on: 'not_failed',
+                locks: ['index'],
+                duration: 20,
+                tokens: 400
+            },
+            {
+                id: 'J8',
+                priority: 8,
+                role: 'worker',
+                requested_mode: 'full-access',
+                fallback: { duration: 20, tokens: 450 },
+                requires_signoff: false,
+                deps: ['J1', 'J2'],
+                condition: 'degraded',
+                locks: ['core', 'index'],
+                duration: 15,
+                tokens: 300
+            },
+            {
+                id: 'J9',
+                priority: 9,
+                role: 'verifier',
+                requested_mode: 'auto',
+                fallback: null,
+                requires_signoff: false,
+                deps: ['J3', 'J4'],
+                locks: ['cache'],
+                duration: 30,
+                tokens: 600
+            },
+            {
+                id: 'J10',
+                priority: 10,
+                role: 'verifier',
+                requested_mode: 'auto',
+                fallback: null,
+                requires_signoff: false,
+                deps: ['J4', 'J7', 'J8'],
+                locks: ['core', 'audit'],
+                duration: 15,
+                tokens: 350
+            }
+        ];
+
+        const startTimes: Record<string, number> = {};
+        const modeRejected: string[] = [];
+        const invalidatedSpeculative: string[] = [];
+        const cancelledMidFlight: string[] = [];
+        const committedOrder: string[] = [];
+        const finished = new Set<string>();
+        const invalidated = new Set<string>();
+        let j2ResolvedStatus: 'degraded' | null = null;
+        let usedTokens = 0;
+
+        interface ActiveTask {
+            id: string;
+            isSignoff: boolean;
+            parentJob: JobSpec;
+            role: 'worker' | 'verifier';
+            startTime: number;
+            endTime: number;
+            duration: number;
+            tokens: number;
+        }
+        let active: ActiveTask[] = [];
+        const signoffPending = new Map<string, JobSpec>();
+        const started = new Set<string>();
+
+        let t = 0;
+        while (t <= 200) {
+            const completing = active.filter(a => a.endTime === t).sort((a, b) => a.parentJob.priority - b.parentJob.priority);
+            active = active.filter(a => a.endTime !== t);
+
+            for (const item of completing) {
+                if (!item.isSignoff && item.parentJob.requires_signoff) {
+                    signoffPending.set(item.parentJob.id, item.parentJob);
+                    continue;
+                }
+                const j = item.parentJob;
+                finished.add(j.id);
+                if (item.isSignoff) {
+                    signoffPending.delete(j.id);
+                    usedTokens += j.tokens + 100;
+                } else {
+                    usedTokens += item.tokens;
+                }
+                committedOrder.push(j.id);
+
+                if (j.id === 'J2') {
+                    j2ResolvedStatus = 'degraded';
+                    for (const sp of specs) {
+                        if (sp.speculative_on === 'clean') {
+                            invalidated.add(sp.id);
+                        }
+                    }
+                    let added = true;
+                    while (added) {
+                        added = false;
+                        for (const sp of specs) {
+                            if (!invalidated.has(sp.id) && sp.deps.some(d => invalidated.has(d))) {
+                                invalidated.add(sp.id);
+                                added = true;
+                            }
+                        }
+                    }
+                    for (const invId of [...invalidated].sort()) {
+                        if (finished.has(invId)) {
+                            finished.delete(invId);
+                            const idx = committedOrder.indexOf(invId);
+                            if (idx >= 0) committedOrder.splice(idx, 1);
+                            invalidatedSpeculative.push(invId);
+                            usedTokens += 25;
+                        }
+                    }
+                    const toAbort = active.filter(a => invalidated.has(a.parentJob.id));
+                    active = active.filter(a => !invalidated.has(a.parentJob.id));
+                    for (const ab of toAbort) {
+                        cancelledMidFlight.push(ab.parentJob.id);
+                        usedTokens += Math.floor((ab.tokens * (t - ab.startTime)) / ab.duration) + 50;
+                    }
+                }
+            }
+
+            const heldLocks = new Set<string>();
+            for (const a of active) for (const l of a.parentJob.locks) heldLocks.add(l);
+            for (const j of signoffPending.values()) for (const l of j.locks) heldLocks.add(l);
+
+            let freeWorkers = 2 - active.filter(a => a.role === 'worker').length;
+            let freeVerifiers = 1 - active.filter(a => a.role === 'verifier').length;
+
+            for (const sp of specs) {
+                if (started.has(sp.id) || modeRejected.includes(sp.id) || invalidated.has(sp.id)) continue;
+                if (!sp.deps.every(d => finished.has(d))) continue;
+                if (sp.condition === 'degraded' && j2ResolvedStatus !== 'degraded') continue;
+                if (modeRank[sp.requested_mode]! > parentRank && sp.fallback === null) {
+                    modeRejected.push(sp.id);
+                }
+            }
+
+            const readyCandidates: Array<{
+                priority: number;
+                role: 'worker' | 'verifier';
+                isSignoff: boolean;
+                job: JobSpec;
+                duration: number;
+                tokens: number;
+            }> = [];
+            for (const j of signoffPending.values()) {
+                if (!active.some(a => a.isSignoff && a.parentJob.id === j.id)) {
+                    readyCandidates.push({ priority: j.priority, role: 'verifier', isSignoff: true, job: j, duration: 5, tokens: 100 });
+                }
+            }
+            for (const sp of specs) {
+                if (started.has(sp.id) || modeRejected.includes(sp.id) || invalidated.has(sp.id)) continue;
+                if (!sp.deps.every(d => finished.has(d))) continue;
+                if (sp.condition === 'degraded' && j2ResolvedStatus !== 'degraded') continue;
+                const useFallback = modeRank[sp.requested_mode]! > parentRank;
+                const dur = useFallback ? sp.fallback!.duration : sp.duration;
+                const tok = useFallback ? sp.fallback!.tokens : sp.tokens;
+                readyCandidates.push({ priority: sp.priority, role: sp.role, isSignoff: false, job: sp, duration: dur, tokens: tok });
+            }
+            readyCandidates.sort((a, b) => a.priority - b.priority);
+
+            for (const cand of readyCandidates) {
+                if (cand.role === 'worker' && freeWorkers <= 0) continue;
+                if (cand.role === 'verifier' && freeVerifiers <= 0) continue;
+                if (!cand.isSignoff && cand.job.locks.some(l => heldLocks.has(l))) continue;
+                if (cand.role === 'worker') freeWorkers--;
+                else freeVerifiers--;
+                if (!cand.isSignoff) {
+                    started.add(cand.job.id);
+                    startTimes[cand.job.id] = t;
+                    for (const l of cand.job.locks) heldLocks.add(l);
+                }
+                active.push({
+                    id: cand.isSignoff ? `S(${cand.job.id})` : cand.job.id,
+                    isSignoff: cand.isSignoff,
+                    parentJob: cand.job,
+                    role: cand.role,
+                    startTime: t,
+                    endTime: t + cand.duration,
+                    duration: cand.duration,
+                    tokens: cand.tokens
+                });
+            }
+
+            if (active.length === 0) break;
+            t = Math.min(...active.map(a => a.endTime));
+        }
 
         const oracleAnswer = {
             job_start_times: startTimes,
             non_committed_jobs: {
-                mode_rejected: ['J6'],
-                invalidated_speculative: ['J3'],
-                cancelled_mid_flight: ['J5', 'J9']
+                mode_rejected: modeRejected.sort(),
+                invalidated_speculative: invalidatedSpeculative.sort(),
+                cancelled_mid_flight: cancelledMidFlight.sort()
             },
-            committed_job_order: ['J1', 'J4', 'J2', 'J7', 'J8', 'J10'],
-            makespan_seconds: 95,
-            remaining_token_budget: 6000 - totalTokens
+            committed_job_order: committedOrder,
+            makespan_seconds: t,
+            remaining_token_budget: 6000 - usedTokens
         };
 
         const grade = taskMap.I23_MultiAgent_DAG_Orchestration!.grade(JSON.stringify(oracleAnswer));
