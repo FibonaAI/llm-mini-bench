@@ -15,6 +15,7 @@ benchmark/src/assessment_depot.ts
 benchmark/src/assessment_push_planning.ts
 benchmark/src/assessment_delegated_release.ts
 benchmark/src/assessment_safe_control.ts
+# Browser acceptance steps are statement fragments of one async function, not standalone modules.
 # Data, evidence and prose keep their exact bytes.
 benchmark/banks/
 benchmark/baselines/
@@ -25,3 +26,4 @@ benchmark/examples/
 *.jsonl
 bun.lock
 node_modules/
+benchmark/tests/browser/

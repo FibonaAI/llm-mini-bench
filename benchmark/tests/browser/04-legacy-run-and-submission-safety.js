@@ -1,0 +1,18 @@
+  await page.locator('#bench-run-list [data-bench-run-id="peer-run"]').click();await page.waitForFunction(()=>document.querySelector('#bench-run-detail').textContent.includes('saved legacy response'));
+  await page.locator('[data-view-link="analysis"]').click();await point('peer').evaluate(node=>node.dispatchEvent(new MouseEvent('click',{bubbles:true})));await page.locator('[data-open-run="peer-run"]').click();
+  await page.locator('#runs-view').waitFor({state:'visible'});require((await page.locator('#bench-run-detail').textContent()).includes('saved legacy response'),'Analysis-to-legacy-run navigation lost');
+  await page.locator('#history-search').fill('not-found');require(await page.locator('.run-list-item').count()===0,'History search');await page.locator('#history-search').fill('');await page.locator('#history-status').selectOption('running');require(await page.locator('.run-list-item').count()===0,'History status');await page.locator('#history-status').selectOption('all');
+  await page.screenshot({path:(ARTIFACTS + '/tasks.png'),fullPage:true});
+  timeoutNextSubmit=true;const beforeTimeoutRequests=requests.length;await page.locator('#start-run').click();
+  await page.waitForFunction(()=>document.querySelector('#app-notice').textContent.includes('未能确认'));
+  require(posts.filter(post=>post.path==='/api/bench/tasks').length===2,'Timed-out task was automatically resubmitted');
+  require(requests.slice(beforeTimeoutRequests).includes('/api/bench/tasks')&&taskRecords.length===2&&await page.locator('#bench-run-list .run-list-item').count()===3,'Submission uncertainty did not recover persisted task list');
+  require(await page.locator('#start-run').isDisabled(),'Uncertain submission can be resent without history review');
+  await page.locator('#bench-run-list [data-bench-task-id="mock-task-2"]').click();await page.locator('#bench-cancel-task').click();await page.locator('#bench-cancel-task').waitFor({state:'hidden'});
+  await page.locator('#bench-retry-review').click();require(!await page.locator('#start-run').isDisabled(),'History acknowledgment did not unlock start');
+  const historicalSources=Object.fromEntries(Object.entries(bank.source_sha256).slice(0,4));
+  observations.push({...baseline,id:'eligible',source:'run',run_id:'eligible-run',target_id:'eligible-target',thinking:'low',task_sha256:'c'.repeat(64),assessment_protocol_sha256:'b'.repeat(64)});
+  observations.push({...baseline,id:'historical',source:'run',source_sha256:historicalSources,estimated_cost_usd:null});
+  observations.push({...baseline,id:'incomplete',source:'run',assessment_protocol_sha256:null,baseline_eligible:false,ineligibility_reason:'Incomplete samples',estimated_cost_usd:.06,tasks:tasks.map(task=>({...task,samples:task.samples.map(sample=>({...sample,status:'failed',content_score:null}))}))});
+  observations.push({...baseline,id:'extra-sample',source:'run',sample_count:43});
+  observations.push({...baseline,id:'zero-cost',source:'run',estimated_cost_usd:0});

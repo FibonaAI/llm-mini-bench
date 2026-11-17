@@ -1,0 +1,42 @@
+  await page.locator('[data-view-link="analysis"]').click();await chooseData('all');await point('eligible').waitFor();
+  require(await page.locator('#protocol-compatibility').count()===0&&!await page.locator('#pareto-line').isDisabled(),'Thinking/provenance differences must not disable comparisons');
+  require(await point('incomplete').count()===0&&await point('historical').count()===0&&await point('extra-sample').count()===0,'Missing cost/incomplete/extra sample plotted');
+  await page.locator('#chart-settings-trigger').click();await page.locator('#log-axis').check();require(await point('zero-cost').count()===0,'Zero on log axis');await page.locator('#log-axis').uncheck();require(await point('zero-cost').count()===1,'Known zero absent on linear');await page.locator('#chart-settings-trigger').click();
+  await point('eligible').evaluate(node=>node.dispatchEvent(new MouseEvent('click',{bubbles:true})));await page.locator('[data-promote-id="eligible"]').click();await page.waitForFunction(()=>document.querySelector('#dataset-summary').textContent.includes('2 份基线'));require(posts.find(post=>post.path.endsWith('/baseline')).body.target_id==='eligible-target','Promotion target missing');await page.locator('#close-inspector').click();
+  await page.screenshot({path:(ARTIFACTS + '/mixed-protocol.png'),fullPage:true});
+  await page.locator('#analysis-source').selectOption('baseline');require(!await page.locator('#pareto-line').isDisabled(),'Filtering disabled frontier');
+  await page.locator('#analysis-picker .af-search').fill('no-analysis-match');require(await page.locator('.score-cost-point').count()===0,'Unmatched search plotted data');await page.locator('#analysis-reset').click();
+  await page.locator('#analysis-result-count').click();await chooseData('all');await page.locator('#analysis-excluded-count').click();
+  require(await page.locator('#analysis-results').isHidden()&&await page.locator('#analysis-excluded').isVisible(),'Disclosure tables must be mutually exclusive');
+  require(await page.locator('#analysis-excluded [data-inspect-observation="historical"]').count()===1&&await page.locator('#analysis-excluded [data-inspect-observation="incomplete"]').count()===1&&await page.locator('#analysis-excluded [data-inspect-observation="extra-sample"]').count()===1,'Excluded disclosure lost ineligible records');
+  await page.locator('#close-analysis-excluded').click();await page.locator('#analysis-excluded').waitFor({state:'hidden'});require(await page.locator('#analysis-excluded').isHidden(),'Excluded table cannot close');
+  const disclosureGeometry=[];
+  for(const [width,height] of [[1440,1000],[820,380],[390,740],[320,380]]){
+    await page.setViewportSize({width,height});
+    for(const kind of ['results','excluded']){
+      const trigger=page.locator(kind==='results'?'#analysis-result-count':'#analysis-excluded-count'),panel=page.locator('#analysis-'+kind);
+      await trigger.scrollIntoViewIfNeeded();
+      const before=await trigger.evaluate(node=>({scrollY,top:node.getBoundingClientRect().top,height:node.getBoundingClientRect().height,chevron:getComputedStyle(node,'::after').content,transform:getComputedStyle(node,'::after').transform}));
+      await trigger.click();await panel.waitFor({state:'visible'});
+      const bounds=await panel.evaluate(node=>{const box=node.getBoundingClientRect(),first=node.querySelector('.analysis-record-row'),reason=(first.querySelector('.analysis-record-reason')||first).getBoundingClientRect(),scroll=node.querySelector('.analysis-record-scroll');return {x:box.x,y:box.y,width:box.width,height:box.height,reasonTop:reason.top,reasonBottom:reason.bottom,scrollY,overflow:node.scrollWidth>node.clientWidth,internalScroll:scroll.scrollHeight>scroll.clientHeight};});
+      require(bounds.x>=15&&bounds.y>=15&&bounds.x+bounds.width<=width-15&&bounds.y+bounds.height<=height-15,'Disclosure escapes the viewport: '+JSON.stringify({kind,width,height,...bounds}));
+      require(bounds.width<=440&&bounds.height<=360,'Record cards must use compact shared bounds, not fill the viewport');
+      require(await panel.locator('.analysis-record-id').count()===0&&!(await panel.innerText()).includes('用量未记录'),'Compact cards must not repeat long IDs or missing-usage boilerplate');
+      require(await panel.locator('.analysis-record-row').first().evaluate(node=>node.getBoundingClientRect().height)<=(width>=820?96:140),'Record rows waste vertical space');
+      require(bounds.scrollY===before.scrollY&&!bounds.overflow&&bounds.reasonTop>=0&&bounds.reasonBottom<=height,'Opening a disclosure scrolls the page or hides the first reason');
+      const after=await trigger.evaluate(node=>({height:node.getBoundingClientRect().height,chevron:getComputedStyle(node,'::after').content,transform:getComputedStyle(node,'::after').transform}));
+      require(before.height===after.height&&before.chevron==='""'&&after.chevron==='""'&&before.transform!==after.transform,'Disclosure chevron must rotate the same centered shape, not swap text glyphs');
+      disclosureGeometry.push({kind,width,height,...bounds});
+      await panel.screenshot({path:ARTIFACTS+'/disclosure-'+kind+'-'+width+'-'+height+'.png'});
+      await page.keyboard.press('Escape');await panel.waitFor({state:'hidden'});
+      require(await trigger.evaluate(node=>node===document.activeElement),'Escape did not restore disclosure focus');
+    }
+    await page.locator('#analysis-data-trigger').scrollIntoViewIfNeeded();await openData();await page.locator('#analysis-data-all').check();
+    const dataBounds=await page.locator('#analysis-data-panel').boundingBox();
+    await page.locator('#analysis-data-panel').screenshot({path:ARTIFACTS+'/data-filter-'+width+'-'+height+'.png'});
+    require(dataBounds.x>=15&&dataBounds.y>=15&&dataBounds.x+dataBounds.width<=width-15&&dataBounds.y+dataBounds.height<=height-15,'Data filter panel escapes short/narrow viewport: '+JSON.stringify({width,height,...dataBounds}));
+    await page.keyboard.press('Escape');require(await page.locator('#analysis-data-panel').isHidden()&&await page.locator('#analysis-data-trigger').evaluate(node=>node===document.activeElement),'Data filter Escape or focus restore failed');
+  }
+  console.log('Disclosure geometry: '+JSON.stringify(disclosureGeometry));
+  await page.setViewportSize({width:1440,height:1000});
+  await page.setViewportSize({width:390,height:844});require(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth),'Mobile analysis overflow');await page.screenshot({path:(ARTIFACTS + '/mobile-analysis.png'),fullPage:true});

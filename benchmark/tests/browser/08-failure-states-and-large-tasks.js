@@ -1,0 +1,48 @@
+  failObservations=true;await refresh();await page.waitForFunction(()=>document.querySelector('#app-notice').textContent.includes('mock observation failure'));require(await page.locator('#connection-status').textContent()==='数据加载失败','API failure missing');
+  failObservations=false;await refresh();await page.waitForFunction(()=>document.querySelector('#connection-status').textContent==='本地数据已同步');await page.evaluate(()=>window.MiniBench.notify(''));
+  const pickerGeometry=[];
+  for(const [name,width,height,dark,view='runs'] of [['light',1100,780,false],['dark',1100,780,true],['narrow',820,620,false],['short',820,380,false],['mobile',390,740,false],['minimum',320,620,false],['desktop-edge',773,700,false],['mobile-edge',772,700,false],['long-labels',1100,780,false],['long-labels-mobile',390,740,false]]){
+    if(name==='long-labels') { Object.assign(routes[0],{provider_id:'self-hosted-provider-with-a-long-instance-name',model_display_name:'GPT-6-Luna-extended-context-release-preview',account_ref:'research-team-account-with-a-long-name',account_evidence:'configured_binding',thinking_levels:['none','minimal','low','medium','high','xhigh','max','ultra']});await page.evaluate(()=>window.dispatchEvent(new Event('mini-bench:refresh')));await page.waitForFunction(()=>window.MiniBench.runState.routes.some(route=>route.provider_id==='self-hosted-provider-with-a-long-instance-name')); }
+    if(view==='analysis') { await Promise.all([page.waitForResponse('**/api/bench/observations'),page.locator('[data-view-link="analysis"]').click()]);await page.evaluate(()=>new Promise(requestAnimationFrame)); }
+    else await page.locator('[data-view-link="runs"]').click();
+    await page.setViewportSize({width,height});await page.evaluate(dark=>document.documentElement.dataset.theme=dark?'dark':'light',dark);
+    const triggerSelector=view==='runs'?'#task-picker .dp-trigger':'#analysis-picker .dp-trigger';
+    await page.locator(triggerSelector).scrollIntoViewIfNeeded();await page.locator(triggerSelector).click();
+    await chooseProvider('');
+    if(name.startsWith('long-labels'))await chooseProvider('provider:self-hosted-provider-with-a-long-instance-name');
+    const geometry=await popup.evaluate((node,triggerSelector)=>{const box=node.getBoundingClientRect(),anchor=document.querySelector(triggerSelector).getBoundingClientRect();return {x:box.x,y:box.y,width:box.width,height:box.height,anchorTop:anchor.top,anchorBottom:anchor.bottom,placement:node.dataset.placement,viewportWidth:innerWidth,viewportHeight:innerHeight};},triggerSelector);
+    require(geometry.width<=720&&geometry.height<=640,'Picker exceeds compact bounds');require(geometry.x>=15&&geometry.y>=15&&geometry.x+geometry.width<=width-15&&geometry.y+geometry.height<=height-15,'Picker leaves viewport');
+    if(geometry.placement==='below')require(Math.abs(geometry.y-geometry.anchorBottom-8)<1,'Picker detached from trigger');
+    if(geometry.placement==='above')require(Math.abs(geometry.anchorTop-geometry.y-geometry.height-8)<1,'Picker above gap incorrect');
+    const before=await page.evaluate(()=>JSON.stringify(window.MiniBench.runState.selectedKeys));
+    const hoverRow=popup.locator('.dp-result-row').first();
+    await hoverRow.hover();
+    const hover=await hoverRow.evaluate(node=>({actual:getComputedStyle(node).backgroundColor,expected:(()=>{const test=document.createElement('i');test.style.background='var(--pill-hover)';node.append(test);const color=getComputedStyle(test).backgroundColor;test.remove();return color;})()}));require(hover.actual===hover.expected,'Browse hover must use neutral host color');
+    require(await page.evaluate(()=>JSON.stringify(window.MiniBench.runState.selectedKeys))===before,'Hover changed selections');
+    const rowGeometry=await popup.locator('.dp-result-row').first().evaluate(node=>({width:node.getBoundingClientRect().width,height:node.getBoundingClientRect().height,columns:getComputedStyle(node).gridTemplateColumns,overflow:node.scrollWidth>node.clientWidth}));
+    require(!rowGeometry.overflow,'Result row overflows');
+    if(name.startsWith('long-labels'))require(await popup.locator('.dp-result-row').first().evaluate(row=>{const bounds=row.getBoundingClientRect(),list=row.parentElement.getBoundingClientRect();return bounds.top>=list.top-1&&bounds.bottom<=list.bottom+1;}),'Wrapped target is clipped by the header or footer');
+    require(await popup.locator('.dp-result-row').evaluateAll(rows=>rows.every(row=>row.scrollWidth<=row.clientWidth)),'Long target content overflows compact width');
+    const columns=await popup.locator('.dp-result-row').first().evaluate(node=>Object.fromEntries(['.dp-route','.dp-model-name','.dp-thinking-list'].map(selector=>{const r=node.querySelector(selector).getBoundingClientRect();return [selector,{x:r.x,y:r.y}];})));
+    require(width<=772 ? columns['.dp-route'].y<columns['.dp-model-name'].y&&columns['.dp-model-name'].y<columns['.dp-thinking-list'].y : columns['.dp-route'].x<columns['.dp-model-name'].x&&columns['.dp-model-name'].x<columns['.dp-thinking-list'].x,'Channel/model/thinking order is not preserved across layouts');
+    require(await popup.locator('input[type="search"]').count()===1,'Multiple search fields');
+    pickerGeometry.push({name,...geometry,rowGeometry,hover:hover.actual});
+    await page.screenshot({path:ARTIFACTS+'/picker-polish-'+name+'.png',fullPage:false});await page.keyboard.press('Escape');
+  }
+  await page.setViewportSize({width:1200,height:900});await page.evaluate(()=>document.documentElement.dataset.theme='light');
+  routes.splice(0,routes.length,...Array.from({length:23},(_,i)=>({id:'bulk-route-'+i,provider_id:'bulk-provider-'+i,model:'bulk-model-'+i,account_ref:'gateway-default',account_evidence:'gateway_binding',thinking_levels:[]})));
+  await page.locator('[data-view-link="runs"]').click();await page.evaluate(()=>window.dispatchEvent(new Event('mini-bench:refresh')));
+  await page.waitForFunction(()=>window.MiniBench.runState.routes.some(route=>route.id==='bulk-route-22'));
+  await page.locator('#task-picker .dp-trigger').click();await chooseProvider('');await popup.locator('.dp-select-visible').click();await popup.getByRole('button',{name:'完成',exact:true}).click();
+  await page.locator('#run-rounds').fill('3');require((await page.locator('#run-request-estimate').innerText()).includes('966'),'Large task sample count incorrect');
+  require(!await page.locator('#start-run').isDisabled(),'Aggregate sample cap still blocks large tasks');
+  const startsBeforeLargePlan=posts.filter(call=>call.path==='/api/bench/tasks').length;
+  await page.waitForFunction(()=>!document.querySelector('#start-run').disabled);
+  require((await page.locator('#bench-plan-preview').innerText()).includes('966'),'Large task plan missing');
+  require(posts.filter(call=>call.path==='/api/bench/tasks').length===startsBeforeLargePlan,'Preview started a paid task');
+  await page.screenshot({path:ARTIFACTS+'/large-task-plan.png',fullPage:false});
+  console.log('Picker geometry: '+JSON.stringify(pickerGeometry));
+  const retryRun={...legacyRun,id:'retry-ui-run',status:'failed',retryable_samples:1,sample_count:42,samples:Array.from({length:42},(_,i)=>({...legacyRun.samples[0],sample_id:'retry-sample-'+i,status:i===0?'api_failure':'completed'}))};runs.push(retryRun);
+  await page.evaluate(()=>window.dispatchEvent(new Event('mini-bench:refresh')));await page.locator('[data-bench-run-id="retry-ui-run"]').click();
+  await page.locator('#bench-retry-run').waitFor({state:'visible'});const beforeRetry=posts.length;
+  await page.locator('#bench-retry-run').click();require(posts.length===beforeRetry,'Retry confirmation sent requests');

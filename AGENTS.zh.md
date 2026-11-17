@@ -90,7 +90,7 @@ bun benchmark/tools/import_assessment_baseline.ts --help
 
 静态 JS/SVG 响应必须保留限定于 `Origin: null` 的 CORS 头：Magpie 在不透明来源的 `sandbox="allow-scripts"` iframe 中嵌入页面。沙箱浏览器测试必须经过真实 HTTP 响应，不能 mock 响应头。UI 发布还必须在实际 Magpie 窗口验收；切换标签可能继续复用旧 iframe，因此重启服务后还要重新加载宿主页面。UI 验收不得启动付费评测。
 
-用 Bun 验证运行行为，交付前运行 TypeScript 类型检查。前端验证使用临时目录和 mock API，不连真实模型；浏览器验收至少覆盖绘点条件与坐标轴模式、实例隔离的选择、计划、启动、取消、任务历史搜索、逐题详情、完整基线和空状态。
+用 Bun 验证运行行为，交付前运行 TypeScript 类型检查。前端验证使用临时目录和 mock API，不连真实模型；浏览器验收是一次顺序会话，按步骤拆在 `benchmark/tests/browser/`（`NN-名称.js`，按序拼接，后面的步骤依赖前面的状态）；失败时报 `[browser step 名称]` 并保存 `failure-名称.png`。它至少覆盖绘点条件与坐标轴模式、实例隔离的选择、计划、启动、取消、任务历史搜索、逐题详情、完整基线和空状态。
 
 独立后端入口为 `bun benchmark/bench.ts serve --port 3481`，必须设置至少 32 字符的 `MAGPIE_BENCH_TOKEN`。持久服务用受管理的 tmux 任务运行并明确通知方式。不要与已运行的插件争用端口或数据目录；测试使用临时数据目录和随机端口。
 
