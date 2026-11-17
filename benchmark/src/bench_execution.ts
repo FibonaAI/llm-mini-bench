@@ -396,8 +396,13 @@ export class BenchExecutionService {
         }));
     }
     /** List independently persisted batches without duplicating raw child evidence. */
+    /** History polling omits bulky frozen provenance; get_task keeps the complete plan. */
     list_tasks(): RecordValue[] {
-        return [...this._tasks.keys()].reverse().map(id => this.get_task(id)!);
+        return [...this._tasks.keys()].reverse().map(id => {
+            const task = this.get_task(id)!;
+            const { task_snapshots: _snapshots, bank_snapshot: _bank, source_sha256: _sources, ...plan } = task.plan as RecordValue;
+            return { ...task, plan: { ...plan, provenance_omitted: true } };
+        });
     }
     /** Persist cancellation intent before cancelling any child; never resume queued work. */
     cancel_task(id: string): boolean {

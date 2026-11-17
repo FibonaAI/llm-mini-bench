@@ -477,7 +477,13 @@ test('task API plans independent whole-bank runs, persists membership and cancel
     const { id } = await started.json();
     const task = await (await request('/api/bench/tasks/' + id)).json();
     expect(task.children).toHaveLength(2);
-    expect((await (await request('/api/bench/tasks')).json()).tasks).toHaveLength(1);
+    const listed = (await (await request('/api/bench/tasks')).json()).tasks;
+    expect(listed).toHaveLength(1);
+    // Polling summaries drop frozen provenance; the detail endpoint keeps the complete plan.
+    expect(listed[0].plan).not.toHaveProperty('task_snapshots');
+    expect(listed[0].plan.provenance_omitted).toBe(true);
+    expect(listed[0].plan.targets).toHaveLength(2);
+    expect(task.plan.task_snapshots).toHaveLength(14);
     for (const child of task.children) {
         const run = await (await request('/api/bench/runs/' + child.run_id)).json();
         expect(run.task_id).toBe(id);

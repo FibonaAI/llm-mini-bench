@@ -12,10 +12,16 @@ import { createTaskSubmission } from './task-submission.js';
   const retryRequests = new Map(), retrying = new Set();
   const { element, historyEntries, renderDetails, inProgress, canCancel, fixedTargets, taskSection, runSection } = createTaskHistoryView({ app, state, retryRequests, retrying });
   const { updateTaskPreview, renderBanks } = createTaskSubmission({ app, state, element, fixedTargets, inProgress, renderDetails, refreshHistory, retryRequests, retrying });
+  // Hidden pages do not poll; becoming visible refreshes once and resumes if work is active.
+  const pageHidden = () => typeof document !== 'undefined' && document.visibilityState === 'hidden';
   function schedulePolling() {
     clearTimeout(state.timer); state.timer = null;
-    if ([...state.tasks, ...state.runs].some(inProgress)) state.timer = setTimeout(() => refreshHistory(), 2000);
+    if (!pageHidden() && [...state.tasks, ...state.runs].some(inProgress)) state.timer = setTimeout(() => refreshHistory(), 2000);
   }
+  if (typeof document !== 'undefined') document.addEventListener?.('visibilitychange', () => {
+    if (pageHidden()) { clearTimeout(state.timer); state.timer = null; }
+    else if (available && [...state.tasks, ...state.runs].some(inProgress)) refreshHistory();
+  });
   async function refreshHistory(forceFresh = false) {
     if (state.refreshing) {
       await state.refreshing;
