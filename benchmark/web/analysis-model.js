@@ -9,7 +9,7 @@ import { assessmentChartMetric } from './assessment-chart-metric.js';
  * selected IDs, log scale, and history membership are deliberately not inputs.
  */
 export function createAnalysisModel({ mapObservations = observationPickerRecords, deriveMetric = assessmentChartMetric } = {}) {
-  let observations = null, records = [], expectedTaskIds = null, bankKey = 'null';
+  let observations = null, records = [], expectedTaskIds = null, bankVersion = null, bankKey = 'null';
   const axes = new Map();
   return {
     /** New server response identity invalidates mapped identities and both axis metrics. */
@@ -21,17 +21,18 @@ export function createAnalysisModel({ mapObservations = observationPickerRecords
     },
     /** Only official task membership/order affects metrics; labels/theme do not. */
     setBank(bank) {
-      const ids = bank?.version === '1.0' && Array.isArray(bank.tasks) ? bank.tasks.map(task => task.id) : null;
-      const key = JSON.stringify(ids);
+      const ids = typeof bank?.version === 'string' && Array.isArray(bank.tasks) ? bank.tasks.map(task => task.id) : null;
+      const key = JSON.stringify([ids && bank.version, ids]);
       if (key === bankKey) return;
       bankKey = key;
       expectedTaskIds = ids;
+      bankVersion = ids ? bank.version : null;
       axes.clear();
     },
     /** Return stable derived records for one axis, preserving repeats and raw originals. */
     records(axis = 'cost') {
       const key = axis === 'tokens' ? 'tokens' : 'cost';
-      if (!axes.has(key)) axes.set(key, records.map(record => ({ ...record, ...deriveMetric(record.original, expectedTaskIds, key) })));
+      if (!axes.has(key)) axes.set(key, records.map(record => ({ ...record, ...deriveMetric(record.original, expectedTaskIds, key, bankVersion) })));
       return axes.get(key);
     },
   };

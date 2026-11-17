@@ -162,9 +162,9 @@ function renderObservations() {
   renderResultDisclosure(records);
   element('dataset-summary').textContent = `Mini Bench · ${state.observations.filter(record => record.source === 'baseline').length} 份基线 · ${state.observations.filter(record => record.source === 'run').length} 个运行目标`;
   const colorDescription = { series: '颜色区分供应商-模型组合（保留账号区分）', model: '颜色区分模型，同名模型跨供应商同色', family: '颜色区分模型系列（按记录名称识别，未识别的模型单独着色，不代表实际服务身份）', time: '颜色按记录的评测时间区分本地日期，使用多色调色板；日期颜色在全部已加载记录中固定，时间未记录用中性色' }[element('chart-color-by').value];
-  element('analysis-method').textContent = `均分 = 完整 14 题、全部计划轮次的内容分等权平均 × 100；横轴 = 累计估算 USD 或输入与输出 tokens 总和 ÷ 轮数（每轮 14 题）。仅绘制全部样本完成、分数与所选横轴用量齐全的记录。${colorDescription}，普通运行圆点、基线方块；最新实心、历史空心，时间未知用虚线边框。仅悬停、聚焦或选中时展开明确同批次、同渠道与账号、同一请求模型的不同可见 Thinking，不连接跨批次的最新记录。虚线前沿按当前可见点计算，不因 Thinking 协议不同而禁用。指令与工具检查独立报告，不计入均分；失败、取消、缺失不补零。零用量仅在线性刻度显示。未完成样本及执行限制可在任务详情中查阅。`;
+  element('analysis-method').textContent = `均分 = 完整 ${app.taskCount || '全部'} 题、全部计划轮次的内容分等权平均 × 100；横轴 = 累计估算 USD 或输入与输出 tokens 总和 ÷ 轮数（每轮 ${app.taskCount || '全部'} 题）。仅绘制全部样本完成、分数与所选横轴用量齐全的记录。${colorDescription}，普通运行圆点、基线方块；最新实心、历史空心，时间未知用虚线边框。仅悬停、聚焦或选中时展开明确同批次、同渠道与账号、同一请求模型的不同可见 Thinking，不连接跨批次的最新记录。虚线前沿按当前可见点计算，不因 Thinking 协议不同而禁用。指令与工具检查独立报告，不计入均分；失败、取消、缺失不补零。零用量仅在线性刻度显示。未完成样本及执行限制可在任务详情中查阅。`;
   element('use-analysis').disabled = !records.length;
-  chart.render(records, { historyRecords: state.records, log, labels: element('point-labels').checked, pareto: element('pareto-line').checked, colorBy: element('chart-color-by').value, axis: element('chart-axis').value, selectedIds: state.selectedId ? [state.selectedId] : [] });
+  chart.render(records, { taskCount: app.taskCount, historyRecords: state.records, log, labels: element('point-labels').checked, pareto: element('pareto-line').checked, colorBy: element('chart-color-by').value, axis: element('chart-axis').value, selectedIds: state.selectedId ? [state.selectedId] : [] });
   renderObservationDetails();
   dataPopover.position();
 }

@@ -140,7 +140,7 @@ export function createScoreCostChart(container, { onSelect = () => {}, catalog =
       lastTickX = px;
     }
     line(margin.left, height - margin.bottom, width - margin.right, height - margin.bottom, { stroke: theme.axis });
-    text(`${options.axis === 'tokens' ? '总 tokens（输入 + 输出）' : '平均费用 / USD'} · 每轮14题${options.log ? ' · 对数' : ' · 线性'}`, margin.left + plotWidth / 2, height - 10, { 'text-anchor': 'middle', 'font-size': 11 });
+    text(`${options.axis === 'tokens' ? '总 tokens（输入 + 输出）' : '平均费用 / USD'} · 每轮${options.taskCount ? options.taskCount + '题' : '全部题目'}${options.log ? ' · 对数' : ' · 线性'}`, margin.left + plotWidth / 2, height - 10, { 'text-anchor': 'middle', 'font-size': 11 });
     const defs = svgNode('defs'), clip = svgNode('clipPath', { id: clipId });
     clip.append(svgNode('rect', { x: margin.left - 12, y: margin.top - 13, width: plotWidth + 24, height: plotHeight + 26 }));
     defs.append(clip); svg.append(defs);

@@ -1,3 +1,4 @@
+import { PRODUCTION_BANK_VERSION } from '../src/production_bank.ts';
 import { RunCallSummaryReader } from '../src/bench_call_summaries.ts';
 import { existsSync, lstatSync, readFileSync, readdirSync, realpathSync } from 'node:fs';
 import { homedir } from 'node:os';
@@ -221,7 +222,7 @@ export function make_handler(
         try {
             if (path.startsWith('/api/bench/')) {
                 if (request.method === 'GET' && path === '/api/bench/banks') {
-                    const bank = load_assessment_bank('1.0');
+                    const bank = load_assessment_bank(PRODUCTION_BANK_VERSION);
                     const tasks = bank.tasks.map((task) =>
                         Object.fromEntries(
                             Object.entries(task).filter(([, value]) => typeof value !== 'function')
@@ -231,8 +232,9 @@ export function make_handler(
                         execution_policy: 'sample-timeout-v1',
                         banks: [
                             {
-                                id: 'assessment-1.0',
-                                version: '1.0',
+                                id: 'assessment-' + bank.version,
+                                version: bank.version,
+                                production: true,
                                 kind: 'assessment',
                                 title: 'Mini Bench',
                                 task_sha256: bank.task_sha256,

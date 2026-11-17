@@ -1,3 +1,4 @@
+import { PRODUCTION_BANK_VERSION } from './production_bank.ts';
 import { scan_journal_call_records } from './bench_call_summaries.ts';
 import { closeSync, existsSync, fsyncSync, lstatSync, openSync, readFileSync, readdirSync, writeFileSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
@@ -302,7 +303,7 @@ export class BenchExecutionService {
         const run_concurrency = integer(req.run_concurrency === undefined ? 3 : req.run_concurrency, 1, 10, 'run_concurrency', req);
         const rounds = integer(req.rounds === undefined ? 3 : req.rounds, 1, 3, 'rounds', req);
         const prepared = await this.prepare({
-            bank_version: req.bank_version === undefined ? '1.0' : req.bank_version,
+            bank_version: req.bank_version === undefined ? PRODUCTION_BANK_VERSION : req.bank_version,
             targets: req.targets,
             rounds,
             concurrency: Math.min(sample_concurrency, this.concurrency),
@@ -422,7 +423,7 @@ export class BenchExecutionService {
             ['bank_version', 'targets', 'task_ids', 'rounds', 'concurrency', 'limits'],
             'request'
         );
-        const version = req.bank_version === undefined ? '1.0' : req.bank_version;
+        const version = req.bank_version === undefined ? PRODUCTION_BANK_VERSION : req.bank_version;
         if (typeof version !== 'string') throw new TypeError('Invalid bank version');
         const bank = load_assessment_bank(version);
         const rounds = integer(req.rounds === undefined ? 1 : req.rounds, 1, 3, 'rounds', req),

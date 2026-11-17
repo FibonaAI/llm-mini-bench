@@ -5,25 +5,25 @@ function observation(rounds = 1) {
   return { bank_version: '1.0', bank_scope: 'whole', sample_count: 14 * rounds, status: 'completed', rounds, baseline_eligible: false, estimated_cost_usd: rounds * .14,
     tasks: ids.map(task_id => ({ task_id, samples: Array.from({ length: rounds }, (_, i) => ({ round: i + 1, status: 'completed', content_score: .5 })) })) };
 }
-const excluded = record => expect(assessmentChartMetric(record, ids)).toMatchObject({ score: null, cost: null, exclusionReason: expect.any(String) });
+const excluded = record => expect(assessmentChartMetric(record, ids, 'cost', '1.0')).toMatchObject({ score: null, cost: null, exclusionReason: expect.any(String) });
 // Complete scores with unknown usage keep the score but are never placed on the usage axis.
-const usageExcluded = record => expect(assessmentChartMetric(record, ids)).toMatchObject({ score: 50, cost: null, exclusionReason: expect.any(String) });
+const usageExcluded = record => expect(assessmentChartMetric(record, ids, 'cost', '1.0')).toMatchObject({ score: 50, cost: null, exclusionReason: expect.any(String) });
 test('complete one through three rounds: equal sample mean and per-round cost', () => {
   for (const rounds of [1, 2, 3]) {
-    const result = assessmentChartMetric(observation(rounds), ids);
+    const result = assessmentChartMetric(observation(rounds), ids, 'cost', '1.0');
     expect(result.score).toBe(50); expect(result.cost).toBeCloseTo(.14); expect(result.exclusionReason).toBeNull();
   }
   const record = observation(2); record.tasks[0].samples[0].content_score = 0; record.tasks[0].samples[1].content_score = 1;
-  expect(assessmentChartMetric(record, ids).score).toBe(50);
+  expect(assessmentChartMetric(record, ids, 'cost', '1.0').score).toBe(50);
 });
 test('all-zero grades and zero cost are valid; chart log filtering is separate', () => {
   const record = observation(); record.estimated_cost_usd = 0;
   record.tasks.forEach(task => { task.samples[0].content_score = 0; });
-  expect(assessmentChartMetric(record, ids)).toEqual({ score: 0, cost: 0, exclusionReason: null, usageLowerBound: null });
+  expect(assessmentChartMetric(record, ids, 'cost', '1.0')).toEqual({ score: 0, cost: 0, exclusionReason: null, usageLowerBound: null });
 });
 test('canonical bank must supply exactly fourteen unique nonempty IDs', () => {
   for (const expected of [null, [], ids.slice(1), [...ids, 'extra'], [...ids.slice(1), ids[1]], [...ids.slice(1), '']]) {
-    expect(assessmentChartMetric(observation(), expected).exclusionReason).toBeTruthy();
+    expect(assessmentChartMetric(observation(), expected, 'cost', '1.0').exclusionReason).toBeTruthy();
   }
 });
 test('whole-bank scope and original target sample count are required evidence', () => {
@@ -50,19 +50,27 @@ test('historical or non-promotable complete observations retain valid metric wit
   record.implementation = 'python-historical'; record.source_sha256 = { a: 'a'.repeat(64), b: 'b'.repeat(64), c: 'c'.repeat(64), d: 'd'.repeat(64) };
   record.tasks.reverse(); record.tasks.forEach(task => task.samples.reverse());
   const before = JSON.stringify(record);
-  expect(assessmentChartMetric(record, ids).score).toBe(50);
+  expect(assessmentChartMetric(record, ids, 'cost', '1.0').score).toBe(50);
   expect(JSON.stringify(record)).toBe(before);
 });
 
 test('usage gaps expose a labelled known lower bound only when attempt accounting proves unknown attempts', () => {
   const record = { ...observation(2), estimated_cost_usd: null, usage: null, usage_accounting: { usage_lower_bound: { input_tokens: 100, output_tokens: 60 }, estimated_cost_usd_lower_bound: .2, unknown_usage_attempts: 3, unknown_cost_attempts: 2, attempts: 30 } };
-  const cost = assessmentChartMetric(record, ids), tokens = assessmentChartMetric(record, ids, 'tokens');
+  const cost = assessmentChartMetric(record, ids, 'cost', '1.0'), tokens = assessmentChartMetric(record, ids, 'tokens', '1.0');
   expect(cost).toMatchObject({ score: 50, cost: null, usageLowerBound: { cost: .1, unknownAttempts: 2, attempts: 30 } });
   expect(cost.exclusionReason).toContain('2 次请求尝试未返回用量');
   expect(tokens).toMatchObject({ score: 50, cost: null, usageLowerBound: { cost: 80, unknownAttempts: 3 } });
   // No accounting evidence: no bound is invented.
-  expect(assessmentChartMetric({ ...observation(), estimated_cost_usd: null }, ids).usageLowerBound).toBeNull();
+  expect(assessmentChartMetric({ ...observation(), estimated_cost_usd: null }, ids, 'cost', '1.0').usageLowerBound).toBeNull();
   // A failed run never gets a score or bound, even with accounting.
   const failed = { ...record, status: 'failed' };
-  expect(assessmentChartMetric(failed, ids)).toMatchObject({ score: null, cost: null, usageLowerBound: null });
+  expect(assessmentChartMetric(failed, ids, 'cost', '1.0')).toMatchObject({ score: null, cost: null, usageLowerBound: null });
+});
+
+test('task count and version come from the production bank, not hardcoded 1.0 / 14', () => {
+  const twelve = ids.slice(0, 12);
+  const record = { ...observation(2), bank_version: '3.0', sample_count: 24, tasks: observation(2).tasks.slice(0, 12) };
+  expect(assessmentChartMetric(record, twelve, 'cost', '3.0')).toMatchObject({ score: 50, exclusionReason: null });
+  expect(assessmentChartMetric(record, twelve, 'cost', '1.0').exclusionReason).toBe('题库版本不兼容');
+  expect(assessmentChartMetric(record, twelve).exclusionReason).toBe('正式题库尚未加载或无效');
 });

@@ -26,13 +26,15 @@ describe('single-bank browser contract', () => {
     expect(elements.some(element => element.tag === 'textarea')).toBe(false);
     expect(elements.find(element => element.attributes.get('id') === 'run-rounds')?.attributes.get('max')).toBe('3');
     const bank = elements.find(element => element.attributes.get('id') === 'bench-bank')!.attributes;
-    expect([bank.get('type'), bank.get('value')]).toEqual(['hidden', '1.0']);
+    // The production bank version is filled from the served catalog, never hardcoded in markup.
+    expect([bank.get('type'), bank.get('value')]).toEqual(['hidden', '']);
   });
 
   test('user-facing markup uses Mini Bench rather than an additional assessment brand', () => {
     const markup = readFileSync(join(web, 'index.html'), 'utf8');
     expect(markup).toContain('LLM Mini Bench');
-    expect(markup).toContain('Mini Bench · 14 题');
+    expect(markup).toContain('id="runs-bank-label">Mini Bench<');
+    expect(markup).not.toMatch(/\b14 ?题/);
     expect(markup).not.toContain('Assessment');
     for (const file of ['bench.js', 'analysis.js', 'assessment-chart-metric.js']) {
       const source = readFileSync(join(web, file), 'utf8');

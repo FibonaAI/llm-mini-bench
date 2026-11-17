@@ -37,9 +37,9 @@ test('Thinking lines never bridge channels, batches, accounts or duplicate level
 test('token-axis eligibility is independent of USD but never imputes unknown usage', () => {
   const ids=Array.from({length:14},(_,i)=>String(i));
   const record={bank_version:'1.0',bank_scope:'whole',status:'completed',rounds:2,sample_count:28,estimated_cost_usd:null,usage:{input_tokens:200,output_tokens:100},tasks:ids.map(task_id=>({task_id,samples:[1,2].map(round=>({round,status:'completed',content_score:1}))}))};
-  expect(assessmentChartMetric(record,ids)).toMatchObject({score:100,cost:null}); // score known; unknown USD only removes the cost-axis position
-  expect(assessmentChartMetric(record,ids,'tokens')).toEqual({score:100,cost:150,exclusionReason:null,usageLowerBound:null});
-  record.usage.input_tokens=null;expect(assessmentChartMetric(record,ids,'tokens')).toMatchObject({score:100,cost:null});
+  expect(assessmentChartMetric(record, ids, 'cost', '1.0')).toMatchObject({score:100,cost:null}); // score known; unknown USD only removes the cost-axis position
+  expect(assessmentChartMetric(record, ids, 'tokens', '1.0')).toEqual({score:100,cost:150,exclusionReason:null,usageLowerBound:null});
+  record.usage.input_tokens=null;expect(assessmentChartMetric(record, ids, 'tokens', '1.0')).toMatchObject({score:100,cost:null});
 });
 
 test('model label budget preserves candidate priority without moving points or adding distant annotations', () => {

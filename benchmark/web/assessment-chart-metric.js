@@ -1,13 +1,18 @@
-/** Complete Assessment 1.0 equal-task/equal-round mean (0–100), and estimated USD per 14-task round. Never imputes missing samples or costs. */
-export function assessmentChartMetric(record, expectedTaskIds, axis = 'cost') {
+/**
+ * Complete production-bank equal-task/equal-round mean (0–100), and estimated usage per whole-bank round.
+ * The bank version and ordered task IDs come from the served production bank; nothing is hardcoded.
+ * Never imputes missing samples or costs.
+ */
+export function assessmentChartMetric(record, expectedTaskIds, axis = 'cost', bankVersion) {
   const exclude = exclusionReason => ({ score: null, cost: null, exclusionReason, usageLowerBound: null });
-  if (!Array.isArray(expectedTaskIds) || expectedTaskIds.length !== 14 || expectedTaskIds.some(id => typeof id !== 'string' || !id) || new Set(expectedTaskIds).size !== 14) return exclude('正式 14 题题库尚未加载或无效');
-  if (!record || record.bank_version !== '1.0') return exclude('题库版本不兼容');
+  const taskCount = Array.isArray(expectedTaskIds) ? expectedTaskIds.length : 0;
+  if (typeof bankVersion !== 'string' || !bankVersion || !taskCount || expectedTaskIds.some(id => typeof id !== 'string' || !id) || new Set(expectedTaskIds).size !== taskCount) return exclude('正式题库尚未加载或无效');
+  if (!record || record.bank_version !== bankVersion) return exclude('题库版本不兼容');
   if (record.bank_scope !== 'whole') return exclude('不是完整题库运行，或缺少题库范围证据');
   if (record.status !== 'completed') return exclude(observationQualitySummary(record).text || '运行未完整完成');
   if (!Number.isInteger(record.rounds) || record.rounds < 1 || record.rounds > 3) return exclude('轮数须为 1–3 的整数');
-  if (!Number.isInteger(record.sample_count) || record.sample_count !== 14 * record.rounds) return exclude('原始目标样本总数不等于 14 题 × 计划轮数');
-  if (!Array.isArray(record.tasks) || record.tasks.length !== 14) return exclude('未包含完整 14 题');
+  if (!Number.isInteger(record.sample_count) || record.sample_count !== taskCount * record.rounds) return exclude(`原始目标样本总数不等于 ${taskCount} 题 × 计划轮数`);
+  if (!Array.isArray(record.tasks) || record.tasks.length !== taskCount) return exclude(`未包含完整 ${taskCount} 题`);
   const expected = new Set(expectedTaskIds), seen = new Set();
   let total = 0;
   for (const task of record.tasks) {
@@ -24,7 +29,7 @@ export function assessmentChartMetric(record, expectedTaskIds, axis = 'cost') {
     }
   }
   const valid = value => typeof value === 'number' && Number.isFinite(value) && value >= 0;
-  const usage = record.usage, score = total / (14 * record.rounds) * 100;
+  const usage = record.usage, score = total / (taskCount * record.rounds) * 100;
   const usageGap = reason => ({ score, cost: null, exclusionReason: reason, usageLowerBound: usageLowerBound(record, axis) });
   if (axis === 'tokens' && (!valid(usage?.input_tokens) || !valid(usage?.output_tokens))) return usageGap(usageGapReason(record, axis));
   if (axis !== 'tokens' && !valid(record.estimated_cost_usd)) return usageGap(usageGapReason(record, axis));

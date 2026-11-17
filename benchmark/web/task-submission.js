@@ -6,7 +6,7 @@ export function createTaskSubmission({ app, state, element, fixedTargets, inProg
   }
   function validConfig() {
     const config = taskRequestConfig();
-    return config.targets.length > 0 && app.taskCount === 14 && config.bank_version === '1.0'
+    return config.targets.length > 0 && app.taskCount > 0 && typeof app.bank?.version === 'string' && config.bank_version === app.bank.version
       && Number.isInteger(config.limits.timeout) && config.limits.timeout >= 10 && config.limits.timeout <= 3600
       && Number.isInteger(config.rounds) && config.rounds >= 1 && config.rounds <= 3
       && Number.isInteger(config.sample_concurrency) && config.sample_concurrency >= 1 && config.sample_concurrency <= 64
@@ -20,18 +20,21 @@ export function createTaskSubmission({ app, state, element, fixedTargets, inProg
     element('bench-plan-preview').hidden = !valid;
     if (!valid) return;
     const config = taskRequestConfig();
-    renderTaskSummary({ ...config, run_count: config.targets.length, samples_per_run: 14 * config.rounds, sample_count: config.targets.length * 14 * config.rounds, total_max_cost_usd: config.limits.max_cost_usd === null ? null : config.targets.length * config.limits.max_cost_usd });
+    renderTaskSummary({ ...config, run_count: config.targets.length, samples_per_run: app.taskCount * config.rounds, sample_count: config.targets.length * 14 * config.rounds, total_max_cost_usd: config.limits.max_cost_usd === null ? null : config.targets.length * config.limits.max_cost_usd });
   }
   function renderBanks() {
-    const bank = state.banks.find(entry => entry.version === '1.0');
-    if (!bank || !Array.isArray(bank.tasks)) throw new Error('Mini Bench 题库格式无效');
+    // The service marks exactly one production bank; its version and task count drive the form.
+    const bank = state.banks.find(entry => entry.production === true) ?? (state.banks.length === 1 ? state.banks[0] : undefined);
+    if (!bank || typeof bank.version !== 'string' || !Array.isArray(bank.tasks) || !bank.tasks.length) throw new Error('Mini Bench 题库格式无效');
+    element('bench-bank').value = bank.version;
     element('bench-bank-label').textContent = `Mini Bench · ${bank.tasks.length} 题全部运行`;
+    const header = element('runs-bank-label'); if (header) header.textContent = `Mini Bench · ${bank.tasks.length} 题`;
     app.setBank(bank);
     updateTaskPreview();
   }
   function renderTaskSummary(plan) {
     element('bench-plan-preview').hidden = false;
-    element('bench-plan-preview').innerHTML = `<div class="run-plan-summary"><strong>${escapeHtml(plan.run_count)} 个独立运行 · 共 ${escapeHtml(plan.sample_count)} 个样本</strong><span>每运行 ${escapeHtml(plan.samples_per_run)} 个样本（14 题 × ${escapeHtml(plan.rounds)} 轮）</span><span>同时运行 ${escapeHtml(plan.run_concurrency)} 个 · 每运行最多并发 ${escapeHtml(plan.sample_concurrency)} 个样本</span><span>每题总超时 ${escapeHtml(plan.limits.timeout)} 秒</span><span class="sub">不设置 token、费用、请求数、工具调用及交互轮数上限。临时 API 错误最多重试 3 次，共用该题超时时间。</span></div>`;
+    element('bench-plan-preview').innerHTML = `<div class="run-plan-summary"><strong>${escapeHtml(plan.run_count)} 个独立运行 · 共 ${escapeHtml(plan.sample_count)} 个样本</strong><span>每运行 ${escapeHtml(plan.samples_per_run)} 个样本（${escapeHtml(app.taskCount)} 题 × ${escapeHtml(plan.rounds)} 轮）</span><span>同时运行 ${escapeHtml(plan.run_concurrency)} 个 · 每运行最多并发 ${escapeHtml(plan.sample_concurrency)} 个样本</span><span>每题总超时 ${escapeHtml(plan.limits.timeout)} 秒</span><span class="sub">不设置 token、费用、请求数、工具调用及交互轮数上限。临时 API 错误最多重试 3 次，共用该题超时时间。</span></div>`;
   }
   element('run-form').addEventListener('submit', async event => {
     event.preventDefault();
