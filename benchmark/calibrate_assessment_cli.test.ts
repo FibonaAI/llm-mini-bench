@@ -100,3 +100,24 @@ describe('standalone calibration CLI', () => {
         const help = setup(); await main(['--help'], help.dependencies); expect(help.counts()).toEqual({ banks: 0, catalogs: 0, clients: 0 });
     });
 });
+
+test('a slow sample frees no slot until it ends, but other slots keep starting new samples', async () => {
+    const f = setup();
+    const started: string[] = [];
+    let releaseSlow!: () => void;
+    const slow = new Promise<void>(resolve => { releaseSlow = resolve; });
+    f.dependencies.run_sample = async (_client, task, target, round, _config, _pricing, _budget, journal) => {
+        const key = `${task.id}:${round}`; started.push(key);
+        if (key === 'B:1') await slow; else await new Promise(resolve => setTimeout(resolve, 1));
+        const observation = { type: 'observation', task: task.id, model: target.model, thinking: target.thinking, round, ok: true };
+        journal.write(observation); return observation as AssessmentObservation;
+    };
+    const run = main([...f.args.slice(0, -1), '2', '--rounds', '3'], f.dependencies);
+    for (let i = 0; i < 50 && started.length < 6; i++) await new Promise(resolve => setTimeout(resolve, 2));
+    // With batch waiting only two samples could start while B:1 is stuck; the pool runs all others.
+    expect(started).toHaveLength(6);
+    releaseSlow(); await run;
+    // Journal summary still counts every sample and observations keep job order.
+    expect(f.records().filter(row => row.type === 'observation')).toHaveLength(6);
+    expect(f.records().at(-1)).toMatchObject({ type: 'summary', samples: 6, planned_samples: 6 });
+});

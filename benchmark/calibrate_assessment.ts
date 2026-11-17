@@ -132,14 +132,21 @@ export async function main(argv = process.argv.slice(2), dependencies: Calibrati
             note: 'Per-question evidence, not an identity test or validated ability scale. Requested thinking is not proof of effective upstream thinking. Retries only when config.max_api_retries is set; uncached catalog estimates are not invoices.' });
         const observations: AssessmentObservation[] = [];
         const runner = dependencies.run_sample ?? run_assessment_sample;
-        for (let offset = 0; offset < jobs.length; offset += args.concurrency) {
-            if (budget.stop_reason) break;
-            // All admitted work must settle before closing the journal, even on storage failure.
-            const results = await Promise.allSettled(jobs.slice(offset, offset + args.concurrency).map(([task, target, round]) => runner(client, task, target, round, config, prices[target.model]!, budget, journal)));
-            for (const result of results) if (result.status === 'fulfilled') observations.push(result.value);
-            const failure = results.find(result => result.status === 'rejected');
-            if (failure?.status === 'rejected') throw failure.reason;
-        }
+        // Worker pool: a finished sample immediately frees its slot, so one slow sample no longer
+        // idles the rest of a batch. Results keep job order. After a budget stop or a rejected
+        // sample no new job starts, and all admitted work settles before the journal closes.
+        const results: (AssessmentObservation | undefined)[] = new Array(jobs.length);
+        let next = 0, failure: { reason: unknown } | null = null;
+        const worker = async () => {
+            while (!failure && !budget.stop_reason && next < jobs.length) {
+                const index = next++, [task, target, round] = jobs[index]!;
+                try { results[index] = await runner(client, task, target, round, config, prices[target.model]!, budget, journal); }
+                catch (reason) { failure ??= { reason }; }
+            }
+        };
+        await Promise.all(Array.from({ length: Math.min(args.concurrency, jobs.length) }, worker));
+        for (const result of results) if (result) observations.push(result);
+        if (failure) throw (failure as { reason: unknown }).reason;
         const summary = { type: 'summary', requests: budget.requests, samples: observations.length, completed: observations.filter(observation => observation.ok).length, planned_samples: jobs.length, stop_reason: budget.stop_reason, missing_cost_calls: budget.missing_cost, known_cost_lower_bound_usd: budget.spent, estimated_uncached_cost_usd: budget.missing_cost ? null : budget.spent };
         journal.write(summary); console.log(JSON.stringify(summary));
     } finally { closeSync(descriptor); }
