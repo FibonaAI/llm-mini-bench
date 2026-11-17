@@ -1,0 +1,189 @@
+# Bench with Internal Account Routes
+
+[中文](BENCH_EXECUTION.zh.md)
+
+Create separate routes for two accounts with the same provider, then compare them using the same model, bank, and thinking setting. Routes live in Bench's own configuration file. They do not create or modify Magpie providers or switch the global signed-in account. The CLI and `/api/bench/` share one background scheduler.
+
+## Use Magpie models directly
+
+In the Magpie plugin, when `MAGPIE_BENCH_ROUTES_FILE` is unset and the data directory has no `routes.json`, the adapter generates test targets from the host Magpie model catalog, reusing the host gateway address and credentials. There is no need to configure each model manually. Only models with explicit, finite, nonnegative input and output token prices are listed. Missing prices are not treated as free. Thinking levels come from the model catalog.
+
+When the catalog supplies valid `owned_by` and `display_name` fields, public routes retain them as optional `provider_id` and `model_display_name`, with `provider_evidence: "gateway_catalog"` for the provider claim. `provider_id` identifies the catalog owner instance, not its provider type or the upstream provider that ultimately serves a request. Distinct instance IDs remain separate even when they offer the same model. The UI does not split model IDs or labels to infer identity, and uses neutral icons because the public catalog does not supply authoritative provider types or icons. Plans and results preserve the recorded metadata; historical observations with no recorded fields return `null` and are never backfilled from the current catalog. Explicit route configuration keeps its existing strict schema and requires no new metadata fields.
+
+Automatically allocated targets share the `gateway-default` concurrency pool and use `gateway_binding` evidence. The plugin can also expose explicitly configured local account targets through its [`accounts` option](../magpie/README.md#explicit-local-account-bindings). The adapter supplies the account pin header; quota information never creates account bindings. Standalone Bench uses explicit routes and does not implicitly connect to Magpie.
+
+The adapter caches models for up to 60 seconds and coalesces concurrent reads. Refreshing routes invalidates that cache. Removed models can no longer resolve, while started runs retain their original bindings and snapshots. Catalog failures do not prevent opening historical results or cancelling runs. Reading the catalog sends no model requests. Duplicate model IDs cause an error rather than silently selecting prices.
+
+Explicit route configuration always takes precedence. If the file contains `{"routes": []}` or an explicitly specified file does not exist, the target list stays empty; the service does not fall back to the default gateway. An empty path environment variable or malformed file causes an error. Keys stay on the server; the UI receives neither upstream addresses nor credentials.
+
+### Remote Magpie route expansion
+
+The picker automatically separates routes behind Remote Magpie when the catalog supplies valid `magpie_via` evidence. It requests that evidence with the supported `X-Magpie-Drawers: 1` catalog header, then excludes the extra image and other non-chat models returned by that handshake.
+
+For a direct remote entry such as `office/openai/model`, the channel column shows `office / openai`. `office` remains the local catalog owner; `openai` is the first remote **route namespace**, not verified provider identity. Remote `auto` and `group` namespaces are labeled as automatic routes and routing groups. Different local remote instances never merge, even when their inner namespaces match. Expansion is one level only; remaining slashes may be part of a model name and are not recursively interpreted.
+
+Public routes, plans, and new results retain `remote_route: {"namespace": "openai", "evidence": "magpie_via_catalog"}`. The full request model and route ID are unchanged, and accounts remain unknown. Missing or invalid hop evidence, local routing groups, and older records without the metadata keep their original grouping. No historical record is backfilled. Per-process hop IDs are not saved as stable identity. See Magpie's [remote routing convention](https://usemagpie.ai/docs/remote).
+
+The task picker shows the provider, recorded or configured account, model and thinking levels. It does not display or fetch quotas. Missing account identity stays unknown; it is never inferred from a quota card or backfilled into historical results.
+
+## Configure two routes
+
+See [`benchmark/examples/bench-routes.json`](../benchmark/examples/bench-routes.json). Copy it to `~/.local/share/magpie-mini-bench/routes.json`, or set `MAGPIE_BENCH_ROUTES_FILE` in the service process to another file. Recommended file permissions are `0600`. Route configuration loads on first access to the execution service. Restart the service after changing it.
+
+Each route binds these fields:
+
+| Field | Meaning |
+| --- | --- |
+| `id` | Stable route ID referenced by execution plans |
+| `label` | Display name, not evidence of account verification |
+| `account_ref` | Stable identifier for a shared account concurrency pool; models using the same account should share this value |
+| `base_url` | Upstream address supporting the Responses API, either a direct provider endpoint or an account-scoped gateway |
+| `model` | Exact model name sent upstream |
+| `api_key_env` | Name of a key environment variable in the service process; plaintext keys are not accepted in the configuration file |
+| `thinking_levels` | Locally declared supported levels; an empty array allows only `default` |
+| `pricing.prompt` / `pricing.completion` | USD per input/output token, not per million tokens |
+| `account_concurrency` | Sample concurrency limit shared by this account across all Bench runs |
+
+Replace the example addresses, models, prices, and thinking levels with real values. For example, if input costs USD 1 per million tokens, set `pricing.prompt` to `0.000001`. Use zero only for a confirmed free price, not an unknown price.
+
+The two accounts use `BENCH_PROVIDER_ACCOUNT_A_KEY` and `BENCH_PROVIDER_ACCOUNT_B_KEY`, respectively. These variables must exist in the backend process environment. Setting them only in the terminal that launches the CLI does not pass them to an already running plugin. Do not put keys in plans, project files, or command arguments.
+
+Remote upstreams must use HTTPS; HTTP is allowed only for loopback. Model requests do not follow HTTP redirects. Only `/v1/responses` is supported, with no automatic fallback to Chat Completions or another account.
+
+### Account binding does not verify upstream identity
+
+`account_ref` is an identity you configure, not an account inferred from model answers. Execution results use `configured_binding` to describe the binding source; they do not mark it as verified. Two keys for the same real account should share an `account_ref`. Use different names only for different accounts.
+
+If the upstream is still a gateway that automatically rotates accounts, two local routes do not turn it into a fixed-account gateway. A local Magpie account can instead be pinned through the plugin's explicit `accounts` option. For another gateway, use its supported account-scoped credentials or adapter. Entering an email address as `account_ref` alone does not establish a binding. This version does not automatically sign in, issue Magpie keys, or verify actual upstream accounts. Response IDs and raw responses are retained for later checks.
+
+## Tasks and independent runs
+
+A task is a batch of independent runs. Each selected route and Thinking combination creates one run with its own ID, progress, budget, samples, and results. A route supplies the provider/account/model binding; selecting a label cannot strengthen its identity evidence. Each run executes the complete Mini Bench bank. Defaults are 3 rounds, 6 concurrent samples per run, and 3 concurrent runs per task. Seven selected combinations therefore produce 7 runs, 42 samples each, and 294 samples in total.
+
+```json
+{
+  "bank_version": "1.0",
+  "targets": [
+    {"route_id": "provider-a-model-x", "thinking": "none"},
+    {"route_id": "provider-a-model-x", "thinking": "high"}
+  ],
+  "rounds": 3,
+  "sample_concurrency": 6,
+  "run_concurrency": 3,
+  "limits": {"timeout": 600, "timeout_scope": "sample"}
+}
+```
+
+Save this structure as a task plan, then use `task-plan FILE` to review it and `task-start FILE` to submit it. `tasks`, `task-show TASK_ID`, and `task-cancel TASK_ID` manage the batch. `show RUN_ID` and `cancel RUN_ID` inspect or cancel an individual child run. Both CLI and UI use the same in-process engine; no CLI subprocess is launched per run.
+
+New tasks default to `timeout: 600` and `timeout_scope: "sample"`; `max_requests`, `max_output_tokens`, `max_cost_usd`, `max_turns` and `max_tool_calls` are `null` (uncapped). The timeout covers each entire question across tool continuations and retries, not a fresh allowance per HTTP call. `total_max_cost_usd` is `null`. Historical records without `timeout_scope` retain their original per-request timeout and recorded numeric limits; neither plans nor provenance hashes are rewritten. Tasks have no additional aggregate sample-count cap. Independent runs queue under the existing run, sample, account and global concurrency controls, with budgets enforced per run. Tasks do not accept `task_ids`; subset execution remains available only through the direct run API below. After a submission timeout, inspect `tasks` and `runs` before submitting again.
+
+Task membership is committed before any child can dispatch. Each child keeps its own run snapshot and journal; `assessment/tasks/<task_id>/task.json` records membership. Cancellation can target one child or the whole task. Restarted unfinished work is interrupted, never resumed. Existing multi-target run records remain readable without conversion into new tasks.
+
+## Preflight and direct runs
+
+Start the backend through the plugin installation described in the [README](../README.md). For explicit account routes, finish configuration and environment-variable setup before starting or restarting it. Do not run multiple processes against the same data directory. Concurrency allowances are not shared across processes either.
+
+Run the following CLI commands from the repository root. The CLI connects to an already running local service at `http://127.0.0.1:3481` by default. Change the address with `--url` or `MAGPIE_BENCH_URL`, and authenticate with `MAGPIE_BENCH_TOKEN`.
+
+```sh
+bun benchmark/bench.ts routes
+bun benchmark/bench.ts banks
+bun benchmark/bench.ts plan benchmark/examples/bench-plan.json
+bun benchmark/bench.ts start benchmark/examples/bench-plan.json
+bun benchmark/bench.ts runs
+bun benchmark/bench.ts show <run_id>
+bun benchmark/bench.ts cancel <run_id>
+```
+
+[`benchmark/examples/bench-plan.json`](../benchmark/examples/bench-plan.json) includes two accounts, each running both `none` and `high`. One round of all 14 tasks produces 56 samples. Omitting `task_ids` selects the complete bank. You can also explicitly select a few tasks to check configuration:
+
+```json
+{
+  "bank_version": "1.0",
+  "targets": [
+    {"id": "a-high", "route_id": "provider-a-model-x", "thinking": "high"},
+    {"id": "b-high", "route_id": "provider-b-model-x", "thinking": "high"}
+  ],
+  "task_ids": ["K04_Genetic_Code"],
+  "rounds": 1,
+  "concurrency": 2,
+  "limits": {"timeout": 600, "timeout_scope": "sample"}
+}
+```
+
+`plan` validates configuration, credential references, and execution size without sending model requests. `start` validates again, saves a snapshot, and immediately returns a run ID. Execution does not depend on keeping the CLI open. A submission timeout does not prove that no run was created. Check `runs` before submitting again. There is currently no submission deduplication key.
+
+`default` omits `reasoning` and differs from explicit `none`. New plans use only `timeout` and `timeout_scope: "sample"`; nullable legacy cap fields remain readable for historical records and explicit legacy API clients. Thinking levels for explicit routes come from local declarations; default gateway routes use the catalog. Neither probes capabilities through model requests.
+
+### Run without the plugin
+
+The TypeScript backend and web interface live in `benchmark/` and can run with Bun without the Magpie adapter. Set `MAGPIE_BENCH_TOKEN` to a random string of at least 32 characters in the service process environment. Configure explicit routes and their key environment variables if you are not using the Magpie gateway. From the repository root, start:
+
+```sh
+bun benchmark/bench.ts serve --port 3481
+```
+
+The service serves `benchmark/web/` and the same HTTP API. The CLI still uses `MAGPIE_BENCH_TOKEN` to authenticate. Do not start this service alongside an active plugin using the same port or data directory. Use a managed tmux task with an explicit completion or failure notification for persistent operation.
+
+## Scheduling and results
+
+All Bench tasks and runs share one scheduler. `sample_concurrency` is 1 to 64 (default 6), and `run_concurrency` is 1 to 10 (default 3). Their default product permits 18 active sample workers, subject to stricter account and global limits. `MAGPIE_BENCH_CONCURRENCY` sets the shared global limit from 1 to 64, default 18. Different Thinking settings and models on the same account share its allowance. A task child can run several samples of its fixed target concurrently. Direct runs created through `/runs` retain the per-target limit of one sample. Available slots are filled with runnable samples without waiting for an entire batch to finish.
+
+A sample corresponds to a target, task, and round. Multiple requests for a tool task execute sequentially within that sample, and tool state is not shared across samples. Samples and actual attempts have separate saved IDs, so the same model on different accounts does not overwrite results. Raw responses are saved before grading. Missing or failed results are not scored as zero. The analysis page derives only the [defined score-cost display](ASSESSMENT_BANK.md#score-cost-display) from eligible complete records; it does not change saved grades.
+
+New tasks count every request for evidence but impose only the complete-sample deadline, shared by calls, tool continuations and retry waits. Saved legacy runs still enforce their recorded per-run request and USD limits on manual retries. Transient transport errors, HTTP 408/429/5xx, and HTTP 200 streams that end in `response.failed` with error code `server_error` (such as a gateway losing its connection mid-reply) retry up to `max_api_retries` (default 3, in addition to the initial request), with exponential backoff and bounded Retry-After handling. Permanent authentication/other 4xx failures are not automatically retried. Capability/output/tool/turn limits are `incomplete`, not API failures; exhausted API errors are `api_failure` samples and `failed` runs. Missing usage/cost remains null and retains a conservative cost reservation, rather than stopping every later sample solely because an error omitted usage. Tool requests omit `parallel_tool_calls`. Multiple function calls in one response are validated for unique call IDs, then executed against fixed simulators in returned order; every result is journaled and all matching outputs are sent back together. Cancellation, sample deadline and storage failure stop remaining actions. This execution change is recorded in execution source snapshots and `tool_execution_policy: "ordered-batch-v1"`; old calls/results are not rewritten. Accounts never switch. An upstream gateway may retry internally; the Magpie gateway currently does not expose a verified way for this plugin to disable every such retry. Do not interpret one recorded gateway request as proof of one upstream attempt.
+
+Assessment requests use Responses SSE with `stream: true`, recorded in each request protocol and its hash. Complete SSE frames are journaled before parsing, tool execution or grading. Call records retain the received stream text, HTTP status, first/last byte times, first event/output times, last output progress and terminal event. Heartbeats do not count as output progress. Only a complete terminal response supplies the answer, tool calls and usage; early EOF, invalid SSE and a successful non-SSE response are protocol exceptions, with no silent downgrade to non-streaming. Streaming can avoid gateway idle timeouts when events reach the client, but does not override gateway total-duration limits. Neither local `SampleTimeout` nor an active stream establishes that a model spent the whole deadline computing. Historical records retain their original transport provenance.
+
+Cancellation blocks samples that have not started and subsequent tool requests, and aborts an in-flight stream. An abort does not prove upstream work stopped or prevent charges; already received evidence is retained where possible. Interrupted runs do not automatically resend requests after a service restart. Terminal API-failed samples can be retried explicitly through the run or task retry endpoint with a required 32-character lowercase hexadecimal `request_id`. Reusing the ID is idempotent, including after an uncertain HTTP response. Prior run bytes, raw calls and source snapshots are archived; successful samples do not rerun, failed samples retain attempts, total usage/cost includes attempts, and the latest result replaces the failed result rather than selecting best-of. Original route/account identity, prices and remaining limits must still match. Results, task summaries and analysis refresh after retry. Mixed execution-source generations are not promoted to a new complete baseline.
+
+On a storage write failure, the service stops admitting new requests, releases concurrency slots for samples that have finished, and records `storage_error` in memory. If the disk is unwritable, saving that error cannot be guaranteed. On restart, the service marks runs as interrupted based on the last successfully saved state. Fix storage and restart before submitting new runs; do not try to bypass the failure with repeated submissions.
+
+New execution source snapshots include the runner and its local import dependencies, including modules imported unconditionally by the bank loader even when their tasks are not selected. Source paths resolve relative to `benchmark/`. This archive coverage does not change bank hashes, grading or historical snapshots.
+
+Results are saved under `assessment/` in the data directory. They include questions, answers, and tool traces and should be treated as sensitive data. The service does not return keys, key environment-variable names, or upstream addresses to the UI. Known credential literals in raw upstream content are redacted, so saved responses are not guaranteed to be byte-for-byte copies of network messages.
+
+Only Mini Bench is used here. The old runner and bank APIs have been removed. Retired-bank personal data is not automatically read, converted, or deleted. Historical Mini Bench runs in `assessment/` remain visible with their recorded provenance.
+
+## Analysis and task pages
+
+The analysis page centers on the score-cost chart. Search and multi-select channel, model, and Thinking filters directly update the chart: choices within a filter are combined with OR, and different filters are combined with AND. An unrestricted filter includes all values. Active conditions can be removed individually; “仅此项” selects one value within its filter. Source filtering applies alongside these conditions. “最新数据” is the default: within each bank and whole/subset scope, it selects the newest recorded timestamp for each channel/account/model/Thinking combination, separately for runs and baselines. Selection precedes chart eligibility, so an incomplete latest result is reported as excluded rather than replaced by an older score. Undated observations remain visible because their recency cannot be established. “全部历史” shows all records, including the latest; “指定记录” uses exact record checkboxes. Both historical modes support inclusive local-calendar date bounds. Filtering does not delete history, combine repeated evaluations or change metrics. The “数据” dropdown sits beside the channel/model/Thinking filters; its panel contains the latest/all/specified choices, date bounds and exact record checkboxes rather than adding a separate form below the toolbar. Matching-record and exclusion counts open bounded panels beside their triggers, with internal scrolling and immediately visible reasons instead of requiring a scroll past the chart. Escape and the close action restore focus to the trigger; outside clicks dismiss the panel. Native Popover and CSS anchors are used when supported, with viewport-clamped manual positioning for older browsers and tight host windows. The analysis floating panels share 8px padding, a compact title row and completion or close actions. Channel, model and Thinking filters use 320px, 340px and 240px widths respectively; data selection uses 340px and chart settings use 280px, all clamped to the viewport. Chart settings share the same Escape, outside-click and focus-return behavior as data selection. Both record panels share a 440px width and 360px maximum height, shrinking further to fit the viewport. Compact rows retain model/Thinking, recorded channel and known account claims, local time, score and known usage; only excluded rows add a reason. Long record IDs, unknown-account boilerplate and repeated missing-usage labels stay out of the list and remain available in the inspector. Dates include the year when needed to distinguish years, and full timestamps remain accessible. Tasks and analysis share identity normalization and search over recorded model, channel, and account fields. The task picker selects exact runnable targets, retains selections when its candidate filters change, and closes with “完成”. Model options in the task picker follow the selected channel, retaining a compatible model filter or resetting it to all models. Accounts remain visible and searchable without a separate account filter. The default effort is labeled “默认（不指定）”; requests still omit reasoning, which is distinct from none. The inspector retains per-task results and raw details. Task history is searchable and filterable on the task page. There is no independent question-bank page. The UI automatically updates sample counts and the combined budget as targets or settings change. Click “开始评测” once to submit; the server validates the configuration before execution. No separate planning action is required. The only execution-limit field is the whole-sample timeout, default 600 seconds, covering requests, tool interactions and retry backoff together. Output tokens, request counts, USD, tool calls and turns are uncapped. Transient API retries default to 3 internally. A sample timeout ends only that sample; other samples continue. Copying an old task into a new task uses this new execution policy rather than silently reinstating its old caps. Task and child-run details expand inline, with status counts, configuration copying and explicit API retry actions. Copying only restores currently available exact targets and settings; it never starts requests. After an uncertain submission, review task history and explicitly acknowledge that review before submitting again.
+
+Task and standalone-run cards toggle open and closed on repeated clicks. A child-run row, including its status, toggles that child's samples without closing its parent; cancellation buttons do not toggle details. Opening a run from analysis always opens it rather than toggling it closed. Polling preserves expanded samples, nested evidence disclosures and keyboard focus, and does not reopen an explicitly closed card.
+
+Execution completion, grading validity and cumulative accounting are separate. Completed samples with `ambiguous` or `ungradable` outcomes show why they cannot be scored, rather than implying grading is pending. Ambiguity may come from different candidate JSON objects or malformed extra JSON; the UI does not choose one, regrade the answer or replace a missing score with zero. Zero is a valid score. Run summaries flag completed samples with invalid scores or unknown cumulative usage/cost. A successful manual retry retains unknown totals when earlier attempts lack usage or cost; the latest attempt's known values are shown separately and are not presented as the total.
+
+The X-axis selects estimated USD or input plus output tokens per complete 14-task round. Eligibility requires complete valid scores and known nonnegative usage for that axis; missing USD does not exclude a record from the token axis if token counts are known. Attempts that sent no request count as known zero usage. When scores are complete but some attempts returned no usage, the chart setting “用量不完整时按已知下限绘制” (on by default) plots the known lower bound with an amber badge; the tooltip states the unknown attempt count, and such points never join the frontier. The excluded list names concrete causes (API failures, ambiguous answers, unknown-usage attempts) and links API-failed runs to the task page for manual retry. Run details show a task-by-round matrix, list samples needing attention first, and show per-attempt failure causes read from `/api/bench/runs/:id/calls`. The “着色” control defaults to provider/model coloring, preserving channel/account distinctions. Model coloring gives the same normalized recorded model name one color across providers; model-family coloring groups recognized name prefixes such as GPT and DeepSeek, leaving unrecognized models separate. Evaluation-date coloring remains independent of model selection. It groups recorded `created_at` timestamps by local calendar day, uses the same multicolor palette, and keeps colors stable across display filters, zoom and axis changes within the loaded observation set. Unknown dates use a neutral color and a textual unknown label. These are display groups, not verified serving identities. Changing coloring does not merge observations, alter eligibility or expand Thinking lines. The color legend shows one compact row below the plot. Overflow opens a bounded single-column list on both desktop and mobile, with recorded channel/account details and point counts. Search finds legend entries without filtering observations; hover or focus locates the matching color group without changing Thinking membership. The legend follows the current axis, filters and zoom, preserving repeated visible observations in its counts. Switching color modes resets its search and disclosure. Runs are circles and baselines are squares. Latest records are filled, historical records are hollow, and undated records have dashed outlines with an explicit unknown state. Latest status is derived from all observations before eligibility or display filters, separately for runs and baselines; an excluded latest result never promotes an older success. The overview has no persistent Thinking curves. Hover, focus or selection reveals a solid line only for at least two distinct visible Thinking levels within the same recorded batch, exact request model, bank scope, channel and account. Unknown batch membership or duplicate effort levels do not invent a series. Single-level batches and cross-batch latest points never connect; filters and zoom do not add hidden records to complete a line. Legend lookup highlights points without revealing unselected curves. The Pareto frontier remains dashed. The frontier uses visible eligible points on the chosen axis and is not gated on Thinking/protocol equality. Strict baseline validation remains separate. Default labels show a short model name once across channels, preferring a selected point as its anchor; channel/account identities remain in the legend and point details. The annotation budget follows available plot width, up to six names, and crowded names stay in details rather than moving far from their points. No long label leaders are drawn. Desktop charts use a 400px canvas, while narrow charts retain 380px; both preserve the full 0-100 score scale. Filled and hollow markers have identical visible bounds, including their shared 1.5px series-colored stroke: circles are 12px across and squares have 10px sides. Only the fill distinguishes latest from historical records. A separate background-colored halo keeps dense points apart without enlarging historical outlines relative to filled points. Hit areas and focus rings are unchanged. Crowded identities remain available through point details and the existing data selector. Point hover/focus highlights its valid visible batch series and shows its visible Thinking levels with a leader anchored to each corresponding point. Static names hide while a batch series is expanded to avoid overlapping annotations. Hover information appears as a floating card positioned outside the highlighted curve and its Thinking labels; it does not add a strip below the chart. It shows the recorded time in the viewer's local time. Overlapping markers retain their true coordinates and individual records: up to three timestamps are listed, while larger overlaps show only a time range and record count. Clicked result details remain inline below the chart. The separate result dropdown is removed; chart points open result details and task history retains incomplete evidence. Cost and token axes both draw the Pareto frontier; a single optimal point has a horizontal boundary extending right. There is no fullscreen control.
+
+## UI API
+
+All endpoints retain `X-Mini-Bench-Token`, loopback Host, and same-origin checks. Request bodies cannot add arbitrary upstreams or keys.
+
+| Method | Path | Response |
+| --- | --- | --- |
+| GET | `/api/bench/routes` | `{"routes": [...]}`, a redacted route catalog; `?refresh=1` reloads the catalog |
+| GET | `/api/bench/quota-cards` | Read-only quota cards with available, forbidden, unavailable or stale status; `?refresh=1` rereads Magpie’s cached cards without requesting a vendor quota refresh |
+| GET | `/api/bench/banks` | `{"banks": [...]}`, task cards and grading policy |
+| POST | `/api/bench/task-plans` | Whole-bank task plan, independent run count, sample counts, and total cost limit; does not execute |
+| POST | `/api/bench/tasks` | HTTP 202, `{"id": "..."}`, the task ID |
+| GET | `/api/bench/tasks` | `{"tasks": [...]}`, task summaries with child run progress |
+| POST | `/api/bench/tasks/:id/retry` | Explicit API-failure retry batch; body `{request_id}`; reports admitted and rejected child runs |
+| POST | `/api/bench/runs/:id/retry` | Explicit API-failure sample retry; body `{request_id}`. Explicit `{request_id, policy:"sample-timeout-v1"}` reruns all unfinished samples with current timeout-only limits, retaining the original plan and successes |
+| GET | `/api/bench/tasks/:id` | Task plan and child run IDs, identities, status, and budgets |
+| POST | `/api/bench/tasks/:id/cancel` | `{"ok": true}`; cancels all unfinished children |
+| POST | `/api/bench/plans` | Direct-run plan and sample count; does not execute |
+| POST | `/api/bench/runs` | HTTP 202, `{"id": "..."}` |
+| GET | `/api/bench/runs` | `{"runs": [...]}` |
+| GET | `/api/bench/runs/:id` | One run, its samples, and budget state |
+| GET | `/api/bench/runs/:id/calls` | Read-only per-call diagnosis from the run and retry journals: HTTP status, elapsed time, terminal event, upstream error code/message (truncated), local timeout and whether usage was returned. Never returns request bodies or raw streams |
+| POST | `/api/bench/runs/:id/cancel` | `{"ok": true}`; HTTP 404 if not found |
+| GET | `/api/bench/observations` | `{"observations": [...]}`, analysis records per target, task, and round; the UI derives the defined display metric |
+| GET | `/api/bench/baselines` | `{"baselines": [...]}`, validated personal baselines and the explicitly pinned historical bundled baseline |
+| POST | `/api/bench/runs/:id/baseline` | Request `{"target_id": "..."}`; response HTTP 201 with `{"baseline": ...}` |
+
+Run summaries and task child summaries include a read-only `result_quality` projection over completed samples: `completed_samples`, `unscored_samples`, `unknown_usage_samples`, `unknown_cost_samples`, `prior_unknown_usage_samples` and `prior_unknown_cost_samples`. These counts do not change execution status, saved evidence, grades or chart eligibility.
+
+Saving a baseline requires all 14 tasks, completion and gradability of every planned round, and consistent task and execution protocol evidence. Personal baselines are saved under `assessment-baselines/` in the data directory without overwriting the original run. Viewing existing personal runs and accepted baselines requires no new model requests. Historical runs with incompatible source provenance cannot be promoted to new baselines. The bundled Python-era baseline is accepted only through its pinned snapshot digest and original provenance, not by replacing its hashes with current TypeScript hashes.
+
+Planning and starting use the same request structure. The bank ID in the catalog is `assessment-1.0`; the request's `bank_version` is `1.0`. This is the only available bank.

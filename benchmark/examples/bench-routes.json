@@ -1,0 +1,26 @@
+{
+  "routes": [
+    {
+      "id": "provider-a-model-x",
+      "label": "Provider account A / model-x",
+      "account_ref": "provider-account-a",
+      "base_url": "https://api.example.com/v1",
+      "model": "model-x",
+      "api_key_env": "BENCH_PROVIDER_ACCOUNT_A_KEY",
+      "thinking_levels": ["none", "high"],
+      "pricing": {"prompt": 0.000001, "completion": 0.000002},
+      "account_concurrency": 1
+    },
+    {
+      "id": "provider-b-model-x",
+      "label": "Provider account B / model-x",
+      "account_ref": "provider-account-b",
+      "base_url": "https://api.example.com/v1",
+      "model": "model-x",
+      "api_key_env": "BENCH_PROVIDER_ACCOUNT_B_KEY",
+      "thinking_levels": ["none", "high"],
+      "pricing": {"prompt": 0.000001, "completion": 0.000002},
+      "account_concurrency": 1
+    }
+  ]
+}

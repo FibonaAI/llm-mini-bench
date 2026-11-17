@@ -1,0 +1,68 @@
+import { expect, test } from 'bun:test';
+import { mkdtempSync, mkdirSync, writeFileSync, appendFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { RunCallSummaryReader, summarize_call_record } from './bench_call_summaries.ts';
+import { observation_usage_accounting } from './assessment_observations.ts';
+import { execution_result_quality } from './bench_execution_queries.ts';
+
+const runId = 'a'.repeat(32);
+const line = (value: unknown) => JSON.stringify(value) + '\n';
+
+test('call summaries read main and retry journals, skip non-call lines and never return raw bodies', () => {
+    const root = mkdtempSync(join(tmpdir(), 'call-summaries-'));
+    const directory = join(root, runId), retry = join(directory, 'retry-' + 'b'.repeat(32));
+    mkdirSync(retry, { recursive: true });
+    // Escaped call markers inside stream text must not be mistaken for call records.
+    writeFileSync(join(directory, 'journal.jsonl'), line({ type: 'stream_chunk', raw_stream_text: '{"type":"call"}' }) + line({
+        type: 'call', call_id: 's1:1:1', sample_id: 's1', attempt_id: 'x', turn: 1, api_attempt: 1, http_status: 200, elapsed_seconds: 90.1,
+        estimated_uncached_cost_usd: null, request: { secret: 'request body' }, raw_response_text: 'raw stream',
+        raw_response: { status: 'failed', error: { code: 'server_error', message: 'connection lost mid-reply' }, output: [] },
+        stream: { terminal_event: 'response.failed', termination: 'terminal', first_output_seconds: 2.8, last_progress_seconds: 88 }
+    }));
+    writeFileSync(join(retry, 'journal.jsonl'), line({ type: 'call', call_id: 's1:1:2', sample_id: 's1', http_status: -1, elapsed_seconds: 300, raw_response: { exception: 'TimeoutError' }, stream: { termination: 'timeout' } }) + '{"type":"call", torn');
+    const reader = new RunCallSummaryReader(root);
+    const calls = reader.read(runId)!;
+    expect(calls.map(call => call.call_id)).toEqual(['s1:1:1', 's1:1:2']);
+    expect(calls[0]).toMatchObject({ http_status: 200, response_status: 'failed', error_code: 'server_error', error_message: 'connection lost mid-reply', terminal_event: 'response.failed', usage_known: false });
+    expect(calls[1]).toMatchObject({ http_status: -1, local_exception: 'TimeoutError', termination: 'timeout' });
+    expect(JSON.stringify(calls)).not.toContain('request body');
+    expect(JSON.stringify(calls)).not.toContain('raw stream');
+    // Cache refreshes when a journal grows.
+    appendFileSync(join(directory, 'journal.jsonl'), line({ type: 'call', call_id: 's2:1:1', sample_id: 's2', http_status: 200, raw_response: { status: 'completed', usage: { input_tokens: 1, output_tokens: 2 } } }));
+    expect(reader.read(runId)!.map(call => call.call_id)).toEqual(['s1:1:1', 's2:1:1', 's1:1:2']);
+    expect(reader.read('../etc')).toBeNull();
+    expect(reader.read('c'.repeat(32))).toBeNull();
+});
+
+test('call summary truncates long upstream messages', () => {
+    const summary = summarize_call_record({ type: 'call', call_id: 'c', sample_id: 's', raw_response: { error: { code: 'x', message: 'm'.repeat(1000) } } });
+    expect(summary.error_message!.length).toBe(300);
+});
+
+test('attempts that sent no request are known zero usage; unknown attempts stay counted for lower bounds', () => {
+    const samples = [
+        // Retry recovered after a never-sent attempt: the total is fully known.
+        { calls: ['n:1'], usage: { input_tokens: 10, output_tokens: 5 }, estimated_uncached_cost_usd: .02, latest_attempt_usage: { input_tokens: 10, output_tokens: 5 }, latest_attempt_cost_usd: .02,
+            attempts: [{ status: 'budget_not_admitted', calls: [], usage: null, estimated_uncached_cost_usd: null }] },
+        // A timed-out attempt returned no usage: it stays unknown.
+        { calls: ['t:2'], usage: null, estimated_uncached_cost_usd: null, latest_attempt_usage: { input_tokens: 4, output_tokens: 1 }, latest_attempt_cost_usd: .01,
+            attempts: [{ status: 'api_failure', calls: ['t:1'], usage: null, estimated_uncached_cost_usd: null }] },
+        { calls: ['k:1'], usage: { input_tokens: 1, output_tokens: 1 }, estimated_uncached_cost_usd: .001 }
+    ];
+    const accounting = observation_usage_accounting(samples);
+    expect(accounting).toMatchObject({ unknown_usage_attempts: 1, unknown_cost_attempts: 1, attempts: 5, usage_known: { input_tokens: 15, output_tokens: 7 } });
+    expect(accounting.cost_known).toBeCloseTo(.031);
+    expect(observation_usage_accounting([samples[0]!, samples[2]!])).toMatchObject({ unknown_cost_attempts: 0, usage_known: { input_tokens: 11, output_tokens: 6 } });
+    // Samples without call evidence are not assumed to have sent nothing.
+    expect(observation_usage_accounting([{ usage: null, estimated_uncached_cost_usd: null }]).unknown_cost_attempts).toBe(1);
+});
+
+test('result quality ignores never-sent prior attempts but keeps genuinely unknown ones', () => {
+    const quality = execution_result_quality({ samples: [
+        { status: 'completed', grade: { content_score: 1 }, usage: { input_tokens: 1, output_tokens: 1 }, estimated_uncached_cost_usd: .1, attempts: [{ status: 'budget_not_admitted', calls: [] }] },
+        { status: 'completed', grade: { content_score: 1 }, usage: null, estimated_uncached_cost_usd: null, attempts: [{ status: 'api_failure', calls: ['x'] }] }
+    ] } as never);
+    expect(quality.prior_unknown_usage_samples).toBe(1);
+    expect(quality.prior_unknown_cost_samples).toBe(1);
+});

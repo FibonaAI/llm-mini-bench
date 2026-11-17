@@ -1,0 +1,67 @@
+{
+  "name": "llm-mini-bench",
+  "version": "0.1.0",
+  "description": "A standalone model evaluation workspace with an optional Magpie integration.",
+  "homepage": "https://github.com/FibonaAI/llm-mini-bench#readme",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/FibonaAI/llm-mini-bench.git"
+  },
+  "bugs": {
+    "url": "https://github.com/FibonaAI/llm-mini-bench/issues"
+  },
+  "type": "module",
+  "main": "./magpie/index.ts",
+  "files": [
+    "benchmark/backend/",
+    "benchmark/banks/",
+    "benchmark/baselines/",
+    "benchmark/examples/",
+    "benchmark/src/",
+    "benchmark/tests/",
+    "benchmark/tools/",
+    "benchmark/web/",
+    "benchmark/bench.ts",
+    "benchmark/bench.test.ts",
+    "benchmark/calibrate_assessment.ts",
+    "benchmark/calibrate_assessment.test.ts",
+    "benchmark/calibrate_assessment_cli.test.ts",
+    "magpie/",
+    "docs/",
+    "README.md",
+    "README.zh.md",
+    "AGENTS.md",
+    "AGENTS.zh.md",
+    "bun.lock",
+    "tsconfig.json"
+  ],
+  "engines": {
+    "bun": ">=1.4.0"
+  },
+  "scripts": {
+    "test": "bun test ./benchmark ./magpie",
+    "typecheck": "tsc --noEmit",
+    "test:browser": "bun benchmark/tests/assessment_web_browser.mjs",
+    "test:browser:sandbox": "bun benchmark/tests/assessment_sandbox_browser.mjs",
+    "test:install": "bun benchmark/tests/assessment_install_channels.ts",
+    "serve": "bun benchmark/bench.ts serve",
+    "calibrate": "bun benchmark/calibrate_assessment.ts"
+  },
+  "magpie": {
+    "page": {
+      "title": "LLM Mini Bench",
+      "titles": {
+        "zh": "模型评测"
+      },
+      "file": "magpie/page/index.html",
+      "service": {
+        "port": 3481,
+        "option": "port"
+      }
+    }
+  },
+  "devDependencies": {
+    "@types/bun": "1.4.4",
+    "typescript": "7.0.2"
+  }
+}

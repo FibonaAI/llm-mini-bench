@@ -1,0 +1,159 @@
+{
+  "schema": "assessment-evidence-verification-v1",
+  "bank_version": "1.0",
+  "baseline_id": "1e0617b82fc8b44f085d147ffd8c53a6998856050364ab6c4c3a8363a080372a",
+  "raw_evidence": {
+    "path": "baselines/assessment-bank-1.0-smoke.jsonl",
+    "sha256": "7c3b58ba9479d5c99e664806f627ee842f546f350189551665f6cac7146ce096",
+    "kind": "verified-recorded-requests",
+    "account_identity": "not recorded; no account binding inferred",
+    "migration": "Management IDs added deterministically; original task, protocol, grade, text and execution source hashes retained. No model calls."
+  },
+  "provenance": {
+    "historical_implementation": "python-historical",
+    "historical_baseline_sha256": "3e7fa45c830bc5ce12644ddb841e4222877b9a5800dd1fd1c6e3ec77449ed02f",
+    "historical_task_source_sha256": {
+      "src/assessment_tasks.py": "d4b23aff05b2e49912b59724bc7cf51ce5ce727fdbbf5774ff09172a51203e95",
+      "src/assessment_tools.py": "873521213f20ea934cdf194cc7ee32108de756c5a0ce530b9296c4c0d4aad136",
+      "src/assessment_knowledge.py": "740d942cb296af63a395d82df0de41534e59896890f879dd2b92ce183b6adbf6",
+      "src/assessment_challenges.py": "b595d27d21f4a90d7b6f3cca94b0f65becb92f1695aeca5434380ea29d5d7b23"
+    },
+    "historical_execution_source_sha256": {
+      "src/assessment_tasks.py": "d4b23aff05b2e49912b59724bc7cf51ce5ce727fdbbf5774ff09172a51203e95",
+      "src/assessment_tools.py": "873521213f20ea934cdf194cc7ee32108de756c5a0ce530b9296c4c0d4aad136",
+      "src/assessment_knowledge.py": "740d942cb296af63a395d82df0de41534e59896890f879dd2b92ce183b6adbf6",
+      "src/assessment_challenges.py": "b595d27d21f4a90d7b6f3cca94b0f65becb92f1695aeca5434380ea29d5d7b23",
+      "calibrate_assessment.py": "e0de9e76dd837bf0190d37ce0caa3a62053bab338f778e753c8baa062f6bcfb3",
+      "calibrate_question_bank.py": "e1106ab486bdca881b35f1e4c823645eadaa12729a1ff67c8785a9a7c9c27969",
+      "src/run_protocol.py": "084df5390570714eb087fe40d50b4119dd198cb11a0829855c96f6684cf8b133",
+      "src/client.py": "e006c3d7d87e81b1779fcc2d51320dc666456b048a6d46cf0b7e5331e880ea03",
+      "src/assessment_bank.py": "dd393228999823c854e94117f4805d86c67a3697ac4e6e348e64a4c372b76ea1"
+    },
+    "current_implementation": "typescript-bun",
+    "current_task_source_sha256": {
+      "src/assessment_tasks.ts": "078ba162dd2fce2796f3efa8140d48e975e63858b4c71770c736cb745be5c886",
+      "src/assessment_tools.ts": "4593d23e98358dadffa32c1dceb39865e0a932ef97089c46a595a67f466e26a7",
+      "src/assessment_knowledge.ts": "0a646aa3241df8e2345bf2d9eff675e3461ab2fc6011eb89ba8c5b77d96adde2",
+      "src/assessment_challenges.ts": "352f8eef464b5577bc8fd44049a9988d62d28f8fc97d3bdcbd98bd6fe17ef1f3",
+      "src/assessment_json.ts": "5787bc63c240f41f65d4ef5d6966aac76e85c6454ae335304a863d64ec58e7cf"
+    },
+    "registry": "baselines/assessment-historical-provenance.json",
+    "equivalence_scope": "All retained 19 responses, 5 simulator calls and 14 grades reproduce; this is evidence replay, not proof of equivalence for every possible input."
+  },
+  "verification": {
+    "whole_bank_tasks": 14,
+    "prespecified_rounds": 1,
+    "completed_gradable_samples": 14,
+    "recorded_response_calls": 19,
+    "replayed_simulator_calls": 5,
+    "task_hash_matches_current": true,
+    "four_task_source_hashes_match_current": false,
+    "all_recorded_grades_reproduced": true,
+    "all_request_protocols_verified": true,
+    "all_sample_protocol_hashes_recomputed": true,
+    "all_original_observation_fields_preserved": true,
+    "historical_snapshot_id_verified": true,
+    "paid_model_calls": 0
+  },
+  "tasks": [
+    {
+      "task": "K06_Treaty_Exceptions",
+      "response_calls": 1,
+      "simulator_calls": 0,
+      "grade_reproduced": true
+    },
+    {
+      "task": "K04_Genetic_Code",
+      "response_calls": 1,
+      "simulator_calls": 0,
+      "grade_reproduced": true
+    },
+    {
+      "task": "K05_DNS_Negative_Cache",
+      "response_calls": 1,
+      "simulator_calls": 0,
+      "grade_reproduced": true
+    },
+    {
+      "task": "R02_Causal_Counterfactual",
+      "response_calls": 1,
+      "simulator_calls": 0,
+      "grade_reproduced": true
+    },
+    {
+      "task": "R03_Parallel_Schedule",
+      "response_calls": 1,
+      "simulator_calls": 0,
+      "grade_reproduced": true
+    },
+    {
+      "task": "R01_Stopping_Urn",
+      "response_calls": 1,
+      "simulator_calls": 0,
+      "grade_reproduced": true
+    },
+    {
+      "task": "X02_Payment_Evidence",
+      "response_calls": 1,
+      "simulator_calls": 0,
+      "grade_reproduced": true
+    },
+    {
+      "task": "C01_Finally_Aliasing",
+      "response_calls": 1,
+      "simulator_calls": 0,
+      "grade_reproduced": true
+    },
+    {
+      "task": "C03_Optimistic_Transactions",
+      "response_calls": 1,
+      "simulator_calls": 0,
+      "grade_reproduced": true
+    },
+    {
+      "task": "I02_Quoted_Instructions",
+      "response_calls": 1,
+      "simulator_calls": 0,
+      "grade_reproduced": true
+    },
+    {
+      "task": "I01_Coupled_Transform",
+      "response_calls": 1,
+      "simulator_calls": 0,
+      "grade_reproduced": true
+    },
+    {
+      "task": "X03_Bitemporal_Revisions",
+      "response_calls": 1,
+      "simulator_calls": 0,
+      "grade_reproduced": true
+    },
+    {
+      "task": "T02_Inventory_Impossible",
+      "response_calls": 2,
+      "simulator_calls": 1,
+      "grade_reproduced": true
+    },
+    {
+      "task": "T03_Booking_Feedback",
+      "response_calls": 5,
+      "simulator_calls": 4,
+      "grade_reproduced": true
+    }
+  ],
+  "identity_limits": {
+    "route": "remote-magpie/openai/gpt-6-luna",
+    "thinking_requested": "high",
+    "account_identity": "unrecorded",
+    "upstream_effective_thinking": "not independently verified",
+    "historical_execution_source_hashes": "retained verbatim; not relabeled as current runner bytes"
+  },
+  "recorded_usage": {
+    "input_tokens": 6125,
+    "output_tokens": 7860
+  },
+  "estimated_uncached_cost_usd": 0.0045425,
+  "cost_note": "Sum of all 19 recorded per-call estimates, not an invoice.",
+  "interpretation": "One complete observed target-round; per-question content and instruction checks only. No aggregate score, learned weights, model identification, or population capability claim.",
+  "reproduce": "bun benchmark/tools/replay_assessment_evidence.ts"
+}

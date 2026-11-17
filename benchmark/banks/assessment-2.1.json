@@ -1,0 +1,949 @@
+{
+  "version": "2.1",
+  "title": "Assessment 2.1 balanced experimental bank",
+  "status": "experimental-unvalidated",
+  "created_on": "2026-11-12",
+  "task_ids": [
+    "T2_Causal_Pathway_Probes",
+    "R2_Petri_Inhibitor_Attractor",
+    "L2_Temporal_Evidence_Withdrawals",
+    "C2_Compiler_Exception_Guards",
+    "X2_Bounded_Doc_Tariff_Supersession",
+    "R2_Causal_Twin_Intervention",
+    "T2_Aging_Scheduler_Probes",
+    "T2_Scoped_Exception_Probes",
+    "I2_Scoped_Directive_Precedence",
+    "R2_DFA_Product",
+    "C2_Async_Microtasks",
+    "X2_Bounded_Doc_Incident_SLA_Arbitration",
+    "M2_Node_Capacitated_Cut",
+    "C2_Tagged_Stack_ABA"
+  ],
+  "task_sha256": "e182bb429567845f340a095b0ca2a4cc33eb470af4da7af19e9945b60c8a9a77",
+  "task_file": "assessment-2.1.questions.json",
+  "source_sha256": {
+    "src/assessment_tasks.ts": "078ba162dd2fce2796f3efa8140d48e975e63858b4c71770c736cb745be5c886",
+    "src/assessment_tools.ts": "4593d23e98358dadffa32c1dceb39865e0a932ef97089c46a595a67f466e26a7",
+    "src/assessment_knowledge.ts": "0a646aa3241df8e2345bf2d9eff675e3461ab2fc6011eb89ba8c5b77d96adde2",
+    "src/assessment_challenges.ts": "352f8eef464b5577bc8fd44049a9988d62d28f8fc97d3bdcbd98bd6fe17ef1f3",
+    "src/assessment_json.ts": "5787bc63c240f41f65d4ef5d6966aac76e85c6454ae335304a863d64ec58e7cf",
+    "src/assessment_data.ts": "bb3c63c7890e834b8e975f6c4e865566569e0bd769ca0d3a7a1ca68bafeb56c9",
+    "src/assessment_dfa.ts": "c4de3ec41268197f565f688d2ab38e45b7745555861010661ee53d891f7a6a6a",
+    "src/assessment_resource.ts": "788c044a367de628f37231f4048b63afbaf87103e38b993c993a1edb097d6e86"
+  },
+  "selection": {
+    "T2_Causal_Pathway_Probes": {
+      "role": "challenge",
+      "reason": "Balanced static reasoning and interactive causal, code, scheduler, document and DFA tasks."
+    },
+    "R2_Petri_Inhibitor_Attractor": {
+      "role": "challenge",
+      "reason": "Balanced static reasoning and interactive causal, code, scheduler, document and DFA tasks."
+    },
+    "X2_Bounded_Doc_Tariff_Supersession": {
+      "role": "challenge",
+      "reason": "Balanced static reasoning and interactive causal, code, scheduler, document and DFA tasks."
+    },
+    "T2_Aging_Scheduler_Probes": {
+      "role": "challenge",
+      "reason": "Balanced static reasoning and interactive causal, code, scheduler, document and DFA tasks."
+    },
+    "T2_Scoped_Exception_Probes": {
+      "role": "challenge",
+      "reason": "Balanced static reasoning and interactive causal, code, scheduler, document and DFA tasks."
+    },
+    "I2_Scoped_Directive_Precedence": {
+      "role": "challenge",
+      "reason": "Balanced static reasoning and interactive causal, code, scheduler, document and DFA tasks."
+    },
+    "R2_DFA_Product": {
+      "role": "coverage_anchor",
+      "reason": "Balanced static reasoning and interactive causal, code, scheduler, document and DFA tasks."
+    },
+    "C2_Async_Microtasks": {
+      "role": "coverage_anchor",
+      "reason": "Balanced static reasoning and interactive causal, code, scheduler, document and DFA tasks."
+    },
+    "X2_Bounded_Doc_Incident_SLA_Arbitration": {
+      "role": "challenge",
+      "reason": "Balanced static reasoning and interactive causal, code, scheduler, document and DFA tasks."
+    },
+    "M2_Node_Capacitated_Cut": {
+      "role": "coverage_anchor",
+      "reason": "Balanced static reasoning and interactive causal, code, scheduler, document and DFA tasks."
+    },
+    "R2_Causal_Twin_Intervention": {
+      "role": "coverage_anchor",
+      "reason": "Independently enumerated static task replacing an unidentifiable named-state DFA."
+    },
+    "L2_Temporal_Evidence_Withdrawals": {
+      "role": "challenge",
+      "reason": "Authority and revision select a partial order; erase-sensitive propagation determines delivery; coupled evidence withdrawal restores shadowed constraints; observations can have disjunctive explanations with no new pairwise ordering entailment."
+    },
+    "C2_Tagged_Stack_ABA": {
+      "role": "challenge",
+      "reason": "Reason about three-update versus four-update finite-tag ABA, cascading stale pop successes, conditional second-pop failure, and the non-rollback push write. The fixed 15-event program is unchanged; five structural existence questions replace complete terminal-tuple enumeration."
+    },
+    "C2_Compiler_Exception_Guards": {
+      "role": "challenge",
+      "reason": "Compose alias-sensitive load reuse, speculative trapping arithmetic, dead-store elimination, exception recovery, and conditional rollback; distinguish instruction-level changes from observable heap equivalence and derive all minimal admissible fast-path guards."
+    }
+  },
+  "scoring_policy": {
+    "content": "Equal weight across tasks. Exact-field semantic means for text/document tasks; exact accepted hidden-rule identification and matching final candidate for black-box tasks. Diagnostic predicted outputs and tool compliance are separate checks.",
+    "instruction": "JSON-only and exact top-level fields are reported separately from semantic content.",
+    "missing": "Incomplete or ungradable content is null, never imputed zero.",
+    "repeats": "Retain every prespecified repetition; never use best-of selection.",
+    "identity": "Exact route, requested thinking, task/source hashes and execution protocol accompany every result.",
+    "scope": "Balanced experimental candidate; preserve diverse domains and report execution failures separately from content scores."
+  },
+  "grading": {
+    "T2_Causal_Pathway_Probes": {
+      "type": "assessment-blackbox-v1",
+      "name": "identify",
+      "config": {
+        "candidates": {
+          "C01": {
+            "outputs": {
+              "EXP_1": 8,
+              "EXP_2": 11,
+              "EXP_3": 11,
+              "EXP_4": 14,
+              "EXP_5": 8,
+              "EXP_6": 11,
+              "EXP_7": 9,
+              "EXP_8": 11
+            }
+          },
+          "C02": {
+            "outputs": {
+              "EXP_1": 8,
+              "EXP_2": 11,
+              "EXP_3": 11,
+              "EXP_4": 12,
+              "EXP_5": 8,
+              "EXP_6": 11,
+              "EXP_7": 9,
+              "EXP_8": 11
+            }
+          },
+          "C03": {
+            "outputs": {
+              "EXP_1": 8,
+              "EXP_2": 11,
+              "EXP_3": 5,
+              "EXP_4": 14,
+              "EXP_5": 8,
+              "EXP_6": 5,
+              "EXP_7": 7,
+              "EXP_8": 11
+            }
+          },
+          "C04": {
+            "outputs": {
+              "EXP_1": 8,
+              "EXP_2": 11,
+              "EXP_3": 5,
+              "EXP_4": 12,
+              "EXP_5": 8,
+              "EXP_6": 5,
+              "EXP_7": 7,
+              "EXP_8": 11
+            }
+          },
+          "C05": {
+            "outputs": {
+              "EXP_1": 8,
+              "EXP_2": 11,
+              "EXP_3": 14,
+              "EXP_4": 14,
+              "EXP_5": 8,
+              "EXP_6": 5,
+              "EXP_7": 10,
+              "EXP_8": 11
+            }
+          },
+          "C06": {
+            "outputs": {
+              "EXP_1": 8,
+              "EXP_2": 11,
+              "EXP_3": 14,
+              "EXP_4": 12,
+              "EXP_5": 8,
+              "EXP_6": 5,
+              "EXP_7": 10,
+              "EXP_8": 11
+            }
+          },
+          "C07": {
+            "outputs": {
+              "EXP_1": 8,
+              "EXP_2": 11,
+              "EXP_3": 11,
+              "EXP_4": 14,
+              "EXP_5": 6,
+              "EXP_6": 11,
+              "EXP_7": 7,
+              "EXP_8": 11
+            }
+          },
+          "C08": {
+            "outputs": {
+              "EXP_1": 8,
+              "EXP_2": 11,
+              "EXP_3": 11,
+              "EXP_4": 12,
+              "EXP_5": 6,
+              "EXP_6": 11,
+              "EXP_7": 7,
+              "EXP_8": 11
+            }
+          },
+          "C09": {
+            "outputs": {
+              "EXP_1": 8,
+              "EXP_2": 11,
+              "EXP_3": 5,
+              "EXP_4": 14,
+              "EXP_5": 6,
+              "EXP_6": 5,
+              "EXP_7": 7,
+              "EXP_8": 11
+            }
+          },
+          "C10": {
+            "outputs": {
+              "EXP_1": 8,
+              "EXP_2": 11,
+              "EXP_3": 5,
+              "EXP_4": 12,
+              "EXP_5": 6,
+              "EXP_6": 5,
+              "EXP_7": 7,
+              "EXP_8": 11
+            }
+          }
+        },
+        "expected_candidate": "C09",
+        "query_limit": 4
+      }
+    },
+    "R2_Petri_Inhibitor_Attractor": {
+      "type": "assessment-exact-fields-v1",
+      "name": "grade",
+      "expected": {
+        "reachable_marking_count": 12,
+        "deadlock_markings": [
+          "0,0,0,4",
+          "1,0,0,2"
+        ],
+        "doomed_non_deadlock_markings": [
+          "0,0,1,3",
+          "0,1,1,2",
+          "0,1,2,1"
+        ],
+        "shortest_deadlock_steps": 6,
+        "shortest_deadlock_path_count": 2,
+        "relaxed_T1_doomed_non_deadlock_count": 4
+      }
+    },
+    "X2_Bounded_Doc_Tariff_Supersession": {
+      "type": "assessment-documents-v1",
+      "name": "investigate",
+      "config": {
+        "documents": {
+          "D1": {
+            "content": {
+              "doc_id": "D1",
+              "source": "STATUTE",
+              "issued_date": "2025-11-01",
+              "series": "ACT-2025-CM",
+              "body": "STATUS: ENACTED\nCRITICAL MINERALS TARRIF ACT 2025 (ACT-2025-CM)\n[SEC_1_BASE_RATES] Statutory base rates (USD/ton): CO = 120, LI = 90, NI = 60.\n[SEC_2_CARBON_FEES] Statutory carbon fees (USD/ton): CO = 20, LI = 15, NI = 10.\n[SEC_3_DEFAULT_QUOTAS] Default per-shipment quotas (tons): CO = 30, LI = 50, NI = 60. Over-quota multiplier = 2 (over-quota tons pay 2 * base_rate).\n[SEC_4_DELEGATION] (a) Only CUSTOMS_RULING documents in series CR-SUBPART-B issued on or after 2026-01-01 may modify per-shipment quota ceilings or administer exemption certificates (EC-*).\n(b) MINISTRY_CIRCULAR, PORT_NOTICE, and CUSTOMS_RULING documents outside series CR-SUBPART-B have no authority over tariffs, quotas, or exemptions.\n(c) RESERVED STATUTORY PARAMETERS: No CUSTOMS_RULING may modify statutory base rates, carbon fees, or the over-quota multiplier; any clause attempting to do so is void (ultra vires) and severable."
+            }
+          },
+          "D2": {
+            "content": {
+              "doc_id": "D2",
+              "source": "MINISTRY_CIRCULAR",
+              "issued_date": "2026-01-15",
+              "series": "MC-2026-04",
+              "body": "STATUS: ENACTED\nMINISTRY CIRCULAR MC-2026-04\n[SEC_1_GUIDANCE] Recommends a 50% flat tariff discount for green corridor shipments of CO, LI, and NI. Not enacted by Parliament and not a CR-SUBPART-B ruling."
+            }
+          },
+          "D3": {
+            "content": {
+              "doc_id": "D3",
+              "source": "CUSTOMS_RULING",
+              "issued_date": "2026-02-20",
+              "series": "CR-SUBPART-B",
+              "body": "STATUS: ENACTED\nBINDING CUSTOMS RULING CR-SUBPART-B-01\nPursuant to ACT-2025-CM [SEC_4_DELEGATION]:\n[SEC_1_QUOTAS] Effective per-shipment quota ceilings for H1 2026: CO = 50 tons, LI = 80 tons, NI = 100 tons.\n[SEC_2_CERTIFICATES] Registered H1 2026 Exemption Certificates (valid for arrivals 2026-01-01 through 2026-06-30 unless amended or revoked):\n- EC-10 (commodity CO): discount_per_ton = 30 USD/ton on in-quota tons; waives_carbon = true.\n- EC-20 (commodity LI): discount_per_ton = 20 USD/ton on in-quota tons; waives_carbon = true.\n- EC-30 (commodity NI): discount_per_ton = 15 USD/ton on in-quota tons; waives_carbon = false."
+            }
+          },
+          "D4": {
+            "content": {
+              "doc_id": "D4",
+              "source": "PORT_NOTICE",
+              "issued_date": "2026-04-10",
+              "series": "PN-2026-18",
+              "body": "STATUS: ENACTED\nPORT OF MERIDIAN NOTICE PN-2026-18\n[SEC_1_LOCAL_CAP] Local terminal billing system caps over-quota surcharges at 10 USD/ton for port handling estimates."
+            }
+          },
+          "D5": {
+            "content": {
+              "doc_id": "D5",
+              "source": "CUSTOMS_RULING",
+              "issued_date": "2026-05-18",
+              "series": "CR-SUBPART-B",
+              "body": "STATUS: ENACTED\nBINDING CUSTOMS RULING CR-SUBPART-B-02 (PARTIAL AMENDMENT TO CR-SUBPART-B-01)\n[SEC_1_QUOTA_AMENDMENT] For all H1 2026 settlements, per-shipment quota ceilings are revised for CO and LI only: CO = 40 tons, LI = 60 tons. (NI is unamended and remains governed by D3 [SEC_1_QUOTAS]).\n[SEC_2_EC10_REVOCATION] Certificate EC-10 is REVOKED for any shipment with arrival_date >= \"2026-05-15\". Shipments with arrival_date < \"2026-05-15\" retain original EC-10 terms.\n[SEC_3_EC30_REDUCTION] For any NI shipment presenting EC-30 with arrival_date >= \"2026-05-01\", EC-30 remains active in reduced form (AMENDED_REDUCED): discount_per_ton is reduced from 15 to 5 USD/ton and waives_carbon remains false. Certificate EC-20 is unamended.\n[SEC_4_LI_BASE_RATE] Emergency market adjustment: raises the base rate for LI from 90 USD/ton to 110 USD/ton effective immediately."
+            }
+          },
+          "D6": {
+            "content": {
+              "doc_id": "D6",
+              "source": "CUSTOMS_RULING",
+              "issued_date": "2026-03-12",
+              "series": "CR-SUBPART-C",
+              "body": "STATUS: ENACTED\nADVISORY VALUATION MEMORANDUM CR-SUBPART-C-04\n[SEC_1_MOISTURE] Provides laboratory moisture sampling tolerances. Does not belong to series CR-SUBPART-B."
+            }
+          },
+          "D7": {
+            "content": {
+              "doc_id": "D7",
+              "source": "STATUTE",
+              "issued_date": "2026-07-05",
+              "series": "ACT-2026-H2",
+              "body": "STATUS: ENACTED\nCRITICAL MINERALS TARRIF AMENDMENT ACT (H2 2026)\n[SEC_1_NEW_RATES] Revises statutory base rates to CO = 100, LI = 70, NI = 50 for shipments after 2026-07-05."
+            }
+          }
+        },
+        "expected": {
+          "governing_doc_ids": [
+            "D1",
+            "D3",
+            "D5"
+          ],
+          "effective_quotas": {
+            "CO": 40,
+            "LI": 60,
+            "NI": 100
+          },
+          "shipment_statuses": {
+            "S1": "VALID_ORIGINAL:OVER_QUOTA",
+            "S2": "REVOKED:IN_QUOTA",
+            "S3": "VALID_ORIGINAL:OVER_QUOTA",
+            "S4": "AMENDED_REDUCED:IN_QUOTA"
+          },
+          "shipment_duties": {
+            "S1": 4800,
+            "S2": 4200,
+            "S3": 6000,
+            "S4": 3250
+          },
+          "total_duty": 18250,
+          "void_clauses_in_governing_docs": [
+            "D5:SEC_4_LI_BASE_RATE"
+          ]
+        },
+        "query_limit": 3
+      }
+    },
+    "T2_Aging_Scheduler_Probes": {
+      "type": "assessment-blackbox-v1",
+      "name": "identify",
+      "config": {
+        "candidates": {
+          "P01": {
+            "outputs": {
+              "SCHED_1": "J1->J2->J3->J4",
+              "SCHED_2": "J1->J3->J2",
+              "SCHED_3": "J1->J2->J3->J5->J4",
+              "SCHED_4": "J1->J2->J3",
+              "SCHED_5": "J1->J2->J3",
+              "SCHED_6": "J1->J3->J2",
+              "SCHED_7": "J1->J2->J4->J3",
+              "SCHED_8": "J1->J2->J3",
+              "SCHED_9": "J1->J2->J3"
+            }
+          },
+          "P02": {
+            "outputs": {
+              "SCHED_1": "J1->J2->J3->J4",
+              "SCHED_2": "J1->J3->J2",
+              "SCHED_3": "J1->J2->J3->J5->J4",
+              "SCHED_4": "J1->J2->J3",
+              "SCHED_5": "J1->J3->J2",
+              "SCHED_6": "J1->J3->J2",
+              "SCHED_7": "J1->J2->J4->J3",
+              "SCHED_8": "J1->J2->J3",
+              "SCHED_9": "J1->J2->J3"
+            }
+          },
+          "P03": {
+            "outputs": {
+              "SCHED_1": "J1->J2->J3->J4",
+              "SCHED_2": "J1->J3->J2",
+              "SCHED_3": "J1->J2->J3->J5->J4",
+              "SCHED_4": "J1->J3->J2",
+              "SCHED_5": "J1->J2->J3",
+              "SCHED_6": "J1->J3->J2",
+              "SCHED_7": "J1->J2->J4->J3",
+              "SCHED_8": "J1->J2->J3",
+              "SCHED_9": "J1->J2->J3"
+            }
+          },
+          "P04": {
+            "outputs": {
+              "SCHED_1": "J1->J2->J3->J4",
+              "SCHED_2": "J1->J3->J2",
+              "SCHED_3": "J1->J2->J3->J5->J4",
+              "SCHED_4": "J1->J3->J2",
+              "SCHED_5": "J1->J3->J2",
+              "SCHED_6": "J1->J3->J2",
+              "SCHED_7": "J1->J2->J4->J3",
+              "SCHED_8": "J1->J3->J2",
+              "SCHED_9": "J1->J2->J3"
+            }
+          },
+          "P05": {
+            "outputs": {
+              "SCHED_1": "J1->J2->J3->J4",
+              "SCHED_2": "J1->J3->J2",
+              "SCHED_3": "J1->J2->J3->J4->J5",
+              "SCHED_4": "J1->J2->J3",
+              "SCHED_5": "J1->J2->J3",
+              "SCHED_6": "J1->J2->J3",
+              "SCHED_7": "J1->J2->J3->J4",
+              "SCHED_8": "J1->J2->J3",
+              "SCHED_9": "J1->J2->J3"
+            }
+          },
+          "P06": {
+            "outputs": {
+              "SCHED_1": "J1->J2->J3->J4",
+              "SCHED_2": "J1->J3->J2",
+              "SCHED_3": "J1->J2->J3->J4->J5",
+              "SCHED_4": "J1->J2->J3",
+              "SCHED_5": "J1->J3->J2",
+              "SCHED_6": "J1->J2->J3",
+              "SCHED_7": "J1->J2->J3->J4",
+              "SCHED_8": "J1->J2->J3",
+              "SCHED_9": "J1->J2->J3"
+            }
+          },
+          "P07": {
+            "outputs": {
+              "SCHED_1": "J1->J2->J3->J4",
+              "SCHED_2": "J1->J3->J2",
+              "SCHED_3": "J1->J2->J3->J4->J5",
+              "SCHED_4": "J1->J3->J2",
+              "SCHED_5": "J1->J2->J3",
+              "SCHED_6": "J1->J2->J3",
+              "SCHED_7": "J1->J2->J3->J4",
+              "SCHED_8": "J1->J2->J3",
+              "SCHED_9": "J1->J2->J3"
+            }
+          },
+          "P08": {
+            "outputs": {
+              "SCHED_1": "J1->J2->J3->J4",
+              "SCHED_2": "J1->J3->J2",
+              "SCHED_3": "J1->J2->J3->J4->J5",
+              "SCHED_4": "J1->J3->J2",
+              "SCHED_5": "J1->J3->J2",
+              "SCHED_6": "J1->J2->J3",
+              "SCHED_7": "J1->J2->J3->J4",
+              "SCHED_8": "J1->J3->J2",
+              "SCHED_9": "J1->J2->J3"
+            }
+          },
+          "P09": {
+            "outputs": {
+              "SCHED_1": "J1->J2->J3->J4",
+              "SCHED_2": "J1->J3->J2",
+              "SCHED_3": "J1->J2->J4->J3->J5",
+              "SCHED_4": "J1->J2->J3",
+              "SCHED_5": "J1->J2->J3",
+              "SCHED_6": "J1->J3->J2",
+              "SCHED_7": "J1->J2->J3->J4",
+              "SCHED_8": "J1->J2->J3",
+              "SCHED_9": "J1->J2->J3"
+            }
+          },
+          "P10": {
+            "outputs": {
+              "SCHED_1": "J1->J2->J3->J4",
+              "SCHED_2": "J1->J3->J2",
+              "SCHED_3": "J1->J2->J4->J3->J5",
+              "SCHED_4": "J1->J2->J3",
+              "SCHED_5": "J1->J3->J2",
+              "SCHED_6": "J1->J3->J2",
+              "SCHED_7": "J1->J2->J3->J4",
+              "SCHED_8": "J1->J2->J3",
+              "SCHED_9": "J1->J2->J3"
+            }
+          },
+          "P11": {
+            "outputs": {
+              "SCHED_1": "J1->J2->J3->J4",
+              "SCHED_2": "J1->J3->J2",
+              "SCHED_3": "J1->J2->J4->J3->J5",
+              "SCHED_4": "J1->J3->J2",
+              "SCHED_5": "J1->J2->J3",
+              "SCHED_6": "J1->J3->J2",
+              "SCHED_7": "J1->J2->J3->J4",
+              "SCHED_8": "J1->J2->J3",
+              "SCHED_9": "J1->J2->J3"
+            }
+          },
+          "P12": {
+            "outputs": {
+              "SCHED_1": "J1->J2->J3->J4",
+              "SCHED_2": "J1->J3->J2",
+              "SCHED_3": "J1->J2->J4->J3->J5",
+              "SCHED_4": "J1->J3->J2",
+              "SCHED_5": "J1->J3->J2",
+              "SCHED_6": "J1->J3->J2",
+              "SCHED_7": "J1->J2->J3->J4",
+              "SCHED_8": "J1->J3->J2",
+              "SCHED_9": "J1->J2->J3"
+            }
+          }
+        },
+        "expected_candidate": "P09",
+        "query_limit": 4
+      }
+    },
+    "T2_Scoped_Exception_Probes": {
+      "type": "assessment-blackbox-v1",
+      "name": "identify",
+      "config": {
+        "candidates": {
+          "S01": {
+            "outputs": {
+              "CODE_1": 30,
+              "CODE_2": 13,
+              "CODE_3": 16,
+              "CODE_4": 15,
+              "CODE_5": 15,
+              "CODE_6": 13,
+              "CODE_7": 15,
+              "CODE_8": 22
+            }
+          },
+          "S02": {
+            "outputs": {
+              "CODE_1": 30,
+              "CODE_2": 13,
+              "CODE_3": 16,
+              "CODE_4": 12,
+              "CODE_5": 12,
+              "CODE_6": 13,
+              "CODE_7": 11,
+              "CODE_8": 22
+            }
+          },
+          "S03": {
+            "outputs": {
+              "CODE_1": 30,
+              "CODE_2": 13,
+              "CODE_3": 16,
+              "CODE_4": 17,
+              "CODE_5": 12,
+              "CODE_6": 17,
+              "CODE_7": 15,
+              "CODE_8": 22
+            }
+          },
+          "S04": {
+            "outputs": {
+              "CODE_1": 30,
+              "CODE_2": 16,
+              "CODE_3": 19,
+              "CODE_4": 15,
+              "CODE_5": 15,
+              "CODE_6": 13,
+              "CODE_7": 15,
+              "CODE_8": 22
+            }
+          },
+          "S05": {
+            "outputs": {
+              "CODE_1": 30,
+              "CODE_2": 16,
+              "CODE_3": 19,
+              "CODE_4": 12,
+              "CODE_5": 12,
+              "CODE_6": 13,
+              "CODE_7": 11,
+              "CODE_8": 22
+            }
+          },
+          "S06": {
+            "outputs": {
+              "CODE_1": 30,
+              "CODE_2": 16,
+              "CODE_3": 19,
+              "CODE_4": 17,
+              "CODE_5": 12,
+              "CODE_6": 17,
+              "CODE_7": 15,
+              "CODE_8": 22
+            }
+          },
+          "S07": {
+            "outputs": {
+              "CODE_1": 30,
+              "CODE_2": 16,
+              "CODE_3": 22,
+              "CODE_4": 15,
+              "CODE_5": 15,
+              "CODE_6": 13,
+              "CODE_7": 15,
+              "CODE_8": 22
+            }
+          },
+          "S08": {
+            "outputs": {
+              "CODE_1": 30,
+              "CODE_2": 16,
+              "CODE_3": 22,
+              "CODE_4": 12,
+              "CODE_5": 12,
+              "CODE_6": 13,
+              "CODE_7": 11,
+              "CODE_8": 22
+            }
+          },
+          "S09": {
+            "outputs": {
+              "CODE_1": 30,
+              "CODE_2": 16,
+              "CODE_3": 22,
+              "CODE_4": 17,
+              "CODE_5": 12,
+              "CODE_6": 17,
+              "CODE_7": 15,
+              "CODE_8": 22
+            }
+          }
+        },
+        "expected_candidate": "S05",
+        "query_limit": 3
+      }
+    },
+    "I2_Scoped_Directive_Precedence": {
+      "type": "assessment-exact-fields-v1",
+      "name": "grade",
+      "expected": {
+        "selected_rows": [
+          {
+            "id": "beta",
+            "tier": "CORE",
+            "weight": 10
+          },
+          {
+            "id": "alpha",
+            "tier": "CORE",
+            "weight": 9
+          },
+          {
+            "id": "eta",
+            "tier": "EDGE",
+            "weight": 8
+          },
+          {
+            "id": "gamma",
+            "tier": "EDGE",
+            "weight": 6
+          }
+        ],
+        "revoked_ids": [
+          "delta"
+        ],
+        "quota_dropped_ids": [
+          "zeta",
+          "epsilon"
+        ],
+        "bonus_applied_ids": [
+          "beta",
+          "eta",
+          "zeta"
+        ],
+        "coupled_checksum": 28
+      }
+    },
+    "R2_DFA_Product": {
+      "type": "assessment-exact-fields-v1",
+      "name": "grade",
+      "expected": {
+        "reachable_states": 23,
+        "minimal_states": 23,
+        "accepted_length_4": 10,
+        "lex_smallest_accepted_length_4": "aaaa"
+      }
+    },
+    "C2_Async_Microtasks": {
+      "type": "assessment-exact-fields-v1",
+      "name": "grade",
+      "expected": {
+        "log": [
+          "outer:start",
+          "inner:start",
+          "root:end:1",
+          "inner:resume:1",
+          "then:add:3",
+          "micro:multiply:9",
+          "root:then:9",
+          "outer:await:I:9",
+          "outer:finally:9",
+          "then:nested:9",
+          "result:then:O:9",
+          "timer:9"
+        ],
+        "x": 9
+      }
+    },
+    "X2_Bounded_Doc_Incident_SLA_Arbitration": {
+      "type": "assessment-documents-v1",
+      "name": "investigate",
+      "config": {
+        "documents": {
+          "M1": {
+            "content": {
+              "doc_id": "M1",
+              "source": "MASTER_ADDENDUM",
+              "recorded_date": "2026-01-10",
+              "series": "SLA-2026-MASTER",
+              "body": "STATUS: RATIFIED\n2026 ENTERPRISE SLA MASTER ADDENDUM (SLA-2026-MASTER)\n[SEC_1_RATES_AND_CAPS]\n- CORE cluster: sla_threshold_min = 10, credit_per_excess_min = 20, repeat_breach_surcharge = 150, cluster_liability_cap = 1400.\n- EDGE cluster: sla_threshold_min = 15, credit_per_excess_min = 12, repeat_breach_surcharge = 80, cluster_liability_cap = 600.\n[SEC_2_SCHEDULED_MAINTENANCE]\n- scheduled_maint_min_notice_hours = 72; scheduled_maint_deduction_min = 30.\n- An incident with notice_hours >= 72 receives a 30-minute deduction from raw_downtime_min prior to threshold comparison, unless disallowed by a ratified ARBITRATION_ORDER.\n[SEC_3_SECURITY_DELEGATION]\n- Only SECURITY_BULLETIN documents in series SB-2026-SEC may designate an incident as SECURITY_EXEMPT, and ONLY IF the incident has 0 < reboot_min <= 45.\n- No SECURITY_BULLETIN may modify credit rates, thresholds, surcharges, or caps; any clause attempting to do so is void (ultra vires).\n[SEC_4_ARBITRATION_DELEGATION]\n- Only ARBITRATION_ORDER documents in series ARB-2026-BIND recorded on or before the audit cutoff govern disputed classifications, maintenance deductions, and audited raw downtime.\n- Each section of an ARBITRATION_ORDER carries an explicit RATIFIED flag; sections with RATIFIED: false are stayed/unratified and have no legal effect."
+            }
+          },
+          "M2": {
+            "content": {
+              "doc_id": "M2",
+              "source": "STATUS_POSTMORTEM",
+              "recorded_date": "2026-08-05",
+              "series": "PM-2026-88",
+              "body": "STATUS: PUBLISHED\nREGIONAL SRE POSTMORTEM PM-2026-88\nOperator notes asserting that INC-1 and INC-3 were routine maintenance. Not a binding SLA instrument."
+            }
+          },
+          "M3": {
+            "content": {
+              "doc_id": "M3",
+              "source": "SECURITY_BULLETIN",
+              "recorded_date": "2026-08-14",
+              "series": "SB-2026-SEC",
+              "body": "STATUS: RATIFIED\nSECURITY BULLETIN SB-2026-SEC-12 (CVE-2026-4410 KERNEL MITIGATION)\n[SEC_1_INC2_EXEMPT] Designates INC-2 as SECURITY_EXEMPT under emergency reboot directive.\n[SEC_2_INC4_EXEMPT] Designates INC-4 as SECURITY_EXEMPT under emergency reboot directive.\n[SEC_3_CORE_RATE] Temporary relief clause: reduces CORE credit_per_excess_min from 20 to 10 for all August 2026 incidents."
+            }
+          },
+          "M4": {
+            "content": {
+              "doc_id": "M4",
+              "source": "SECURITY_BULLETIN",
+              "recorded_date": "2026-08-20",
+              "series": "SB-2026-OPS",
+              "body": "STATUS: RATIFIED\nOPERATIONAL ADVISORY SB-2026-OPS-07\nNon-security operational bulletin (series SB-2026-OPS, not SB-2026-SEC) requesting exemption for INC-1."
+            }
+          },
+          "M5": {
+            "content": {
+              "doc_id": "M5",
+              "source": "ARBITRATION_ORDER",
+              "recorded_date": "2026-09-18",
+              "series": "ARB-2026-BIND",
+              "body": "STATUS: RATIFIED\nCONSOLIDATED ARBITRATION ORDER ARB-2026-BIND-09\n[PART_A_INC2_REVOCATION] RATIFIED: true. Telemetry proves INC-2 reboot_min = 52 (> 45-minute ceiling in M1 [SEC_3_SECURITY_DELEGATION]). The SECURITY_EXEMPT designation for INC-2 in M3 is REVOKED. However, 5 minutes of duplicate probe overlap are deducted, setting adjusted_raw_downtime_min = 50 for INC-2.\n[PART_B_INC3_WAIVER_REVOKE] RATIFIED: true. Operator executed INC-3 outside the noticed maintenance window; the 30-minute scheduled maintenance deduction for INC-3 is DISALLOWED despite notice_hours = 96.\n[PART_C_INC4_STAYED_DRAFT] RATIFIED: false (STAYED PENDING OCTOBER HEARING). Preliminary motion to revoke SECURITY_EXEMPT for INC-4 is stayed and unratified as of 2026-09-18."
+            }
+          },
+          "M6": {
+            "content": {
+              "doc_id": "M6",
+              "source": "ARBITRATION_ORDER",
+              "recorded_date": "2026-10-04",
+              "series": "ARB-2026-BIND",
+              "body": "STATUS: RATIFIED\nSUPPLEMENTAL ARBITRATION ORDER ARB-2026-BIND-10\nRecorded 2026-10-04 (after Q3 cutoff 2026-09-30). Resolves stayed motion on INC-4 for Q4 true-up."
+            }
+          },
+          "M7": {
+            "content": {
+              "doc_id": "M7",
+              "source": "STATUS_POSTMORTEM",
+              "recorded_date": "2026-09-01",
+              "series": "PM-2026-92",
+              "body": "STATUS: PUBLISHED\nMONTHLY AVAILABILITY DIGEST PM-2026-92\nSummary of August customer support tickets."
+            }
+          }
+        },
+        "expected": {
+          "governing_doc_ids": [
+            "M1",
+            "M3",
+            "M5"
+          ],
+          "incident_classifications": {
+            "INC-1": "CHARGEABLE_PRIMARY",
+            "INC-2": "CHARGEABLE_REPEAT",
+            "INC-3": "CHARGEABLE_PRIMARY",
+            "INC-4": "SECURITY_EXEMPT"
+          },
+          "chargeable_minutes": {
+            "INC-1": 30,
+            "INC-2": 40,
+            "INC-3": 35,
+            "INC-4": 0
+          },
+          "incident_credits": {
+            "INC-1": 600,
+            "INC-2": 950,
+            "INC-3": 420,
+            "INC-4": 0
+          },
+          "cluster_payable": {
+            "CORE": 1400,
+            "EDGE": 420
+          },
+          "void_or_stayed_clauses": [
+            "M3:SEC_3_CORE_RATE",
+            "M5:PART_C_INC4_STAYED_DRAFT"
+          ]
+        },
+        "query_limit": 3
+      }
+    },
+    "M2_Node_Capacitated_Cut": {
+      "type": "assessment-exact-fields-v1",
+      "name": "grade",
+      "expected": {
+        "max_flow": 6,
+        "min_cut_capacity": 6,
+        "min_cut_count": 1,
+        "second_cut_capacity": 8,
+        "min_cut_source_side": [],
+        "min_cut_nodes": [
+          "A",
+          "B"
+        ]
+      }
+    },
+    "R2_Causal_Twin_Intervention": {
+      "expected": {
+        "abducted_worlds": [
+          "010",
+          "101",
+          "221"
+        ],
+        "counterfactual_Z_do_X0": {
+          "$fraction": "4/3"
+        },
+        "guaranteed_Z2_interventions": [
+          "X=2"
+        ],
+        "interventional_Z_do_X0_given_W1": {
+          "$fraction": "7/8"
+        },
+        "strict_but_for_X_worlds": [
+          "010",
+          "221"
+        ]
+      },
+      "name": "grade",
+      "type": "assessment-exact-fields-v1"
+    },
+    "L2_Temporal_Evidence_Withdrawals": {
+      "type": "assessment-exact-fields-v1",
+      "name": "grade",
+      "expected": {
+        "active_memos": [
+          "D02",
+          "D04",
+          "D06",
+          "D08",
+          "D10",
+          "D12"
+        ],
+        "certain_holders": [
+          "Dune",
+          "Origin"
+        ],
+        "possible_holders": [
+          "Birch",
+          "Cedar",
+          "Dune",
+          "Elm",
+          "Origin",
+          "Terminal"
+        ],
+        "minimum_withdrawals": 2,
+        "optimal_withdrawal_sets": [
+          [
+            "D04",
+            "D12"
+          ],
+          [
+            "D08",
+            "D12"
+          ]
+        ],
+        "smallest_failure_order": "ACBGHEDFI",
+        "new_precedence_if_delivered": []
+      }
+    },
+    "C2_Tagged_Stack_ABA": {
+      "type": "assessment-exact-fields-v1",
+      "name": "grade",
+      "expected": {
+        "m2_duplicate_held_possible": false,
+        "m3_duplicate_held_possible": true,
+        "m2_resurrection_possible": true,
+        "m3_bad_with_failed_pop_possible": true,
+        "m1_bad_after_failed_push_possible": false,
+        "minimum_safe_modulus": 5,
+        "minimum_safe_tag_bits": 3
+      }
+    },
+    "C2_Compiler_Exception_Guards": {
+      "type": "assessment-exact-fields-v1",
+      "name": "grade",
+      "expected": {
+        "cse_minimal_guards": [
+          4,
+          18,
+          128
+        ],
+        "erase_minimal_guards": [
+          6,
+          18,
+          20,
+          68,
+          128
+        ],
+        "handler_minimal_guards": [
+          1,
+          16
+        ],
+        "bundle_minimal_guards": [
+          3,
+          18,
+          20,
+          144
+        ],
+        "omit_restore_minimal_guards": [
+          260,
+          384
+        ],
+        "aggressive_minimal_guards": [
+          92,
+          259
+        ],
+        "hoist_erase_equivalent": true
+      }
+    }
+  },
+  "extension_sha256": {
+    "src/assessment_interactive.ts": "103a6cbc98e5d12e0533fbbed6280129d36cccf29f523e12b4f7cf05dd68125d",
+    "src/assessment_blackbox.ts": "d2239b280902e97499c18ff6e8703f3a61f779f025e0e453298bca08b24d7a77",
+    "src/assessment_documents.ts": "f41c7b488bf864caa64c7f32f167f3256f960531d28b677d964b688921639675",
+    "src/assessment_depot.ts": "676e64c087561b81cea43e4aec8ff85fefa5d91becc50fe9637711e2f3295cb8",
+    "src/assessment_push_planning.ts": "ba5d577190b7566be6a07be54bc4bdbbac4ab1f0875420fbf7fda9b4f29e1059",
+    "src/assessment_delegated_release.ts": "a921b8b3669aef0d587109b32ecc0519999b513d88bcfbc1f56154c3fb283873",
+    "src/assessment_safe_control.ts": "18d26ae3396fbeab7fe2c6a7263231bf1d4a8e59767cc5497cc441d392158645"
+  }
+}

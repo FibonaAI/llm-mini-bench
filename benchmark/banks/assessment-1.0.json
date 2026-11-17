@@ -1,0 +1,118 @@
+{
+  "version": "1.0",
+  "title": "Assessment capability question bank",
+  "released_on": "2026-11-10",
+  "task_ids": [
+    "K04_Genetic_Code",
+    "K05_DNS_Negative_Cache",
+    "K06_Treaty_Exceptions",
+    "R01_Stopping_Urn",
+    "R02_Causal_Counterfactual",
+    "R03_Parallel_Schedule",
+    "C01_Finally_Aliasing",
+    "C03_Optimistic_Transactions",
+    "X02_Payment_Evidence",
+    "X03_Bitemporal_Revisions",
+    "I01_Coupled_Transform",
+    "I02_Quoted_Instructions",
+    "T02_Inventory_Impossible",
+    "T03_Booking_Feedback"
+  ],
+  "task_sha256": "6e089b1c6a3762e56c16c803045106481eeef3a0d81437457ad3795e86cb684d",
+  "task_file": "assessment-1.0.questions.json",
+  "grading": {
+    "K04_Genetic_Code": { "type": "assessment-named-v1", "name": "K04_Genetic_Code" },
+    "K05_DNS_Negative_Cache": { "type": "assessment-named-v1", "name": "K05_DNS_Negative_Cache" },
+    "K06_Treaty_Exceptions": { "type": "assessment-named-v1", "name": "K06_Treaty_Exceptions" },
+    "R01_Stopping_Urn": { "type": "assessment-named-v1", "name": "R01_Stopping_Urn" },
+    "R02_Causal_Counterfactual": { "type": "assessment-named-v1", "name": "R02_Causal_Counterfactual" },
+    "R03_Parallel_Schedule": { "type": "assessment-named-v1", "name": "R03_Parallel_Schedule" },
+    "C01_Finally_Aliasing": { "type": "assessment-named-v1", "name": "C01_Finally_Aliasing" },
+    "C03_Optimistic_Transactions": { "type": "assessment-named-v1", "name": "C03_Optimistic_Transactions" },
+    "X02_Payment_Evidence": { "type": "assessment-named-v1", "name": "X02_Payment_Evidence" },
+    "X03_Bitemporal_Revisions": { "type": "assessment-named-v1", "name": "X03_Bitemporal_Revisions" },
+    "I01_Coupled_Transform": { "type": "assessment-named-v1", "name": "I01_Coupled_Transform" },
+    "I02_Quoted_Instructions": { "type": "assessment-named-v1", "name": "I02_Quoted_Instructions" },
+    "T02_Inventory_Impossible": { "type": "assessment-named-v1", "name": "T02_Inventory_Impossible" },
+    "T03_Booking_Feedback": { "type": "assessment-named-v1", "name": "T03_Booking_Feedback" }
+  },
+  "source_sha256": {
+    "src/assessment_tasks.ts": "078ba162dd2fce2796f3efa8140d48e975e63858b4c71770c736cb745be5c886",
+    "src/assessment_tools.ts": "4593d23e98358dadffa32c1dceb39865e0a932ef97089c46a595a67f466e26a7",
+    "src/assessment_knowledge.ts": "0a646aa3241df8e2345bf2d9eff675e3461ab2fc6011eb89ba8c5b77d96adde2",
+    "src/assessment_challenges.ts": "352f8eef464b5577bc8fd44049a9988d62d28f8fc97d3bdcbd98bd6fe17ef1f3",
+    "src/assessment_json.ts": "5787bc63c240f41f65d4ef5d6966aac76e85c6454ae335304a863d64ec58e7cf",
+    "src/assessment_data.ts": "bb3c63c7890e834b8e975f6c4e865566569e0bd769ca0d3a7a1ca68bafeb56c9",
+    "src/assessment_dfa.ts": "c4de3ec41268197f565f688d2ab38e45b7745555861010661ee53d891f7a6a6a",
+    "src/assessment_resource.ts": "788c044a367de628f37231f4048b63afbaf87103e38b993c993a1edb097d6e86"
+  },
+  "selection": {
+    "K04_Genetic_Code": {
+      "role": "challenge",
+      "reason": "指定非标准遗传密码表；初轮见1/3、2/3与满分，提供不同于标准码回忆的检查。"
+    },
+    "K05_DNS_Negative_Cache": {
+      "role": "challenge",
+      "reason": "缓存键作用域与TTL规则提供网络协议知识覆盖；初轮可评分结果出现分差，Gemini超时另报。"
+    },
+    "K06_Treaty_Exceptions": {
+      "role": "coverage_anchor",
+      "reason": "人文法律文本与生物、网络互补；初轮全满，保留覆盖而不据此排名法律能力。"
+    },
+    "R01_Stopping_Urn": {
+      "role": "challenge",
+      "reason": "潜变量后验、停止规则和期望联合推理，复测见配置分差；运行失败单列。"
+    },
+    "R02_Causal_Counterfactual": {
+      "role": "challenge",
+      "reason": "观察、干预与反事实不可互换，复测有配置分差和轮间波动。"
+    },
+    "R03_Parallel_Schedule": {
+      "role": "challenge",
+      "reason": "资源约束、最优值和全部最优解计数提供独特有限规划覆盖。"
+    },
+    "C01_Finally_Aliasing": {
+      "role": "challenge",
+      "reason": "对象同一性、变更与重绑定和finally交互，实测出现部分分与波动。"
+    },
+    "C03_Optimistic_Transactions": {
+      "role": "challenge",
+      "reason": "保存读状态、版本验证、只读/中止与交错计数，初轮见内容分差；输出截断单列。"
+    },
+    "X02_Payment_Evidence": {
+      "role": "coverage_anchor",
+      "reason": "虽饱和，但去重、冲销、账户隔离与非追溯修正未被整行版本修订覆盖。"
+    },
+    "X03_Bitemporal_Revisions": {
+      "role": "challenge",
+      "reason": "双时间轴、整行修订先于有效性/适用性，以及物理证据定位；初轮见分差。"
+    },
+    "I01_Coupled_Transform": {
+      "role": "challenge",
+      "reason": "筛选、排序、关联保持与耦合校验和，复测见分差；内容与指令检查分开。"
+    },
+    "I02_Quoted_Instructions": {
+      "role": "coverage_anchor",
+      "reason": "虽饱和，显式引用数据与可信指令的边界不能由转换题替代。"
+    },
+    "T02_Inventory_Impossible": {
+      "role": "behavior_challenge",
+      "reason": "不可行性识别、保护约束和停止行为；两轮低thinking配置反复非法尝试耗尽预算，保留轨迹而非伪造内容0分。"
+    },
+    "T03_Booking_Feedback": {
+      "role": "coverage_anchor",
+      "reason": "虽饱和，但真实模拟版本冲突后的合法恢复提供独特工具闭环覆盖。"
+    }
+  },
+  "scoring_policy": {
+    "content": "Per-question semantic partial credit; no bank-wide aggregate or inferred domain weights.",
+    "instruction": "Report format/instruction checks separately; instruction-task correctness requires all instruction checks.",
+    "missing": "Incomplete or ungradable content is null, never imputed zero. Tool-state partial credit is retained with outcome and tool checks.",
+    "repeats": "Retain every prespecified repetition; report completion and gradability denominators, never best-of.",
+    "identity": "Exact route, requested thinking, task/source hashes and execution protocol must accompany results.",
+    "scope": "Small exploratory capability bank, not a psychometrically validated scale."
+  },
+  "evidence": [
+    "baselines/assessment-bank-1.0-smoke.jsonl"
+  ]
+}

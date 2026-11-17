@@ -1,0 +1,15 @@
+{
+  "bank_version": "1.0",
+  "targets": [
+    {"id": "a-none", "route_id": "provider-a-model-x", "thinking": "none"},
+    {"id": "a-high", "route_id": "provider-a-model-x", "thinking": "high"},
+    {"id": "b-none", "route_id": "provider-b-model-x", "thinking": "none"},
+    {"id": "b-high", "route_id": "provider-b-model-x", "thinking": "high"}
+  ],
+  "rounds": 1,
+  "concurrency": 4,
+  "limits": {
+    "timeout": 300,
+    "timeout_scope": "sample"
+  }
+}

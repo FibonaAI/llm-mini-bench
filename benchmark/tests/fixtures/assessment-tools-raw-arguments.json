@@ -1,0 +1,1672 @@
+{
+  "source": "Python json.loads -> assessment_tools.py simulator.call reference",
+  "scenarios": [
+    {
+      "kind": "inventory_feasible",
+      "key": "units",
+      "raw_arguments": "{\"source\":\"A\",\"destination\":\"C\",\"units\":1}",
+      "name": "transfer_stock",
+      "initial": {
+        "stock": {
+          "A": 5,
+          "B": 2,
+          "C": 1
+        },
+        "initial": {
+          "A": 5,
+          "B": 2,
+          "C": 1
+        },
+        "reserves": {
+          "A": 2,
+          "B": 1,
+          "C": 0
+        },
+        "history": [],
+        "invalid_attempts": 0,
+        "inspected": false
+      },
+      "result": {
+        "ok": true,
+        "stock": {
+          "A": 4,
+          "B": 2,
+          "C": 2
+        },
+        "protected_minimum": {
+          "A": 2,
+          "B": 1,
+          "C": 0
+        },
+        "capacity": {
+          "A": 10,
+          "B": 10,
+          "C": 5
+        },
+        "routes": [
+          [
+            "A",
+            "C"
+          ],
+          [
+            "B",
+            "C"
+          ]
+        ],
+        "max_units_per_transfer": 3
+      },
+      "state": {
+        "stock": {
+          "A": 4,
+          "B": 2,
+          "C": 2
+        },
+        "initial": {
+          "A": 5,
+          "B": 2,
+          "C": 1
+        },
+        "reserves": {
+          "A": 2,
+          "B": 1,
+          "C": 0
+        },
+        "history": [
+          {
+            "name": "transfer_stock",
+            "arguments": {
+              "source": "A",
+              "destination": "C",
+              "units": 1
+            },
+            "result": {
+              "ok": true,
+              "stock": {
+                "A": 4,
+                "B": 2,
+                "C": 2
+              },
+              "protected_minimum": {
+                "A": 2,
+                "B": 1,
+                "C": 0
+              },
+              "capacity": {
+                "A": 10,
+                "B": 10,
+                "C": 5
+              },
+              "routes": [
+                [
+                  "A",
+                  "C"
+                ],
+                [
+                  "B",
+                  "C"
+                ]
+              ],
+              "max_units_per_transfer": 3
+            }
+          }
+        ],
+        "invalid_attempts": 0,
+        "inspected": false
+      }
+    },
+    {
+      "kind": "inventory_feasible",
+      "key": "units",
+      "raw_arguments": "{\"source\":\"A\",\"destination\":\"C\",\"units\":1.0}",
+      "name": "transfer_stock",
+      "initial": {
+        "stock": {
+          "A": 5,
+          "B": 2,
+          "C": 1
+        },
+        "initial": {
+          "A": 5,
+          "B": 2,
+          "C": 1
+        },
+        "reserves": {
+          "A": 2,
+          "B": 1,
+          "C": 0
+        },
+        "history": [],
+        "invalid_attempts": 0,
+        "inspected": false
+      },
+      "result": {
+        "ok": false,
+        "error": "invalid route or quantity"
+      },
+      "state": {
+        "stock": {
+          "A": 5,
+          "B": 2,
+          "C": 1
+        },
+        "initial": {
+          "A": 5,
+          "B": 2,
+          "C": 1
+        },
+        "reserves": {
+          "A": 2,
+          "B": 1,
+          "C": 0
+        },
+        "history": [
+          {
+            "name": "transfer_stock",
+            "arguments": {
+              "source": "A",
+              "destination": "C",
+              "units": 1.0
+            },
+            "result": {
+              "ok": false,
+              "error": "invalid route or quantity"
+            }
+          }
+        ],
+        "invalid_attempts": 1,
+        "inspected": false
+      }
+    },
+    {
+      "kind": "inventory_feasible",
+      "key": "units",
+      "raw_arguments": "{\"source\":\"A\",\"destination\":\"C\",\"units\":1e0}",
+      "name": "transfer_stock",
+      "initial": {
+        "stock": {
+          "A": 5,
+          "B": 2,
+          "C": 1
+        },
+        "initial": {
+          "A": 5,
+          "B": 2,
+          "C": 1
+        },
+        "reserves": {
+          "A": 2,
+          "B": 1,
+          "C": 0
+        },
+        "history": [],
+        "invalid_attempts": 0,
+        "inspected": false
+      },
+      "result": {
+        "ok": false,
+        "error": "invalid route or quantity"
+      },
+      "state": {
+        "stock": {
+          "A": 5,
+          "B": 2,
+          "C": 1
+        },
+        "initial": {
+          "A": 5,
+          "B": 2,
+          "C": 1
+        },
+        "reserves": {
+          "A": 2,
+          "B": 1,
+          "C": 0
+        },
+        "history": [
+          {
+            "name": "transfer_stock",
+            "arguments": {
+              "source": "A",
+              "destination": "C",
+              "units": 1.0
+            },
+            "result": {
+              "ok": false,
+              "error": "invalid route or quantity"
+            }
+          }
+        ],
+        "invalid_attempts": 1,
+        "inspected": false
+      }
+    },
+    {
+      "kind": "inventory_feasible",
+      "key": "units",
+      "raw_arguments": "{\"source\":\"A\",\"destination\":\"C\",\"units\":1E+0}",
+      "name": "transfer_stock",
+      "initial": {
+        "stock": {
+          "A": 5,
+          "B": 2,
+          "C": 1
+        },
+        "initial": {
+          "A": 5,
+          "B": 2,
+          "C": 1
+        },
+        "reserves": {
+          "A": 2,
+          "B": 1,
+          "C": 0
+        },
+        "history": [],
+        "invalid_attempts": 0,
+        "inspected": false
+      },
+      "result": {
+        "ok": false,
+        "error": "invalid route or quantity"
+      },
+      "state": {
+        "stock": {
+          "A": 5,
+          "B": 2,
+          "C": 1
+        },
+        "initial": {
+          "A": 5,
+          "B": 2,
+          "C": 1
+        },
+        "reserves": {
+          "A": 2,
+          "B": 1,
+          "C": 0
+        },
+        "history": [
+          {
+            "name": "transfer_stock",
+            "arguments": {
+              "source": "A",
+              "destination": "C",
+              "units": 1.0
+            },
+            "result": {
+              "ok": false,
+              "error": "invalid route or quantity"
+            }
+          }
+        ],
+        "invalid_attempts": 1,
+        "inspected": false
+      }
+    },
+    {
+      "kind": "booking",
+      "key": "start",
+      "raw_arguments": "{\"room\":\"L\",\"start\":9,\"duration\":2,\"revision\":1}",
+      "name": "reserve_room",
+      "initial": {
+        "rooms": {
+          "S": {
+            "capacity": 4,
+            "projector": true
+          },
+          "L": {
+            "capacity": 8,
+            "projector": true
+          },
+          "A": {
+            "capacity": 10,
+            "projector": false
+          }
+        },
+        "free": {
+          "S": [
+            9,
+            10,
+            11
+          ],
+          "L": [
+            9,
+            10,
+            11
+          ],
+          "A": [
+            9,
+            10,
+            11
+          ]
+        },
+        "revisions": {
+          "S": 1,
+          "L": 1,
+          "A": 1
+        },
+        "booking": null,
+        "external_change_done": false,
+        "history": [],
+        "invalid_attempts": 0,
+        "feedback_seen": false
+      },
+      "result": {
+        "ok": false,
+        "error": "revision_conflict",
+        "room": "L",
+        "capacity": 8,
+        "projector": true,
+        "free_slots": [
+          10,
+          11
+        ],
+        "revision": 2
+      },
+      "state": {
+        "rooms": {
+          "S": {
+            "capacity": 4,
+            "projector": true
+          },
+          "L": {
+            "capacity": 8,
+            "projector": true
+          },
+          "A": {
+            "capacity": 10,
+            "projector": false
+          }
+        },
+        "free": {
+          "S": [
+            9,
+            10,
+            11
+          ],
+          "L": [
+            10,
+            11
+          ],
+          "A": [
+            9,
+            10,
+            11
+          ]
+        },
+        "revisions": {
+          "S": 1,
+          "L": 2,
+          "A": 1
+        },
+        "booking": null,
+        "external_change_done": true,
+        "history": [
+          {
+            "name": "reserve_room",
+            "arguments": {
+              "room": "L",
+              "start": 9,
+              "duration": 2,
+              "revision": 1
+            },
+            "result": {
+              "ok": false,
+              "error": "revision_conflict",
+              "room": "L",
+              "capacity": 8,
+              "projector": true,
+              "free_slots": [
+                10,
+                11
+              ],
+              "revision": 2
+            }
+          }
+        ],
+        "invalid_attempts": 0,
+        "feedback_seen": true
+      }
+    },
+    {
+      "kind": "booking",
+      "key": "start",
+      "raw_arguments": "{\"room\":\"L\",\"start\":9.0,\"duration\":2,\"revision\":1}",
+      "name": "reserve_room",
+      "initial": {
+        "rooms": {
+          "S": {
+            "capacity": 4,
+            "projector": true
+          },
+          "L": {
+            "capacity": 8,
+            "projector": true
+          },
+          "A": {
+            "capacity": 10,
+            "projector": false
+          }
+        },
+        "free": {
+          "S": [
+            9,
+            10,
+            11
+          ],
+          "L": [
+            9,
+            10,
+            11
+          ],
+          "A": [
+            9,
+            10,
+            11
+          ]
+        },
+        "revisions": {
+          "S": 1,
+          "L": 1,
+          "A": 1
+        },
+        "booking": null,
+        "external_change_done": false,
+        "history": [],
+        "invalid_attempts": 0,
+        "feedback_seen": false
+      },
+      "result": {
+        "ok": false,
+        "error": "invalid booking arguments"
+      },
+      "state": {
+        "rooms": {
+          "S": {
+            "capacity": 4,
+            "projector": true
+          },
+          "L": {
+            "capacity": 8,
+            "projector": true
+          },
+          "A": {
+            "capacity": 10,
+            "projector": false
+          }
+        },
+        "free": {
+          "S": [
+            9,
+            10,
+            11
+          ],
+          "L": [
+            9,
+            10,
+            11
+          ],
+          "A": [
+            9,
+            10,
+            11
+          ]
+        },
+        "revisions": {
+          "S": 1,
+          "L": 1,
+          "A": 1
+        },
+        "booking": null,
+        "external_change_done": false,
+        "history": [
+          {
+            "name": "reserve_room",
+            "arguments": {
+              "room": "L",
+              "start": 9.0,
+              "duration": 2,
+              "revision": 1
+            },
+            "result": {
+              "ok": false,
+              "error": "invalid booking arguments"
+            }
+          }
+        ],
+        "invalid_attempts": 1,
+        "feedback_seen": false
+      }
+    },
+    {
+      "kind": "booking",
+      "key": "start",
+      "raw_arguments": "{\"room\":\"L\",\"start\":9e0,\"duration\":2,\"revision\":1}",
+      "name": "reserve_room",
+      "initial": {
+        "rooms": {
+          "S": {
+            "capacity": 4,
+            "projector": true
+          },
+          "L": {
+            "capacity": 8,
+            "projector": true
+          },
+          "A": {
+            "capacity": 10,
+            "projector": false
+          }
+        },
+        "free": {
+          "S": [
+            9,
+            10,
+            11
+          ],
+          "L": [
+            9,
+            10,
+            11
+          ],
+          "A": [
+            9,
+            10,
+            11
+          ]
+        },
+        "revisions": {
+          "S": 1,
+          "L": 1,
+          "A": 1
+        },
+        "booking": null,
+        "external_change_done": false,
+        "history": [],
+        "invalid_attempts": 0,
+        "feedback_seen": false
+      },
+      "result": {
+        "ok": false,
+        "error": "invalid booking arguments"
+      },
+      "state": {
+        "rooms": {
+          "S": {
+            "capacity": 4,
+            "projector": true
+          },
+          "L": {
+            "capacity": 8,
+            "projector": true
+          },
+          "A": {
+            "capacity": 10,
+            "projector": false
+          }
+        },
+        "free": {
+          "S": [
+            9,
+            10,
+            11
+          ],
+          "L": [
+            9,
+            10,
+            11
+          ],
+          "A": [
+            9,
+            10,
+            11
+          ]
+        },
+        "revisions": {
+          "S": 1,
+          "L": 1,
+          "A": 1
+        },
+        "booking": null,
+        "external_change_done": false,
+        "history": [
+          {
+            "name": "reserve_room",
+            "arguments": {
+              "room": "L",
+              "start": 9.0,
+              "duration": 2,
+              "revision": 1
+            },
+            "result": {
+              "ok": false,
+              "error": "invalid booking arguments"
+            }
+          }
+        ],
+        "invalid_attempts": 1,
+        "feedback_seen": false
+      }
+    },
+    {
+      "kind": "booking",
+      "key": "start",
+      "raw_arguments": "{\"room\":\"L\",\"start\":9E+0,\"duration\":2,\"revision\":1}",
+      "name": "reserve_room",
+      "initial": {
+        "rooms": {
+          "S": {
+            "capacity": 4,
+            "projector": true
+          },
+          "L": {
+            "capacity": 8,
+            "projector": true
+          },
+          "A": {
+            "capacity": 10,
+            "projector": false
+          }
+        },
+        "free": {
+          "S": [
+            9,
+            10,
+            11
+          ],
+          "L": [
+            9,
+            10,
+            11
+          ],
+          "A": [
+            9,
+            10,
+            11
+          ]
+        },
+        "revisions": {
+          "S": 1,
+          "L": 1,
+          "A": 1
+        },
+        "booking": null,
+        "external_change_done": false,
+        "history": [],
+        "invalid_attempts": 0,
+        "feedback_seen": false
+      },
+      "result": {
+        "ok": false,
+        "error": "invalid booking arguments"
+      },
+      "state": {
+        "rooms": {
+          "S": {
+            "capacity": 4,
+            "projector": true
+          },
+          "L": {
+            "capacity": 8,
+            "projector": true
+          },
+          "A": {
+            "capacity": 10,
+            "projector": false
+          }
+        },
+        "free": {
+          "S": [
+            9,
+            10,
+            11
+          ],
+          "L": [
+            9,
+            10,
+            11
+          ],
+          "A": [
+            9,
+            10,
+            11
+          ]
+        },
+        "revisions": {
+          "S": 1,
+          "L": 1,
+          "A": 1
+        },
+        "booking": null,
+        "external_change_done": false,
+        "history": [
+          {
+            "name": "reserve_room",
+            "arguments": {
+              "room": "L",
+              "start": 9.0,
+              "duration": 2,
+              "revision": 1
+            },
+            "result": {
+              "ok": false,
+              "error": "invalid booking arguments"
+            }
+          }
+        ],
+        "invalid_attempts": 1,
+        "feedback_seen": false
+      }
+    },
+    {
+      "kind": "booking",
+      "key": "duration",
+      "raw_arguments": "{\"room\":\"L\",\"start\":9,\"duration\":2,\"revision\":1}",
+      "name": "reserve_room",
+      "initial": {
+        "rooms": {
+          "S": {
+            "capacity": 4,
+            "projector": true
+          },
+          "L": {
+            "capacity": 8,
+            "projector": true
+          },
+          "A": {
+            "capacity": 10,
+            "projector": false
+          }
+        },
+        "free": {
+          "S": [
+            9,
+            10,
+            11
+          ],
+          "L": [
+            9,
+            10,
+            11
+          ],
+          "A": [
+            9,
+            10,
+            11
+          ]
+        },
+        "revisions": {
+          "S": 1,
+          "L": 1,
+          "A": 1
+        },
+        "booking": null,
+        "external_change_done": false,
+        "history": [],
+        "invalid_attempts": 0,
+        "feedback_seen": false
+      },
+      "result": {
+        "ok": false,
+        "error": "revision_conflict",
+        "room": "L",
+        "capacity": 8,
+        "projector": true,
+        "free_slots": [
+          10,
+          11
+        ],
+        "revision": 2
+      },
+      "state": {
+        "rooms": {
+          "S": {
+            "capacity": 4,
+            "projector": true
+          },
+          "L": {
+            "capacity": 8,
+            "projector": true
+          },
+          "A": {
+            "capacity": 10,
+            "projector": false
+          }
+        },
+        "free": {
+          "S": [
+            9,
+            10,
+            11
+          ],
+          "L": [
+            10,
+            11
+          ],
+          "A": [
+            9,
+            10,
+            11
+          ]
+        },
+        "revisions": {
+          "S": 1,
+          "L": 2,
+          "A": 1
+        },
+        "booking": null,
+        "external_change_done": true,
+        "history": [
+          {
+            "name": "reserve_room",
+            "arguments": {
+              "room": "L",
+              "start": 9,
+              "duration": 2,
+              "revision": 1
+            },
+            "result": {
+              "ok": false,
+              "error": "revision_conflict",
+              "room": "L",
+              "capacity": 8,
+              "projector": true,
+              "free_slots": [
+                10,
+                11
+              ],
+              "revision": 2
+            }
+          }
+        ],
+        "invalid_attempts": 0,
+        "feedback_seen": true
+      }
+    },
+    {
+      "kind": "booking",
+      "key": "duration",
+      "raw_arguments": "{\"room\":\"L\",\"start\":9,\"duration\":2.0,\"revision\":1}",
+      "name": "reserve_room",
+      "initial": {
+        "rooms": {
+          "S": {
+            "capacity": 4,
+            "projector": true
+          },
+          "L": {
+            "capacity": 8,
+            "projector": true
+          },
+          "A": {
+            "capacity": 10,
+            "projector": false
+          }
+        },
+        "free": {
+          "S": [
+            9,
+            10,
+            11
+          ],
+          "L": [
+            9,
+            10,
+            11
+          ],
+          "A": [
+            9,
+            10,
+            11
+          ]
+        },
+        "revisions": {
+          "S": 1,
+          "L": 1,
+          "A": 1
+        },
+        "booking": null,
+        "external_change_done": false,
+        "history": [],
+        "invalid_attempts": 0,
+        "feedback_seen": false
+      },
+      "result": {
+        "ok": false,
+        "error": "invalid booking arguments"
+      },
+      "state": {
+        "rooms": {
+          "S": {
+            "capacity": 4,
+            "projector": true
+          },
+          "L": {
+            "capacity": 8,
+            "projector": true
+          },
+          "A": {
+            "capacity": 10,
+            "projector": false
+          }
+        },
+        "free": {
+          "S": [
+            9,
+            10,
+            11
+          ],
+          "L": [
+            9,
+            10,
+            11
+          ],
+          "A": [
+            9,
+            10,
+            11
+          ]
+        },
+        "revisions": {
+          "S": 1,
+          "L": 1,
+          "A": 1
+        },
+        "booking": null,
+        "external_change_done": false,
+        "history": [
+          {
+            "name": "reserve_room",
+            "arguments": {
+              "room": "L",
+              "start": 9,
+              "duration": 2.0,
+              "revision": 1
+            },
+            "result": {
+              "ok": false,
+              "error": "invalid booking arguments"
+            }
+          }
+        ],
+        "invalid_attempts": 1,
+        "feedback_seen": false
+      }
+    },
+    {
+      "kind": "booking",
+      "key": "duration",
+      "raw_arguments": "{\"room\":\"L\",\"start\":9,\"duration\":2e0,\"revision\":1}",
+      "name": "reserve_room",
+      "initial": {
+        "rooms": {
+          "S": {
+            "capacity": 4,
+            "projector": true
+          },
+          "L": {
+            "capacity": 8,
+            "projector": true
+          },
+          "A": {
+            "capacity": 10,
+            "projector": false
+          }
+        },
+        "free": {
+          "S": [
+            9,
+            10,
+            11
+          ],
+          "L": [
+            9,
+            10,
+            11
+          ],
+          "A": [
+            9,
+            10,
+            11
+          ]
+        },
+        "revisions": {
+          "S": 1,
+          "L": 1,
+          "A": 1
+        },
+        "booking": null,
+        "external_change_done": false,
+        "history": [],
+        "invalid_attempts": 0,
+        "feedback_seen": false
+      },
+      "result": {
+        "ok": false,
+        "error": "invalid booking arguments"
+      },
+      "state": {
+        "rooms": {
+          "S": {
+            "capacity": 4,
+            "projector": true
+          },
+          "L": {
+            "capacity": 8,
+            "projector": true
+          },
+          "A": {
+            "capacity": 10,
+            "projector": false
+          }
+        },
+        "free": {
+          "S": [
+            9,
+            10,
+            11
+          ],
+          "L": [
+            9,
+            10,
+            11
+          ],
+          "A": [
+            9,
+            10,
+            11
+          ]
+        },
+        "revisions": {
+          "S": 1,
+          "L": 1,
+          "A": 1
+        },
+        "booking": null,
+        "external_change_done": false,
+        "history": [
+          {
+            "name": "reserve_room",
+            "arguments": {
+              "room": "L",
+              "start": 9,
+              "duration": 2.0,
+              "revision": 1
+            },
+            "result": {
+              "ok": false,
+              "error": "invalid booking arguments"
+            }
+          }
+        ],
+        "invalid_attempts": 1,
+        "feedback_seen": false
+      }
+    },
+    {
+      "kind": "booking",
+      "key": "duration",
+      "raw_arguments": "{\"room\":\"L\",\"start\":9,\"duration\":2E+0,\"revision\":1}",
+      "name": "reserve_room",
+      "initial": {
+        "rooms": {
+          "S": {
+            "capacity": 4,
+            "projector": true
+          },
+          "L": {
+            "capacity": 8,
+            "projector": true
+          },
+          "A": {
+            "capacity": 10,
+            "projector": false
+          }
+        },
+        "free": {
+          "S": [
+            9,
+            10,
+            11
+          ],
+          "L": [
+            9,
+            10,
+            11
+          ],
+          "A": [
+            9,
+            10,
+            11
+          ]
+        },
+        "revisions": {
+          "S": 1,
+          "L": 1,
+          "A": 1
+        },
+        "booking": null,
+        "external_change_done": false,
+        "history": [],
+        "invalid_attempts": 0,
+        "feedback_seen": false
+      },
+      "result": {
+        "ok": false,
+        "error": "invalid booking arguments"
+      },
+      "state": {
+        "rooms": {
+          "S": {
+            "capacity": 4,
+            "projector": true
+          },
+          "L": {
+            "capacity": 8,
+            "projector": true
+          },
+          "A": {
+            "capacity": 10,
+            "projector": false
+          }
+        },
+        "free": {
+          "S": [
+            9,
+            10,
+            11
+          ],
+          "L": [
+            9,
+            10,
+            11
+          ],
+          "A": [
+            9,
+            10,
+            11
+          ]
+        },
+        "revisions": {
+          "S": 1,
+          "L": 1,
+          "A": 1
+        },
+        "booking": null,
+        "external_change_done": false,
+        "history": [
+          {
+            "name": "reserve_room",
+            "arguments": {
+              "room": "L",
+              "start": 9,
+              "duration": 2.0,
+              "revision": 1
+            },
+            "result": {
+              "ok": false,
+              "error": "invalid booking arguments"
+            }
+          }
+        ],
+        "invalid_attempts": 1,
+        "feedback_seen": false
+      }
+    },
+    {
+      "kind": "booking",
+      "key": "revision",
+      "raw_arguments": "{\"room\":\"L\",\"start\":9,\"duration\":2,\"revision\":1}",
+      "name": "reserve_room",
+      "initial": {
+        "rooms": {
+          "S": {
+            "capacity": 4,
+            "projector": true
+          },
+          "L": {
+            "capacity": 8,
+            "projector": true
+          },
+          "A": {
+            "capacity": 10,
+            "projector": false
+          }
+        },
+        "free": {
+          "S": [
+            9,
+            10,
+            11
+          ],
+          "L": [
+            9,
+            10,
+            11
+          ],
+          "A": [
+            9,
+            10,
+            11
+          ]
+        },
+        "revisions": {
+          "S": 1,
+          "L": 1,
+          "A": 1
+        },
+        "booking": null,
+        "external_change_done": false,
+        "history": [],
+        "invalid_attempts": 0,
+        "feedback_seen": false
+      },
+      "result": {
+        "ok": false,
+        "error": "revision_conflict",
+        "room": "L",
+        "capacity": 8,
+        "projector": true,
+        "free_slots": [
+          10,
+          11
+        ],
+        "revision": 2
+      },
+      "state": {
+        "rooms": {
+          "S": {
+            "capacity": 4,
+            "projector": true
+          },
+          "L": {
+            "capacity": 8,
+            "projector": true
+          },
+          "A": {
+            "capacity": 10,
+            "projector": false
+          }
+        },
+        "free": {
+          "S": [
+            9,
+            10,
+            11
+          ],
+          "L": [
+            10,
+            11
+          ],
+          "A": [
+            9,
+            10,
+            11
+          ]
+        },
+        "revisions": {
+          "S": 1,
+          "L": 2,
+          "A": 1
+        },
+        "booking": null,
+        "external_change_done": true,
+        "history": [
+          {
+            "name": "reserve_room",
+            "arguments": {
+              "room": "L",
+              "start": 9,
+              "duration": 2,
+              "revision": 1
+            },
+            "result": {
+              "ok": false,
+              "error": "revision_conflict",
+              "room": "L",
+              "capacity": 8,
+              "projector": true,
+              "free_slots": [
+                10,
+                11
+              ],
+              "revision": 2
+            }
+          }
+        ],
+        "invalid_attempts": 0,
+        "feedback_seen": true
+      }
+    },
+    {
+      "kind": "booking",
+      "key": "revision",
+      "raw_arguments": "{\"room\":\"L\",\"start\":9,\"duration\":2,\"revision\":1.0}",
+      "name": "reserve_room",
+      "initial": {
+        "rooms": {
+          "S": {
+            "capacity": 4,
+            "projector": true
+          },
+          "L": {
+            "capacity": 8,
+            "projector": true
+          },
+          "A": {
+            "capacity": 10,
+            "projector": false
+          }
+        },
+        "free": {
+          "S": [
+            9,
+            10,
+            11
+          ],
+          "L": [
+            9,
+            10,
+            11
+          ],
+          "A": [
+            9,
+            10,
+            11
+          ]
+        },
+        "revisions": {
+          "S": 1,
+          "L": 1,
+          "A": 1
+        },
+        "booking": null,
+        "external_change_done": false,
+        "history": [],
+        "invalid_attempts": 0,
+        "feedback_seen": false
+      },
+      "result": {
+        "ok": false,
+        "error": "invalid booking arguments"
+      },
+      "state": {
+        "rooms": {
+          "S": {
+            "capacity": 4,
+            "projector": true
+          },
+          "L": {
+            "capacity": 8,
+            "projector": true
+          },
+          "A": {
+            "capacity": 10,
+            "projector": false
+          }
+        },
+        "free": {
+          "S": [
+            9,
+            10,
+            11
+          ],
+          "L": [
+            9,
+            10,
+            11
+          ],
+          "A": [
+            9,
+            10,
+            11
+          ]
+        },
+        "revisions": {
+          "S": 1,
+          "L": 1,
+          "A": 1
+        },
+        "booking": null,
+        "external_change_done": false,
+        "history": [
+          {
+            "name": "reserve_room",
+            "arguments": {
+              "room": "L",
+              "start": 9,
+              "duration": 2,
+              "revision": 1.0
+            },
+            "result": {
+              "ok": false,
+              "error": "invalid booking arguments"
+            }
+          }
+        ],
+        "invalid_attempts": 1,
+        "feedback_seen": false
+      }
+    },
+    {
+      "kind": "booking",
+      "key": "revision",
+      "raw_arguments": "{\"room\":\"L\",\"start\":9,\"duration\":2,\"revision\":1e0}",
+      "name": "reserve_room",
+      "initial": {
+        "rooms": {
+          "S": {
+            "capacity": 4,
+            "projector": true
+          },
+          "L": {
+            "capacity": 8,
+            "projector": true
+          },
+          "A": {
+            "capacity": 10,
+            "projector": false
+          }
+        },
+        "free": {
+          "S": [
+            9,
+            10,
+            11
+          ],
+          "L": [
+            9,
+            10,
+            11
+          ],
+          "A": [
+            9,
+            10,
+            11
+          ]
+        },
+        "revisions": {
+          "S": 1,
+          "L": 1,
+          "A": 1
+        },
+        "booking": null,
+        "external_change_done": false,
+        "history": [],
+        "invalid_attempts": 0,
+        "feedback_seen": false
+      },
+      "result": {
+        "ok": false,
+        "error": "invalid booking arguments"
+      },
+      "state": {
+        "rooms": {
+          "S": {
+            "capacity": 4,
+            "projector": true
+          },
+          "L": {
+            "capacity": 8,
+            "projector": true
+          },
+          "A": {
+            "capacity": 10,
+            "projector": false
+          }
+        },
+        "free": {
+          "S": [
+            9,
+            10,
+            11
+          ],
+          "L": [
+            9,
+            10,
+            11
+          ],
+          "A": [
+            9,
+            10,
+            11
+          ]
+        },
+        "revisions": {
+          "S": 1,
+          "L": 1,
+          "A": 1
+        },
+        "booking": null,
+        "external_change_done": false,
+        "history": [
+          {
+            "name": "reserve_room",
+            "arguments": {
+              "room": "L",
+              "start": 9,
+              "duration": 2,
+              "revision": 1.0
+            },
+            "result": {
+              "ok": false,
+              "error": "invalid booking arguments"
+            }
+          }
+        ],
+        "invalid_attempts": 1,
+        "feedback_seen": false
+      }
+    },
+    {
+      "kind": "booking",
+      "key": "revision",
+      "raw_arguments": "{\"room\":\"L\",\"start\":9,\"duration\":2,\"revision\":1E+0}",
+      "name": "reserve_room",
+      "initial": {
+        "rooms": {
+          "S": {
+            "capacity": 4,
+            "projector": true
+          },
+          "L": {
+            "capacity": 8,
+            "projector": true
+          },
+          "A": {
+            "capacity": 10,
+            "projector": false
+          }
+        },
+        "free": {
+          "S": [
+            9,
+            10,
+            11
+          ],
+          "L": [
+            9,
+            10,
+            11
+          ],
+          "A": [
+            9,
+            10,
+            11
+          ]
+        },
+        "revisions": {
+          "S": 1,
+          "L": 1,
+          "A": 1
+        },
+        "booking": null,
+        "external_change_done": false,
+        "history": [],
+        "invalid_attempts": 0,
+        "feedback_seen": false
+      },
+      "result": {
+        "ok": false,
+        "error": "invalid booking arguments"
+      },
+      "state": {
+        "rooms": {
+          "S": {
+            "capacity": 4,
+            "projector": true
+          },
+          "L": {
+            "capacity": 8,
+            "projector": true
+          },
+          "A": {
+            "capacity": 10,
+            "projector": false
+          }
+        },
+        "free": {
+          "S": [
+            9,
+            10,
+            11
+          ],
+          "L": [
+            9,
+            10,
+            11
+          ],
+          "A": [
+            9,
+            10,
+            11
+          ]
+        },
+        "revisions": {
+          "S": 1,
+          "L": 1,
+          "A": 1
+        },
+        "booking": null,
+        "external_change_done": false,
+        "history": [
+          {
+            "name": "reserve_room",
+            "arguments": {
+              "room": "L",
+              "start": 9,
+              "duration": 2,
+              "revision": 1.0
+            },
+            "result": {
+              "ok": false,
+              "error": "invalid booking arguments"
+            }
+          }
+        ],
+        "invalid_attempts": 1,
+        "feedback_seen": false
+      }
+    }
+  ]
+}

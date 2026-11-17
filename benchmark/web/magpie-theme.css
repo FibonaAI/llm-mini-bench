@@ -1,0 +1,99 @@
+/* Fallback theme tokens verified against installed Magpie app CSS. Host tokens take precedence. */
+:root {
+  color-scheme: light;
+  --bg: #f4f4f6;
+  --card: #ffffff;
+  --card-2: #f9f9fb;      /* expanded editor */
+  --pill: #f1f1f4;
+  --pill-hover: #e9e9ee;
+  /* the header's view switch: its track and the thumb on the view shown, the
+     track a shade deeper than a pill so the white thumb stands off it (#477) */
+  --seg-track: #e6e6eb;
+  --seg-thumb: var(--card);
+  --seg-edge: 0 1px 2px rgba(0, 0, 0, .14), 0 0 0 .5px rgba(0, 0, 0, .08);
+  /* a control's quiet text (the switch's other views, a text button): darker
+     than --muted, so it reads at 4.5:1 or better on every surface it sits on */
+  --ctl-fg: #63636b;
+  --line: #e3e3e8;
+  --line-2: #ececf0;
+  --fg: #1c1c21;
+  --fg-2: #4b4b53;
+  --muted: #85858d;
+  --faint: #b9b9c2;
+  --accent: #4f46e5;
+  --accent-soft: #eeedfd;
+  --accent-fg: #ffffff;
+  --sel: #ecebfb;
+  --green: #189a58;
+  --green-soft: #e4f6ec;
+  --red: #d64545;
+  --red-soft: #fbe9e9;
+  /* a failed state's dot is drawn as an x, not a red dot alone: to a
+     red-green colour-blind reader the green and red dots are one colour
+     (coolmantou on Discord). Its shape says it, in greyscale too */
+  --x-mark: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 10 10'%3E%3Cpath d='M2 2l6 6M8 2l-6 6' stroke='%23000' stroke-width='2.4' stroke-linecap='round'/%3E%3C/svg%3E");
+  --amber: #b45309;
+  --amber-soft: #fbf0df;
+  /* an agent magpie set up that no longer goes through it */
+  --drift: #ce2c31;
+  --drift-soft: #feebec;
+  --pop-bg: rgba(255, 255, 255, .94);
+  --shadow: 0 16px 44px rgba(20, 22, 30, .16), 0 2px 8px rgba(20, 22, 30, .06), 0 0 0 .5px rgba(20, 22, 30, .1);
+  --font: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Segoe UI", system-ui, sans-serif;
+  --code: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+  --logo-invert: 0;
+  --tk-s: #1a7f45; --tk-k: #7c3aed; --tk-f: #1d4ed8; --tk-n: #b45309; --tk-v: #0e7490; --tk-o: #a21caf; --tk-c: #85858d;
+  /* what a chart tells apart: providers, agents, models */
+  --c1: #4f46e5; --c2: #0ea5e9; --c3: #10b981; --c4: #f59e0b; --c5: #ec4899; --c6: #8b5cf6; --c7: #64748b;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    color-scheme: dark;
+    --bg: #1a1a1e;
+    --card: #232327;
+    --card-2: #1f1f23;
+    --pill: #2d2d33;
+    --pill-hover: #36363d;
+    --seg-track: rgba(255, 255, 255, .035);
+    --seg-thumb: rgba(255, 255, 255, .15);
+    --seg-edge: inset 0 .5px 0 rgba(255, 255, 255, .08), 0 1px 2px rgba(0, 0, 0, .3);
+    --line: #333339;
+    --line-2: #2c2c32;
+    --fg: #ededf1;
+    --fg-2: #b9b9c1;
+    --muted: #8b8b94;
+    --faint: #56565f;
+    --ctl-fg: #a1a1aa;
+    --accent: #a5b4fc;
+    --accent-soft: #2b2c47;
+    --accent-fg: #14142a;
+    --sel: #33345a;
+    --green: #6fd99b;
+    --green-soft: #1e3a2b;
+    --red: #f28b82;
+    --red-soft: #45272a;
+    --amber: #f2b544;
+    --amber-soft: #3f3220;
+    --drift: #ff9592;
+    --drift-soft: #3b1219;
+    --pop-bg: rgba(38, 38, 43, .96);
+    --shadow: 0 16px 44px rgba(0, 0, 0, .55), 0 2px 8px rgba(0, 0, 0, .3), 0 0 0 .5px rgba(255, 255, 255, .1);
+    --logo-invert: 1;
+    --tk-s: #98d8a4; --tk-k: #c4b5fd; --tk-f: #93c5fd; --tk-n: #f2b544; --tk-v: #67e8f9; --tk-o: #f0abfc; --tk-c: #8b8b94;
+    --c1: #a5b4fc; --c2: #7dd3fc; --c3: #6ee7b7; --c4: #fcd34d; --c5: #f9a8d4; --c6: #c4b5fd; --c7: #94a3b8;
+  }
+}
+:root[data-theme="dark"] {
+  color-scheme: dark;
+  --bg: #1a1a1e; --card: #232327; --card-2: #1f1f23; --pill: #2d2d33; --pill-hover: #36363d;
+  --seg-track: rgba(255, 255, 255, .035); --seg-thumb: rgba(255, 255, 255, .15); --seg-edge: inset 0 .5px 0 rgba(255, 255, 255, .08), 0 1px 2px rgba(0, 0, 0, .3);
+  --line: #333339; --line-2: #2c2c32; --fg: #ededf1; --fg-2: #b9b9c1; --muted: #8b8b94; --faint: #56565f; --ctl-fg: #a1a1aa;
+  --accent: #a5b4fc; --accent-soft: #2b2c47; --accent-fg: #14142a; --sel: #33345a;
+  --green: #6fd99b; --green-soft: #1e3a2b; --red: #f28b82; --red-soft: #45272a; --amber: #f2b544; --amber-soft: #3f3220;
+  --drift: #ff9592; --drift-soft: #3b1219;
+  --pop-bg: rgba(38, 38, 43, .96);
+  --shadow: 0 16px 44px rgba(0, 0, 0, .55), 0 2px 8px rgba(0, 0, 0, .3), 0 0 0 .5px rgba(255, 255, 255, .1);
+  --logo-invert: 1;
+  --tk-s: #98d8a4; --tk-k: #c4b5fd; --tk-f: #93c5fd; --tk-n: #f2b544; --tk-v: #67e8f9; --tk-o: #f0abfc; --tk-c: #8b8b94;
+  --c1: #a5b4fc; --c2: #7dd3fc; --c3: #6ee7b7; --c4: #fcd34d; --c5: #f9a8d4; --c6: #c4b5fd; --c7: #94a3b8;
+}
