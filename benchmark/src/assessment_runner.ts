@@ -51,6 +51,24 @@ function assessment_usage(payload: unknown): AssessmentUsage | null {
     if (['input_tokens', 'output_tokens'].some(key => /[.eE]/.test(assessmentJsonNumberToken(payload.usage as object, key) ?? ''))) return null;
     return { input_tokens, output_tokens };
 }
+/**
+ * The complete stream text is already journaled frame by frame. Store it again on the call only
+ * when the journaled chunks do not reproduce it byte for byte (aborted streams, HTTP error bodies).
+ */
+export function raw_text_evidence(raw_response_text: string | undefined, chunks: readonly string[]): Record<string, unknown> {
+    if (raw_response_text === undefined) return {};
+    if (chunks.length && chunks.join('') === raw_response_text) return { raw_stream_chunks: chunks.length };
+    return { raw_response_text };
+}
+/** Rebuild a call's exact raw stream text from its own field or its journaled chunks; null if incomplete. */
+export function journal_raw_response_text(call: Record<string, unknown>, rows: readonly Record<string, unknown>[]): string | null {
+    if (typeof call.raw_response_text === 'string') return call.raw_response_text;
+    if (typeof call.raw_stream_chunks !== 'number') return null;
+    const chunks = rows.filter(row => row.type === 'stream_chunk' && row.call_id === call.call_id)
+        .sort((a, b) => Number(a.chunk_index) - Number(b.chunk_index));
+    if (chunks.length !== call.raw_stream_chunks || chunks.some((chunk, index) => chunk.chunk_index !== index)) return null;
+    return chunks.map(chunk => String(chunk.raw_stream_text)).join('');
+}
 /** Reject duplicate keys, nonfinite numbers, non-object arguments and excessive nesting. */
 export function assessment_arguments(raw: unknown): Record<string, unknown> {
     if (typeof raw !== 'string' || raw.length > 100000) throw new TypeError('arguments must be a bounded JSON string');
@@ -187,6 +205,7 @@ export async function run_assessment_sample(client: AssessmentClient, task: Runn
             let cancellationTimer: ReturnType<typeof setInterval> | undefined;
             const controller = new AbortController(), stream = responses_stream_telemetry();
             let chunk_index = 0, acceptingChunks = true, journalFailed = false;
+            const journaledChunks: string[] = [];
             const started = Date.now();
             try {
                 const remaining = deadline - Date.now();
@@ -194,7 +213,8 @@ export async function run_assessment_sample(client: AssessmentClient, task: Runn
                     signal: controller.signal, telemetry: stream,
                     on_chunk(raw_stream_text, elapsed_seconds) {
                         if (!acceptingChunks) return;
-                        try { journal.write({ type: 'stream_chunk', ...sample, sample_id, call_id, turn, ...(retryPolicy ? { api_attempt: retry + 1 } : {}), chunk_index: chunk_index++, elapsed_seconds, raw_stream_text }); }
+                        // Chunks carry only what identifies them; sample metadata lives on the call record.
+                        try { journal.write({ type: 'stream_chunk', sample_id, call_id, turn, ...(retryPolicy ? { api_attempt: retry + 1 } : {}), chunk_index: chunk_index++, elapsed_seconds, raw_stream_text }); journaledChunks.push(raw_stream_text); }
                         catch (error) { journalFailed = true; throw error; }
                     }
                 }));
@@ -221,7 +241,7 @@ export async function run_assessment_sample(client: AssessmentClient, task: Runn
             payload = record(raw) ? raw : { error: 'non-object response', received: raw ?? null };
             const cost = budget.settle(reservation, payload, pricing, outputCap, status === -1, retryPolicy);
             costs.push(cost); usages.push(assessment_usage(payload));
-            journal.write({ type: 'call', ...sample, sample_id, call_id, turn, ...(retryPolicy ? { api_attempt: retry + 1 } : {}), request: body, http_status: status, elapsed_seconds: duration, estimated_uncached_cost_usd: cost, raw_response: payload, stream: structuredClone(stream), ...(raw_response_text === undefined ? {} : { raw_response_text }) });
+            journal.write({ type: 'call', ...sample, sample_id, call_id, turn, ...(retryPolicy ? { api_attempt: retry + 1 } : {}), request: body, http_status: status, elapsed_seconds: duration, estimated_uncached_cost_usd: cost, raw_response: payload, stream: structuredClone(stream), ...raw_text_evidence(raw_response_text, journaledChunks) });
             calls.push(call_id); elapsed += duration; text = calibration_visible_text(payload);
             if (cancelled?.()) { outcome = 'cancelled'; break; }
             if (expired()) { outcome = 'api_failure'; local_error = 'SampleTimeout'; break; }

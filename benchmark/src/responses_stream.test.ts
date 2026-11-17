@@ -1,3 +1,4 @@
+import { journal_raw_response_text } from './assessment_runner.ts';
 import { describe, expect, test } from 'bun:test';
 import { GatewayClient } from './client.ts';
 import { ResponsesStreamDecoder, responses_stream_telemetry } from './responses_stream.ts';
@@ -142,7 +143,7 @@ describe('Responses SSE HTTP and runner integration', () => {
             const result = await run_assessment_sample(new GatewayClient(`http://127.0.0.1:${server.port}`, 'key'), task, { model: 'm', thinking: 'high' }, 1, { ...config, max_api_retries: 1 }, pricing, new AssessmentBudget(null, null), { write(row) { records.push(row); } }, undefined, async () => {});
             expect(result.status).toBe('completed'); expect(requests).toBe(2); expect(result.grade?.content_score).toBe(1);
             const calls = records.filter(row => row.type === 'call');
-            expect(calls[0].stream.termination).toBe('protocol_error'); expect(calls[0].raw_response_text).toContain('partial');
+            expect(calls[0].stream.termination).toBe('protocol_error'); expect(journal_raw_response_text(calls[0], records)).toContain('partial');
             expect(calls[1].stream.terminal_event).toBe('response.completed');
             expect(result.usage).toBeNull(); expect(result.estimated_uncached_cost_usd).toBeNull();
         } finally { server.stop(true); }

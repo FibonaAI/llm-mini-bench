@@ -1,3 +1,4 @@
+import { journal_raw_response_text } from './assessment_runner.ts';
 import { describe, expect, test } from 'bun:test';
 import { GatewayClient } from './client.ts';
 import { AssessmentBudget, AssessmentJournal, run_assessment_sample } from '../calibrate_assessment.ts';
@@ -58,7 +59,12 @@ describe('Responses-only HTTP transport', () => {
             const observation = await run_assessment_sample(client, { id: 'test', domain: 'test', kind: 'text', prompt: 'Return 42', grade() { throw new Error('invalid usage must not reach grading'); } }, { model: 'm', thinking: 'default' }, 1, { max_output_tokens: 100, max_turns: 1, max_tool_calls: 1, timeout: 10 }, pricing, budget, new AssessmentJournal({ write(line) { evidence += line; } }));
             expect(observation.status).toBe('usage_or_cap_failure');
             expect(budget.stop_reason).toBe('missing_usage_cost');
-            const saved = evidence.trim().split('\n').map(line => JSON.parse(line)).find(row => row.type === 'call') as { raw_response_text: string };
+            const rows = evidence.trim().split('\n').map(line => JSON.parse(line));
+            const call = rows.find(row => row.type === 'call');
+            // Exact bytes live once, in the stream chunks; the call references them by count.
+            expect(call.raw_response_text).toBeUndefined();
+            expect(rows.filter(row => row.type === 'stream_chunk').every(row => Object.keys(row).length <= 7 && !('model' in row))).toBe(true);
+            const saved = { raw_response_text: journal_raw_response_text(call, rows)! };
             expect(saved.raw_response_text).toBe(terminal);
             expect(saved.raw_response_text).toContain('"input_tokens":10.0');
             const replay = new AssessmentBudget(1, 1);

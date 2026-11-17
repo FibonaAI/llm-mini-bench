@@ -106,6 +106,8 @@ export class SampleJournal {
         try {
             let value = { ...clone(record), ...this.identity };
             if (value.type === 'call' || value.type === 'stream_chunk') value.call_id = this.identity.attempt_id + ':' + String(value.turn) + ':' + String(value.api_attempt ?? 1);
+            // Stream chunks are the bulk of a journal: keep only their identity, never repeated run metadata.
+            if (value.type === 'stream_chunk') value = { type: 'stream_chunk', call_id: value.call_id, sample_id: value.sample_id, attempt_id: this.identity.attempt_id, chunk_index: value.chunk_index, elapsed_seconds: value.elapsed_seconds, raw_stream_text: value.raw_stream_text };
             else if (value.type === 'observation')
                 value.calls = (value.calls as string[]).map(id => this.identity.attempt_id + ':' + id.split(':').slice(1).join(':'));
             value = this.journal.redact_record(value);

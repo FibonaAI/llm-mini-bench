@@ -41,7 +41,7 @@
   "selection": {
     "K23_HTTP_Conditional_Cache_Precedence": {
       "role": "knowledge_text",
-      "reason": "Tests RFC 9110 Section 13.1.3 (If-None-Match present and evaluating to true forces ignoring If-Modified-Since -> 200), Section 13.1.5 (If-Range strong-comparison failure against weak W/\"rev-7\" forces ignoring unsatisfiable Range: bytes=5000-5999 -> 200 instead of 416), Section 13.2.2 Step 1 (If-Match: * suppresses If-Unmodified-Since -> 204), Pragma: no-cache with vs without Cache-Control, and RFC 5861 stale-while-revalidate windowing."
+      "reason": "Tests RFC 9110 §13.1.2 weak comparison on If-None-Match: \"rev-7\" against W/\"rev-7\" (304), §13.1.5 strong comparison failure on If-Range: \"rev-7\" against W/\"rev-7\" ignoring unsatisfiable Range (200), §13.2.2 If-Match: * suppressing If-Unmodified-Since (204), 304 header retention of s-maxage=40 over new Expires=300s, min-fresh=20 with initial Age=15 at t=10, Pragma: no-cache ignored when Cache-Control is present, and RFC 5861 stale-while-revalidate windowing."
     },
     "K23_IEEE754_ThreeValued_Semantics": {
       "role": "knowledge_text",
@@ -49,35 +49,35 @@
     },
     "R23_InContext_Glyph_Morphism": {
       "role": "reasoning_text",
-      "reason": "Tests in-context induction of hidden morphism parameters (kappa, rho, omega) from 3 calibration traces and generalization across non-involutive neutral-spin twists, shielded pre-shifts triggering zero-charge phase mirrors, and vacuum-quench inversion."
+      "reason": "Tests in-context induction of a Z_5 chiral braid algebraic system (kappa, mu, [alpha,beta,gamma], delta, omega) from 7 traces plus inducing the Back-Reflection Echo law from worked chain traces C1-C4, applied to a 5-cell dynamic chain reduction and 30-state inverse synthesis."
     },
     "R23_InContext_Conservation_Frames": {
       "role": "reasoning_text",
-      "reason": "Tests in-context learning of non-Pearl flux-conserving clamp dynamics with null-impulse exemption (when k == X_nat(U)), parity shield gates, and over-driven counterfactual hysteresis ratcheting."
+      "reason": "Tests in-context scientific law discovery in a 6-state chiral flux lattice (inducing shear lambda, overlap_precedence, ratchet_rule, and discharge_multiplier from calibration expectations) and 3-step sequential state/frustration tracking across Resonant Pinning, Null-Impulse carry, and Free Recoil discharge."
     },
     "C23_Async_Generator_Finally_Override": {
       "role": "code_text",
-      "reason": "Tests that gen.next(3) synchronously resumes inner()'s finally block (pushing 'IF2:3:7' before the queued microtask 'M:107'), whereas inner.next(3) returns a rejected Promise that worker()'s yield* awaits via Await, allowing 'M:107' to execute strictly between 'IF2:3:7' and worker()'s catch block ('C:boom:107')."
+      "reason": "Tests ECMAScript AsyncGenerator yield* delegation where gen.throw(\"boom\") suspends at a yield inside inner() finally block; gen.next(7) resumes inner() finally block and re-throws \"boom\" into worker() catch block, which rebinds alias and pauses at await Promise.resolve() while queued gen.return(\"abort\") waits behind the in-flight next(7) microtask."
     },
     "C23_MVCC_Savepoint_SSI": {
       "role": "code_text",
-      "reason": "Tests AtSubAbort_PredicateLocks retention of SIREAD locks and already-recorded rw-conflicts, and unhinted Cahill/PostgreSQL SSI read-only snapshot timing (where T1 commits when read-only T3 took snapshot v0 before T2 committed, but aborts as a cycle-free false positive when T3 took snapshot v1 after T2 committed)."
+      "reason": "Tests PostgreSQL MVCC savepoint rollback visibility, SIREAD predicate-lock retention across ROLLBACK TO SAVEPOINT (s2), write-lock release vs retained SIREAD when a concurrent transaction rolls back its conflicting write inside a savepoint (s3), and 3-transaction SSI dangerous structure detection with a read-only transaction at snapshot v1 (s4)."
     },
     "X23_Subagent_MultiTrack_Reconciliation": {
       "role": "context_text",
-      "reason": "Tests main-subagent multi-track coordination across steer (tool-boundary) vs followUp (turn-boundary) delivery, forkId snapshot inheritance before steer read, waiting_for_children premature reply rejection, and worktree rebase vs disjoint-file merge admission."
+      "reason": "Tests main-subagent multi-track coordination across 2-hop forkId (sub-1 -> sub-3 -> sub-6) pendingInbound read boundaries, rebase_onto_shared configuration sync, waiting_for_children premature reply rejection with Turn-2 followUp watchdog recovery, and sequential worktree merge conflict cascade at t=120s."
     },
     "E23_Tight_Conditional_Audit": {
       "role": "context_tool",
-      "reason": "Tests 6-call selective document retrieval, field-level authority isolation on n4, non-commuting transfer guards T1 (n1->n2 when c=c1) and T2 (c1->c2 when n=n1) that cannot chain from (c1,n1) to (c2,n2) for Build B, and a double-masked waiver trap where w2 [ops] is revoked at 15:10 (> 15:00 timing decoy) and has satisfied guard 'iff D has valid latency evidence', masking the fact that ops only has authority for latency waivers (not recovery waivers)."
+      "reason": "Tests 6-call selective document retrieval, field-level authority isolation on n4, non-commuting transfer guards T1/T2, and role-scoped authority where qa is only authorized to modify latency_max and recovery_min (so conditional build exemption w2 is an unauthorized directive and ignored despite its unrevoked timestamp at 15:00)."
     },
     "I23_MultiAgent_DAG_Orchestration": {
       "role": "instruction_text",
-      "reason": "Tests multi-subagent parallel DAG scheduling under shared lock contention ('core' delaying J2 while speculative J3/J5 run), structured-receipt precedence over prompt-injected summaries, mid-flight pro-rata speculative cancellation, and runtimeMode ceilings."
+      "reason": "Tests multi-subagent DAG scheduling under worker/verifier slot caps and shared locks, two-stage verifier sign-off handoff (requires_signoff: true retaining locks across V1 queue while freeing W2), split speculative predicates (!= failed vs == clean), and pro-rata mid-flight cancellation."
     },
     "I23_Polysemy_Contextual_Translation": {
       "role": "instruction_text",
-      "reason": "Tests cross-scenario polysemy and contronym disambiguation (UK vs US parliamentary 'table', legal/audit 'qualified', 3-way Chinese antanaclasis on '假', '坐/坐支', and '适', and unmarked bilingual translation audit on '除', '不刊', and '负担行为')."
+      "reason": "Tests zero-glossary cross-context polysemy matching across 20 English legal/historical anchors (present, charge, avoid, determine) and 20 Classical Chinese anchors (坐, 按, 课, 适) plus an 8-item unannotated reverse-decoy bilingual translation audit."
     },
     "T23_Adaptive_Fault_Diagnosis": {
       "role": "tool_blackbox",
