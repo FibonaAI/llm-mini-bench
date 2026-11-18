@@ -3,7 +3,7 @@ import { RunCallSummaryReader } from '../src/bench_call_summaries.ts';
 import { existsSync, lstatSync, readFileSync, readdirSync, realpathSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { dirname, extname, join, relative, resolve } from 'node:path';
-import { randomUUID, timingSafeEqual } from 'node:crypto';
+import { createHash, randomUUID, timingSafeEqual } from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 import { assessment_observations, build_assessment_baseline, load_assessment_baselines } from '../src/assessment_baselines.ts';
 import { load_assessment_bank } from '../src/assessment_bank.ts';
@@ -168,6 +168,8 @@ async function requestBody(request: Request): Promise<JsonObject> {
     if (!object(body)) throw new TypeError('JSON body must be an object');
     return body;
 }
+/** JSON responses at least this large are gzip-encoded when the client accepts it. */
+export const JSON_GZIP_MIN_BYTES = 2048;
 /** Embeddable Bun fetch handler enforces token, Host, Origin, and strict request bodies. */
 export function make_handler(service: BenchService, web_dir?: string): (request: Request) => Promise<Response> {
     return async (request: Request): Promise<Response> => {
@@ -181,7 +183,15 @@ export function make_handler(service: BenchService, web_dir?: string): (request:
             headers.set('Access-Control-Allow-Origin', 'null');
             headers.set('Vary', 'Origin');
         }
-        const json = (status: number, value: unknown) => new Response(JSON.stringify(value), { status, headers });
+        // Larger JSON bodies (observations, task/run lists polled every 2 s) compress roughly 10x.
+        const acceptsGzip = /\bgzip\b/i.test(request.headers.get('accept-encoding') ?? '');
+        const json = (status: number, value: unknown) => {
+            const body = JSON.stringify(value);
+            if (!acceptsGzip || body.length < JSON_GZIP_MIN_BYTES) return new Response(body, { status, headers });
+            headers.set('Content-Encoding', 'gzip');
+            headers.append('Vary', 'Accept-Encoding');
+            return new Response(Bun.gzipSync(body), { status, headers });
+        };
         if (!secureRequest(request)) return json(403, { error: 'loopback host and same-origin requests only' });
         if (request.method === 'OPTIONS') {
             if (request.headers.get('origin') !== 'null') return json(403, { error: 'origin not allowed' });
@@ -220,8 +230,13 @@ export function make_handler(service: BenchService, web_dir?: string): (request:
                     });
                 }
                 if (request.method === 'GET' && path === '/api/bench/baselines') return json(200, { baselines: service.baselines() });
-                if (request.method === 'GET' && path === '/api/bench/observations')
-                    return json(200, { observations: service.observations() });
+                if (request.method === 'GET' && path === '/api/bench/observations') {
+                    // `known` lets a client that already holds this exact list skip the download.
+                    const observations = service.observations();
+                    const etag = createHash('sha256').update(JSON.stringify(observations)).digest('hex').slice(0, 32);
+                    if (new URL(request.url).searchParams.get('known') === etag) return json(200, { etag, unchanged: true });
+                    return json(200, { etag, observations });
+                }
                 const execution = service.bench_execution();
                 if (request.method === 'GET' && path === '/api/bench/quota-cards')
                     return json(200, await service.quota_cards(new URL(request.url).searchParams.get('refresh') === '1'));

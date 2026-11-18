@@ -38,7 +38,7 @@ test('a new workspace never loads bundled test baselines or produces placeholder
     expect(service.baselines()).toEqual([]);
     expect(service.observations()).toEqual([]);
     expect(await (await request('/api/bench/baselines')).json()).toEqual({ baselines: [] });
-    expect(await (await request('/api/bench/observations')).json()).toEqual({ observations: [] });
+    expect(await (await request('/api/bench/observations')).json()).toEqual({ etag: expect.any(String), observations: [] });
 });
 
 test('analysis reads independent evidence snapshots without building discarded history summaries', async () => {
@@ -666,4 +666,21 @@ test('run call diagnosis is authenticated, read-only and limited to known runs',
     expect(body.calls[0]).toMatchObject({ call_id: 'c', http_status: 502 });
     expect(JSON.stringify(body)).not.toContain('secret prompt');
     expect((await request('/api/bench/runs/' + RUN_ID + '/calls', 'POST', {})).status).toBe(404);
+});
+
+test('large JSON responses are gzip-encoded and unchanged observations are not resent', async () => {
+    const { request } = fixture();
+    const plain = await request('/api/bench/banks', 'GET', undefined, { 'Accept-Encoding': 'identity' });
+    expect(plain.headers.get('content-encoding')).toBeNull();
+    const zipped = await request('/api/bench/banks', 'GET', undefined, { 'Accept-Encoding': 'gzip, deflate' });
+    expect(zipped.headers.get('content-encoding')).toBe('gzip');
+    expect(zipped.headers.get('vary')).toContain('Accept-Encoding');
+    // Browsers decode transparently; the decoded JSON is identical to the plain body.
+    const decoded = new TextDecoder().decode(Bun.gunzipSync(new Uint8Array(await zipped.arrayBuffer())));
+    expect(JSON.parse(decoded)).toEqual(await plain.json());
+    const first = await (await request('/api/bench/observations')).json();
+    expect(first.etag).toMatch(/^[0-9a-f]{32}$/);
+    expect(Array.isArray(first.observations)).toBe(true);
+    expect(await (await request('/api/bench/observations?known=' + first.etag)).json()).toEqual({ etag: first.etag, unchanged: true });
+    expect((await (await request('/api/bench/observations?known=stale')).json()).observations).toEqual(first.observations);
 });

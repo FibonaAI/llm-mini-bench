@@ -12,6 +12,7 @@ const app = getAppContext();
 const { byId: element, escapeHtml, finite, request, notify, available, statusText, formatDate } = app.services;
 const state = {
   observations: [],
+  observationsEtag: null,
   records: [],
   dataMode: 'latest',
   historyIds: new Set(),
@@ -307,11 +308,16 @@ async function loadObservations() {
   if (!available || state.loading) return;
   state.loading = true;
   try {
-    const data = await request('./api/bench/observations');
-    if (!Array.isArray(data.observations)) throw new Error('Mini Bench 观察列表格式无效');
-    state.observations = data.observations;
-    state.evidence.clear();
-    rebuildAnalysisRecords();
+    // Switching back to analysis re-checks the list but downloads it only when it changed.
+    const known = state.observationsEtag ? `?known=${encodeURIComponent(state.observationsEtag)}` : '';
+    const data = await request(`./api/bench/observations${known}`);
+    if (!(data.unchanged === true && known)) {
+      if (!Array.isArray(data.observations)) throw new Error('Mini Bench 观察列表格式无效');
+      state.observations = data.observations;
+      state.observationsEtag = typeof data.etag === 'string' ? data.etag : null;
+      state.evidence.clear();
+      rebuildAnalysisRecords();
+    }
     element('connection-status').textContent = '本地数据已同步';
   } catch (error) {
     element('connection-status').textContent = '数据加载失败';
