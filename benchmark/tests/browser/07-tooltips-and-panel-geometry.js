@@ -12,6 +12,9 @@
     require(!geometry.overflow&&geometry.x>=0&&geometry.x+geometry.width<=width,'Details strip overflows narrow viewport');
     require(await tooltip.evaluate(node=>{const card=node.getBoundingClientRect();return getComputedStyle(node).position==='absolute'&&[...node.parentElement.querySelectorAll('.thinking-series[data-hover-highlight="true"]')].every(line=>{const curve=line.getBoundingClientRect();return card.bottom<=curve.top||card.top>=curve.bottom||card.right<=curve.left||card.left>=curve.right;});}),'Floating hover card must avoid the full highlighted curve');
     require(Math.max(...geometry.metricTops)-Math.min(...geometry.metricTops)<1,'Tooltip metrics are not aligned');
+    // A low tooltip may extend over the footer keys; it must paint above them, badges included
+    // (pointer events are enabled only so elementFromPoint can see the card).
+    require(await tooltip.evaluate(node=>{const key=document.querySelector('.chart-footer .source-incomplete');key.scrollIntoView({block:'center'});const host=node.parentElement.getBoundingClientRect(),k=key.getBoundingClientRect();const old=[node.style.left,node.style.top];node.style.pointerEvents='auto';node.style.left=(k.left-host.left-4)+'px';node.style.top=(k.top-host.top-node.offsetHeight/2)+'px';const hits=[[k.left+k.width/2,k.top+k.height/2],[k.right+1,k.top-1]].map(([x,y])=>document.elementFromPoint(x,y));[node.style.left,node.style.top]=old;node.style.pointerEvents='';return hits.every(hit=>hit&&node.contains(hit));}),'Footer key markers paint above the tooltip card');
     tooltipChecks.push({name,...geometry});await tooltip.screenshot({path:"/tmp/llm-mini-bench-analysis-tooltip-"+name+'.png'});
   }
   console.log('Tooltip geometry: '+JSON.stringify(tooltipChecks));

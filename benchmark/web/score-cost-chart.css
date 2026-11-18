@@ -1,5 +1,7 @@
 .score-cost-chart {
   position: relative;
+  /* Raise the chart (and its tooltip) above later positioned siblings such as footer key badges. */
+  z-index: 1;
   width: 100%;
   min-width: 0;
   isolation: isolate;

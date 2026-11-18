@@ -780,6 +780,11 @@ input::placeholder {
 .source-frontier {
   border-top-style: dashed;
 }
+/* Footer keys: point markers, then lines, then the cost caveat, each group spaced apart. */
+.source-key-lines,
+.source-key-note {
+  margin-left: 10px;
+}
 .source-incomplete {
   position: relative;
   width: 8px;
