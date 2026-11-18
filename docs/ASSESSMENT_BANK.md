@@ -75,7 +75,7 @@ A task may declare `answer_protocol: "submit-answer-tool-v1"` and an `answer_sch
 - A timeout or upstream failure after a valid submission still grades that submission (`answer_submission.ended_after_submission`). Without a submission it remains an execution failure, never zero.
 - `ambiguous` and `ungradable` cannot occur under this protocol.
 
-The task fields participate in task snapshots and protocol hashes, so opting in requires a new bank version. Production 1.0 and existing experimental banks do not opt in. A free-form object schema was rejected after a live smoke test: several models wrapped the whole answer into one invented string argument.
+The task fields participate in task snapshots and protocol hashes, so opting in is part of the bank snapshot. Assessment 2.3 uses `submit-answer-tool-v1` across all twelve tasks; production 1.0 and earlier experimental banks (`2.0`–`2.2`) do not opt in. A free-form object schema was rejected after a live smoke test: several models wrapped the whole answer into one invented string argument.
 
 Exceeding the turn, request, or token budget in a tool loop is recorded separately as an execution failure. All tasks use fixed graders, with no model judge and no execution of model-generated programs.
 

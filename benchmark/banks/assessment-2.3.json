@@ -17,7 +17,7 @@
     "T23_Adaptive_Fault_Diagnosis",
     "T23_Delegated_Authority_Release"
   ],
-  "task_sha256": "685eed2584265eac21201559d5e8dace1d956d2398919c8744aa59f8ed2b85ba",
+  "task_sha256": "aa53f0d1d5e68b9c4de67cf1080e99cf76e043dfd79516ed08aa89f0408e38e0",
   "source_sha256": {
     "src/assessment_tasks.ts": "078ba162dd2fce2796f3efa8140d48e975e63858b4c71770c736cb745be5c886",
     "src/assessment_tools.ts": "4593d23e98358dadffa32c1dceb39865e0a932ef97089c46a595a67f466e26a7",
