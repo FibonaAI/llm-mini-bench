@@ -283,7 +283,7 @@ export function createTaskHistoryView({ app, state, retryRequests, retrying }) {
     element('bench-retry-task').textContent = retryRequests.has(`tasks:${task.id}`) ? '确认重试 API 失败' : '重试 API 失败';
     replaceHistoryMarkup(
       element('bench-task-detail'),
-      `<div class="run-detail-meta"><span>任务 <strong>${escapeHtml(task.id)}</strong></span><span>状态 <strong>${escapeHtml(statusText(task.status))}</strong></span><span>独立运行 <strong>${children.length}</strong></span><span>样本总数 <strong>${escapeHtml(plan.sample_count ?? '未记录')}</strong></span><span>运行并发 <strong>${escapeHtml(plan.run_concurrency ?? '未记录')}</strong></span><span>每运行样本并发 <strong>${escapeHtml(plan.sample_concurrency ?? '未记录')}</strong></span></div><div class="task-child-list">${children
+      `<div class="run-detail-meta"><span>任务 <strong>${escapeHtml(task.id)}</strong></span><span>状态 <strong>${escapeHtml(recordStatusLabel(task))}</strong></span><span>独立运行 <strong>${children.length}</strong></span><span>样本总数 <strong>${escapeHtml(plan.sample_count ?? '未记录')}</strong></span><span>运行并发 <strong>${escapeHtml(plan.run_concurrency ?? '未记录')}</strong></span><span>每运行样本并发 <strong>${escapeHtml(plan.sample_concurrency ?? '未记录')}</strong></span></div><div class="task-child-list">${children
         .map(child => {
           const target = child.target || {},
             progress = sampleProgress(child);
