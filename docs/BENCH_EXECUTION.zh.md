@@ -178,7 +178,7 @@ bun benchmark/bench.ts serve --port 3481
 | GET | `/api/bench/runs/:id` | 单次运行、样本和预算状态 |
 | GET | `/api/bench/runs/:id/calls` | 从运行及重试 journal 只读提取逐次调用诊断：HTTP 状态、耗时、终止事件、上游错误码与消息（截断）、本地超时及是否返回用量。不返回请求正文或原始流 |
 | POST | `/api/bench/runs/:id/cancel` | `{"ok": true}`，不存在时 HTTP 404 |
-| GET | `/api/bench/observations` | `{"observations": [...]}`，逐目标、逐题、逐轮分析记录，由 UI 计算已定义的展示指标 |
+| GET | `/api/bench/observations` | `{"etag": "...", "observations": [...]}`，逐目标、逐题、逐轮分析记录，由 UI 计算已定义的展示指标。带 `?known=ETAG` 且数据未变时返回 `{"etag", "unchanged": true}`。客户端发送 `Accept-Encoding: gzip` 时，2 KB 以上的 JSON 响应会 gzip 压缩 |
 | GET | `/api/bench/baselines` | `{"baselines": [...]}`，通过校验的个人基线和明确固定的历史随附基线 |
 | POST | `/api/bench/runs/:id/baseline` | 请求 `{"target_id": "..."}`，返回 HTTP 201 和 `{"baseline": ...}` |
 

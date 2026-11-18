@@ -178,7 +178,7 @@ All endpoints retain `X-Mini-Bench-Token`, loopback Host, and same-origin checks
 | GET | `/api/bench/runs/:id` | One run, its samples, and budget state |
 | GET | `/api/bench/runs/:id/calls` | Read-only per-call diagnosis from the run and retry journals: HTTP status, elapsed time, terminal event, upstream error code/message (truncated), local timeout and whether usage was returned. Never returns request bodies or raw streams |
 | POST | `/api/bench/runs/:id/cancel` | `{"ok": true}`; HTTP 404 if not found |
-| GET | `/api/bench/observations` | `{"observations": [...]}`, analysis records per target, task, and round; the UI derives the defined display metric |
+| GET | `/api/bench/observations` | `{"etag": "...", "observations": [...]}`, analysis records per target, task, and round; the UI derives the defined display metric. `?known=ETAG` returns `{"etag", "unchanged": true}` when nothing changed. JSON responses of at least 2 KB are gzip-encoded when the client sends `Accept-Encoding: gzip` |
 | GET | `/api/bench/baselines` | `{"baselines": [...]}`, validated personal baselines and the explicitly pinned historical bundled baseline |
 | POST | `/api/bench/runs/:id/baseline` | Request `{"target_id": "..."}`; response HTTP 201 with `{"baseline": ...}` |
 

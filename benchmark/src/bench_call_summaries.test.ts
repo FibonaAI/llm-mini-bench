@@ -9,7 +9,7 @@ import { execution_result_quality } from './bench_execution_queries.ts';
 const runId = 'a'.repeat(32);
 const line = (value: unknown) => JSON.stringify(value) + '\n';
 
-test('call summaries read main and retry journals, skip non-call lines and never return raw bodies', () => {
+test('call summaries read main and retry journals, skip non-call lines and never return raw bodies', async () => {
     const root = mkdtempSync(join(tmpdir(), 'call-summaries-'));
     const directory = join(root, runId),
         retry = join(directory, 'retry-' + 'b'.repeat(32));
@@ -47,7 +47,7 @@ test('call summaries read main and retry journals, skip non-call lines and never
         }) + '{"type":"call", torn'
     );
     const reader = new RunCallSummaryReader(root);
-    const calls = reader.read(runId)!;
+    const calls = (await reader.read(runId))!;
     expect(calls.map(call => call.call_id)).toEqual(['s1:1:1', 's1:1:2']);
     expect(calls[0]).toMatchObject({
         http_status: 200,
@@ -71,9 +71,9 @@ test('call summaries read main and retry journals, skip non-call lines and never
             raw_response: { status: 'completed', usage: { input_tokens: 1, output_tokens: 2 } }
         })
     );
-    expect(reader.read(runId)!.map(call => call.call_id)).toEqual(['s1:1:1', 's2:1:1', 's1:1:2']);
-    expect(reader.read('../etc')).toBeNull();
-    expect(reader.read('c'.repeat(32))).toBeNull();
+    expect((await reader.read(runId))!.map(call => call.call_id)).toEqual(['s1:1:1', 's2:1:1', 's1:1:2']);
+    expect(await reader.read('../etc')).toBeNull();
+    expect(await reader.read('c'.repeat(32))).toBeNull();
 });
 
 test('call summary truncates long upstream messages', () => {

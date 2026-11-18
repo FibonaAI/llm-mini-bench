@@ -1,5 +1,5 @@
 import { PRODUCTION_BANK_VERSION } from './production_bank.ts';
-import { scan_journal_call_records } from './bench_call_summaries.ts';
+import { run_journal_path, scan_journal_call_records, scan_journal_call_records_async } from './bench_call_summaries.ts';
 import { closeSync, existsSync, fsyncSync, lstatSync, openSync, readFileSync, readdirSync, writeFileSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { createHash, randomUUID } from 'node:crypto';
@@ -243,9 +243,9 @@ export class BenchExecutionService {
             // hundreds of MB, so skip them otherwise and stream only call lines when required.
             if (run.status === 'failed') {
                 const calls = new Map<string, RecordValue>();
-                const journal = join(directory, 'journal.jsonl');
+                const journal = run_journal_path(directory);
                 const legacy = run.samples.some(sample => sample.status === 'response_incomplete_or_error');
-                if (legacy && existsSync(journal))
+                if (legacy && journal)
                     scan_journal_call_records(journal, row => {
                         calls.set(String(row.call_id), row);
                     });
@@ -849,8 +849,10 @@ export class BenchExecutionService {
         if (run.budget.uncertain_cost_reservation_usd === undefined && budget.missing_cost) {
             let missing = 0;
             // Stream call lines only; strict parsing keeps the original number tokens for reservation bytes.
-            scan_journal_call_records(
-                join(this.data_dir, id, 'journal.jsonl'),
+            const journal = run_journal_path(join(this.data_dir, id));
+            if (!journal) throw new TypeError('Missing request evidence for retry cost accounting');
+            await scan_journal_call_records_async(
+                journal,
                 call => {
                     if (call.estimated_uncached_cost_usd !== null) return;
                     const target = run.plan.targets.find(target => target.id === call.target_id);

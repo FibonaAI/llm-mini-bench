@@ -61,7 +61,7 @@ TypeScript implements the assessment engine and HTTP service on Bun; plain brows
 | `benchmark/web/analysis.js`, `analysis-model.js` | Analysis coordination and cached axis-specific metric derivation; presentation and history membership changes do not rescan task samples |
 | `benchmark/web/` | Analysis chart and shared cross-channel search picker with channel/model/thinking filters, using `/api/bench/`; task details remain available without a separate bank page |
 | `package.json`, `magpie/index.ts`, `magpie/page/` | Magpie plugin declaration, backend lifecycle, and page bootstrap |
-| `benchmark/tools/` | Offline analysis, baseline import and read-only calibration import (`import_calibration.ts`, never retried or promoted); no requests at module import time |
+| `benchmark/tools/` | Offline analysis, baseline import and read-only calibration import (`import_calibration.ts`, never retried or promoted) and lossless gzip archiving of terminal-run journals (`compress_journals.ts`, verified by SHA-256, reversible); no requests at module import time |
 | `benchmark/tests/` | Offline Bun test suite and frontend validation |
 
 ## Local validation

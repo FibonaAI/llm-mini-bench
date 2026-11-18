@@ -26,6 +26,14 @@ An old `SampleTimeout` or `TimeoutError` alone is an unattributed timeout except
 
 Missing, duplicate or unexpected samples are rejected. Repeated `--input` flags may combine distinct targets only when bank content, source hashes, configuration and round plans match. The report records input and report-source digests, does not replay graders itself, and refuses to overwrite a file. It leaves raw records, production chart eligibility and baseline rules unchanged.
 
+## Archive journals of finished runs
+
+```sh
+bun benchmark/tools/compress_journals.ts [--data-dir DIR] [--dry-run] [--decompress]
+```
+
+Losslessly gzips `journal.jsonl` of every terminal run and retry generation in the personal workspace; queued, running and cancelling runs are skipped. Each archive is decompressed and compared by SHA-256 with the original before the plain file is removed, and `journal.archive.json` records the original size and digest. Interrupted runs of the tool resume safely, and a plain file that no longer matches its recorded digest is kept and reported. The service reads `journal.jsonl.gz` transparently (failure diagnosis, manual retries). `--decompress` restores the exact original bytes and verifies them. Raw SSE journals typically compress about 14x.
+
 ## Show a calibration in the workspace
 
 ```sh

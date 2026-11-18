@@ -25,6 +25,14 @@ bun benchmark/tools/report_assessment_completion.ts \
 
 缺失、重复或非预定样本会被拒绝。重复传入 `--input` 只能合并不同目标，且题库内容、源码哈希、配置和轮次计划必须一致。报告记录输入和报告源码摘要，不自行重放评分器，也不覆盖已有文件。原始记录、生产分析图入选条件和基线规则保持不变。
 
+## 归档已结束运行的日志
+
+```sh
+bun benchmark/tools/compress_journals.ts [--data-dir DIR] [--dry-run] [--decompress]
+```
+
+把个人工作区里所有已结束运行及其重试批次的 `journal.jsonl` 无损压缩为 gzip；排队中、运行中和取消中的运行会跳过。每份压缩文件都先解压、按 SHA-256 与原文件比对一致，才删除原文件，`journal.archive.json` 记录原始大小和摘要。工具中途中断可以安全续跑；原文件与记录的摘要不一致时保留原文件并报错。服务会直接读取 `journal.jsonl.gz`（失败原因诊断、手动重试）。`--decompress` 还原出与原来逐字节相同的文件并校验。原始 SSE 日志一般能压缩到约 1/14。
+
 ## 在工作区查看校准结果
 
 ```sh

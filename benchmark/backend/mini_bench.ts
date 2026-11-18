@@ -275,7 +275,7 @@ export function make_handler(service: BenchService, web_dir?: string): (request:
                     if (request.method === 'GET' && match[2] === '/calls') {
                         const execution = service.bench_execution();
                         if (!execution.get_run(id)) return json(404, { error: 'run not found' });
-                        return json(200, { calls: service.call_summaries(execution.data_dir).read(id) ?? [] });
+                        return json(200, { calls: (await service.call_summaries(execution.data_dir).read(id)) ?? [] });
                     }
                     if (request.method === 'GET' && !match[2]) {
                         const run = execution.get_run(id);
