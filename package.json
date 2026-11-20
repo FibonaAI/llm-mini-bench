@@ -2,6 +2,14 @@
   "name": "llm-mini-bench",
   "version": "0.1.0",
   "description": "A standalone model evaluation workspace with an optional Magpie integration.",
+  "license": "MIT",
+  "keywords": [
+    "llm",
+    "benchmark",
+    "evaluation",
+    "magpie",
+    "magpie-plugin"
+  ],
   "homepage": "https://github.com/FibonaAI/llm-mini-bench#readme",
   "repository": {
     "type": "git",
@@ -32,6 +40,7 @@
     "README.zh.md",
     "AGENTS.md",
     "AGENTS.zh.md",
+    "LICENSE",
     "bun.lock",
     "tsconfig.json"
   ],
@@ -50,6 +59,11 @@
     "format:check": "prettier --check ."
   },
   "magpie": {
+    "name": "LLM Mini Bench",
+    "summary": {
+      "en": "Quick 12-task LLM benchmark comparing models, accounts, and Thinking settings by score, cost, tokens, and latency.",
+      "zh": "快速、低成本的 12 题大模型评测工作台，按分数、费用、Token 与耗时对比模型、账号与 Thinking 档位。"
+    },
     "page": {
       "title": "LLM Mini Bench",
       "titles": {
