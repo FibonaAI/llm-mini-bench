@@ -4,82 +4,66 @@
 
 **A quick, low-cost first look at a language model's capabilities.**
 
-Before committing to a model, run a small set of tasks to see where it answers correctly, follows instructions, handles tools or falls short. LLM Mini Bench makes it easy to compare models, accounts and Thinking settings, with the answers and estimated costs available for inspection.
-
-It works independently or inside Magpie.
+Run 12 focused tasks to compare models, accounts, and Thinking settings, with full answers, tool traces, and estimated costs ready to inspect. Works inside Magpie or standalone.
 
 ## What it tests
 
-Mini Bench has **14 tasks** across six areas:
-
-| Area | Tasks |
+| Area | Tasks (12 total) |
 | --- | --- |
-| Knowledge | Genetic codes, DNS caching, treaty rules |
-| Reasoning | Probability, causal counterfactuals, scheduling |
-| Code semantics | References and `finally`, concurrent transactions |
-| Evidence synthesis | Payment records, bitemporal revisions |
-| Instruction following | Coupled transformations, quoted instructions |
-| Tool use | Inventory constraints, booking conflict recovery |
+| Knowledge | HTTP conditional caching, IEEE 754 floating-point & SQL three-valued logic |
+| Reasoning | Algebraic morphism induction, conservation law & state tracking |
+| Code semantics | Async generator `finally` overrides, MVCC savepoints & serializable snapshots |
+| Evidence synthesis | Multi-track audit reconciliation, tight-budget document audit |
+| Instruction following | Multi-agent DAG scheduling rules, contextual polysemy translation audit |
+| Tool use | Adaptive fault diagnosis, delegated authority release |
 
-The bank is intentionally small. Use it to screen candidates and decide what to test next, not as a comprehensive measure of ability or a model leaderboard. Tool tasks run in simulators, never against real inventory or calendars.
+Built for quick screening rather than a leaderboard. All answers are submitted through a fixed tool schema and graded as data; model code is never executed, and tools run only in local simulators.
 
 ## Start with Magpie
 
-In Magpie's Plugins page, install **one** of these sources:
+Install **one** source from Magpie's Plugins page:
 
-| Channel | Source |
-| --- | --- |
-| npm | `npm:llm-mini-bench` |
-| GitHub | `github:FibonaAI/llm-mini-bench` |
+- **npm**: `npm:llm-mini-bench`
+- **GitHub**: `github:FibonaAI/llm-mini-bench`
 
-The npm package and GitHub source must be published before they can be installed. Magpie manages the runtime. Open **模型评测** after installation; the plugin initializes its local connection automatically and loads Magpie's model catalog. No token or port setup is required.
+Open **模型评测** after installation. Magpie manages the runtime, connects locally, and loads your model catalog automatically.
 
-### Run a first comparison
+### Run a comparison
 
-1. Open **任务** and select a model and Thinking setting. Add other models or settings if you want a side-by-side comparison.
-2. Choose **1 round** for a quick first pass over all 14 tasks. The default is 3 rounds if you want to check consistency.
-3. Check the automatically updated run count, sample count and execution limits, then click **开始评测** (Start evaluation).
-4. Open **分析** to compare scores and estimated costs. Select a result to inspect individual answers, instruction checks and tool calls.
+1. Open **任务** and pick one or more models and Thinking settings.
+2. Pick **1 round** for a quick pass (12 samples) or keep the default **3 rounds** (36 samples) to check consistency.
+3. Review the sample count and timeout, then click **开始评测**.
+4. Open **分析** to compare scores against cost, tokens, or elapsed time, and inspect individual answers below.
 
-Each selected combination is a separate run. You can cancel one run or the whole task; requests already sent may still incur charges. Tool tasks may make multiple requests per sample.
-
-Magpie chooses accounts automatically by default. To compare specific local accounts, see [account binding](magpie/README.md#explicit-local-account-bindings). Local account pins do not reach accounts behind Remote Magpie.
+You can cancel a run or task at any time, or manually retry failed, timed-out, interrupted, or cancelled samples in task history without rerunning completed ones. To target specific local accounts instead of automatic selection, see [account binding](magpie/README.md#explicit-local-account-bindings).
 
 ## Read the results
 
-The chart compares the **equal-weight mean of all 14 task scores on a 100-point scale** with **estimated USD or total input + output tokens per round**. The chart’s “着色” control defaults to provider/model combinations and also offers model, model-family or evaluation-date coloring. Date coloring uses the same multicolor palette. Circles are personal runs and squares are baselines; latest records are filled and historical records are hollow. Hover, focus or selection reveals distinct visible Thinking levels only within the same recorded batch, exact request model, channel and account. Scores, instruction compliance, tool checks and execution status remain separately inspectable.
+The chart plots the **equal-weight mean of all 12 tasks (0 to 100)** against **estimated USD, total tokens, or elapsed time per round**. Circles are runs and squares are baselines; filled points are latest and hollow points are history.
 
-- Only complete runs covering all 14 tasks and every planned round, with valid scores and known usage for the selected axis, appear on the chart.
-- Failed or missing results are not scored as zero. Zero-cost results appear on linear axes, not logarithmic axes.
-- Compare matching task banks and execution settings. Thinking `default` leaves reasoning unspecified; it is not explicit `none`.
-- Account and model labels describe requested routing, not independently verified upstream identity.
+- **Chart eligibility**: Only complete 12-task runs across all planned rounds appear. API failures never score zero; runs with timeouts or incomplete usage carry an anomaly badge and stay off the Pareto frontier.
+- **Fair comparisons**: Compare matching banks and Thinking settings. Account and model labels reflect requested routing, not verified upstream identity.
+- **Baselines**: Workspaces start empty. Save complete, gradable runs as baselines to compare against future results.
 
-Save complete, gradable runs as baselines to compare with later results. Your workspace starts empty and shows only your own runs and saved baselines. See [task and grading details](docs/ASSESSMENT_BANK.md).
+See [task and grading details](docs/ASSESSMENT_BANK.md) and the [execution guide](docs/BENCH_EXECUTION.md) for chart rules, retries, and CLI usage.
 
 ## Run without Magpie
 
-Requires [Bun](https://bun.com/) 1.4.0 or later:
+Requires [Bun](https://bun.com/) 1.4.0 or later. Clone the repo and [configure upstream routes](docs/BENCH_EXECUTION.md#configure-two-routes), then start the service:
 
 ```sh
 git clone https://github.com/FibonaAI/llm-mini-bench.git
 cd llm-mini-bench
-```
-
-Configure [upstream routes and credentials](docs/BENCH_EXECUTION.md#configure-two-routes), then start the local service:
-
-```sh
 export MAGPIE_BENCH_TOKEN="$(openssl rand -hex 32)"
 bun benchmark/bench.ts serve
 ```
 
-Open `http://127.0.0.1:3481/#token=YOUR_TOKEN`, replacing `YOUR_TOKEN` with the value of `MAGPIE_BENCH_TOKEN`. Keep it private. Starting the service sends no model requests.
-
-The [execution guide](docs/BENCH_EXECUTION.md) covers standalone configuration and CLI use, including planning, starting and cancelling tasks.
+Open `http://127.0.0.1:3481/#token=YOUR_TOKEN` (using your `MAGPIE_BENCH_TOKEN`). Starting the service sends no model requests.
 
 ## Costs and privacy
 
-- Model requests may incur charges. New tasks use one whole-sample timeout (600 seconds by default), with no token, request-count, USD, tool-call or interaction-turn cap. Costs are estimates, not bills.
-- Questions and answers pass through your selected upstream. Use only channels you trust.
-- Transient API errors retry up to 3 times after the initial request. Exhausted API failures can be retried explicitly in task history; successful samples are retained and results update afterward. Capability limits are “incomplete”, not API failures. Task-creation timeouts still require checking history before another submission.
-- The service listens only on loopback. Do not expose its port or share its authentication token.
-- Personal results are stored in `~/.local/share/magpie-mini-bench/` by default. They include full prompts, answers and tool traces; review them before sharing.
+- **Billing & limits**: Requests may incur charges, and displayed costs are estimates, not bills. New tasks cap only per-sample time (600s default).
+- **Privacy**: Prompts and answers go through your selected upstream. Local results (including full transcripts) live in `~/.local/share/magpie-mini-bench/`; review before sharing.
+- **Security**: The service binds to loopback only. Do not expose the port or share the token.
+
+More docs: [documentation index](docs/README.md).

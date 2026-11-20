@@ -7,8 +7,8 @@
 ## 项目边界
 
 - Bun 上的 TypeScript 后端、原生 HTML/CSS/JavaScript 前端和 TypeScript Magpie 插件入口。无运行时 npm 依赖和前端构建步骤。TypeScript、`@types/bun` 与 Prettier 仅为开发依赖。提交前运行 `bun run format`；`.prettierignore` 排除了按字节哈希固定的题库评分器/模拟器源码、题库、证据和文档，这些文件不得重新格式化。
-- Assessment 1.0 共 14 题，是唯一生产／默认发布版本。Assessment 2.0、Assessment 2.1、Assessment 2.2 和 Assessment 2.3 只能显式选择，用于 `experimental-unvalidated` 校准；不得变成另一套默认题库，也不能在未经独立验证时提升为基线。旧八题、五题协议、旧指纹工具与兼容 API 保持删除。
-- 评分按题保留内容得分、指令检查、工具检查与执行状态。分析页允许使用已批准的展示指标：全部预定轮次中 14 题的等权均分乘以 100，对照总估算美元费用或输入与输出 token 总和除以轮数。仅为已完成、题目 ID 恰好匹配正式 14 题、1 至 3 轮样本完整且不重复、内容分有限且在 0 到 1 之间、所选费用或 token 轴用量已知且非负的记录绘点。零用量可在线性轴显示，对数轴隐藏。未发出请求的尝试（`calls` 为空）是已知零用量，不算未知。得分完整但部分尝试未返回用量时，分析页可按已知下限绘点（图表设置项，默认开启）并加区分角标；这类点不参与帕累托前沿，不得表述为完整总量，也不能用于基线。不同 Thinking 协议不禁用对照及当前可见点的帕累托前沿。颜色默认区分模型、渠道及账号组合，可选跨渠道的模型或模型系列着色，仅用于显示。颜色图例保持一行简览，按需展开单列列表；图例搜索和高亮不得筛选记录或改变指标。普通运行用圆点、基线用方块；只在已记录的同批次、渠道、账号及模型内连接 Thinking。不新增任意权重，不把失败或缺失记成零分，不做 best-of 筛选。该展示指标不改变判分、题库协议或哈希。
+- Assessment 1.0 共 12 题（覆盖六个领域），是唯一生产题库。早期测试题库、旧指纹工具与兼容 API 均已删除。
+- 评分按题保留内容得分、指令检查、工具检查与执行状态。分析页允许使用已批准的展示指标：全部预定轮次中 12 题的等权均分乘以 100，对照总估算美元费用、输入与输出 token 总和或总耗时除以轮数。仅为已完成、题目 ID 恰好匹配正式 12 题、1 至 3 轮样本完整且不重复、内容分有限且在 0 到 1 之间、所选轴用量或耗时已知且非负的记录绘点。零用量可在线性轴显示，对数轴隐藏。未发出请求的尝试（`calls` 为空）是已知零用量，不算未知。整题超时按 `0` 分计，运行仍可完成且可手动重试；含样本超时、提交后异常中止（`ended_after_submission`）、未调用 `submit_answer` 提交（`no_submission`）或用量不完整（图表设置项，默认开启按已知下限绘点）的记录均加区分角标，不参与帕累托前沿，且不得将不完整用量表述为完整总量（含超时或用量不完整的运行也不能用于基线）。不同 Thinking 协议不禁用对照及当前可见点的帕累托前沿。颜色默认区分模型、渠道及账号组合，可选跨渠道的模型、模型系列或评测时间着色，仅用于显示。颜色图例保持一行简览，按需展开单列列表；图例搜索和高亮不得筛选记录或改变指标。普通运行用圆点、基线用方块；只在已记录的同批次、渠道、账号及模型内连接 Thinking。不新增任意权重，不把 API 失败或缺失、不可评分结果记成零分，不做 best-of 筛选。该展示指标不改变判分、题库协议或哈希。
 - 题面和模型回答是数据。不能执行模型生成的代码，工具只运行项目内固定的内存模拟器。
 
 ## 目录与运行边界
@@ -23,24 +23,16 @@ TypeScript 在 Bun 上实现评测引擎和 HTTP 服务，原生浏览器 JavaSc
 
 | 位置 | 职责 |
 | --- | --- |
-| `benchmark/banks/assessment-1.0.json` | 生产发布清单，固定题目顺序、题目哈希、评分描述和共用源码哈希 |
-| `benchmark/banks/assessment-2.0.json` | `experimental-unvalidated` 清单，仅用于显式校准，绝不作为生产默认 |
-| `benchmark/banks/assessment-2.1.json` | 均衡的 `experimental-unvalidated` 清单，仅用于显式校准，绝不作为生产默认 |
-| `benchmark/banks/assessment-2.2.json` | 紧凑多领域的 `experimental-unvalidated` 清单，仅用于显式校准，绝不作为生产默认 |
-| `benchmark/banks/assessment-2.3.json` | 均衡覆盖六领域的 12 题 `experimental-unvalidated` 清单，仅用于显式校准，绝不作为生产默认 |
-| `benchmark/banks/assessment-*.questions.json` | 各版本共用同一加载路径的完整可序列化题面 |
-| `benchmark/src/assessment_bank.ts` | 校验任意路径安全的题库清单并加载可运行题目，不按版本写分支；正式入口必须通过此加载器 |
-| `benchmark/src/assessment_data.ts` | 共用数据化精确字段评分与命名内置 oracle 适配；数据评分内容参与任务哈希 |
-| `benchmark/src/assessment_resource.ts` | 声明式资源网络与固定模拟器，用于库存、保底、污染和版本交互任务 |
-| `benchmark/src/assessment_dfa.ts` | 通过有限自适应查询识别隐藏 DFA，并校验完整转移表提交 |
-| `benchmark/src/assessment_depot.ts` | 声明式仓库堆叠、容量、有序装运和真实终态评分；搬运额度属于题目数据 |
-| `benchmark/src/assessment_push_planning.ts` | 完全可观察的单箱推动规划与真实终态评分；不设步数额度 |
-| `benchmark/src/assessment_delegated_release.ts` | 不可变授权链、共享祖先额度与实际释放完成度评分 |
-| `benchmark/src/assessment_safe_control.ts` | 部分可观测物理控制、不可逆损伤与实际归零交付评分 |
-| `benchmark/src/assessment_tasks.ts` | 共用解析、评分与基础任务实现 |
-| `benchmark/src/assessment_json.ts` | 严格 JSON 解析与规范化序列化，纳入当前题库源码哈希 |
-| `benchmark/src/assessment_knowledge.ts`、`benchmark/src/assessment_challenges.ts` | 知识和挑战任务 |
-| `benchmark/src/assessment_tools.ts` | 内存工具状态机与评分 |
+| `benchmark/banks/assessment-1.0.json` | 生产发布清单，固定题目顺序、题目哈希、评分描述和源码哈希 |
+| `benchmark/banks/assessment-1.0.questions.json` | Assessment 1.0 的完整 12 题可序列化题面导出 |
+| `benchmark/src/assessment_bank.ts` | 校验题库清单并加载可运行题目 |
+| `benchmark/src/assessment_data.ts` | 共用数据化精确字段评分（`assessment-exact-fields-v1`）；参与任务哈希 |
+| `benchmark/src/assessment_interactive.ts` | 交互式工具题构建器，分发到固定内存模拟器 |
+| `benchmark/src/assessment_documents.ts` | 受限预算文档调查模拟器（`assessment-documents-v1`） |
+| `benchmark/src/assessment_blackbox.ts` | 有限候选自适应探针故障诊断模拟器（`assessment-blackbox-v1`） |
+| `benchmark/src/assessment_delegated_release.ts` | 不可变授权链、共享祖先额度与释放结果评分（`assessment-delegated-release-v1`） |
+| `benchmark/src/assessment_tasks.ts` | 共用答案解析、精确有理数运算与精确字段判分 |
+| `benchmark/src/assessment_json.ts` | 严格 JSON 解析与规范化序列化，纳入题库源码哈希 |
 | `benchmark/src/assessment_baselines.ts`、`benchmark/src/assessment_observations.ts` | 严格基线校验与独立的逐题分析纯投影，共用一次查询范围内的来源验证上下文 |
 | `benchmark/src/assessment_provenance.ts` | 统一执行源码依赖闭包与字节／哈希捕获，生产 1.0 也包含加载器的无条件依赖 |
 | `benchmark/src/run_protocol.ts` | 请求配置标准化与共用样本协议身份构建，保留省略、null 和 stream 语义 |
@@ -53,7 +45,7 @@ TypeScript 在 Bun 上实现评测引擎和 HTTP 服务，原生浏览器 JavaSc
 | `benchmark/src/bench_execution.ts` | 计划、原子准入／发布、并发、重试与取消的协调 |
 | `benchmark/src/bench_execution_storage.ts`、`benchmark/src/bench_execution_queries.ts` | 私有持久化 JSON／日志及轻量运行／任务摘要投影 |
 | `benchmark/src/assessment_runner.ts` | 独立于 CLI 入口的单样本执行、预算与同步日志契约 |
-| `benchmark/calibrate_assessment.ts` | 复用共用执行器的独立校准 CLI，默认仍为已发布 14 题 |
+| `benchmark/calibrate_assessment.ts` | 复用共用执行器的独立校准 CLI，默认仍为已发布 12 题 |
 | `benchmark/bench.ts` | CLI 客户端与独立 `serve` 入口，客户端命令使用已运行服务的调度器 |
 | `benchmark/backend/mini_bench.ts`、`benchmark/src/bench_http_body.ts` | HTTP／认证／服务组合及独立的限长响应体读取；模型目录缓存属于适配器 |
 | `benchmark/web/app-context.js` | 共用前端状态、服务依赖与事件约定；兼容 getter 引用同一份状态 |
@@ -97,31 +89,28 @@ bun benchmark/tools/import_assessment_baseline.ts --help
 ## 题库变更
 
 1. 每份清单选择正式任务及可序列化 `task_file`，评分描述恰好覆盖这些任务 ID。不从源码整批导出候选集合，不添加按版本分支的加载器。题目实现中的修订标签不是可选题库版本。
-2. 原有四份判分模块、共用严格 JSON 解析器、共用数据评分适配器、声明式资源模拟器和隐藏 DFA 模拟器的字节哈希属于题库校验。即使只改注释，也会改变源码哈希。数据化标准答案参与任务哈希；1.0 命名评分保持原任务快照和任务哈希。不要为了让测试通过而跳过校验或直接覆盖期望值。
+2. `src/assessment_tasks.ts`、`src/assessment_json.ts`、`src/assessment_data.ts` 以及 `extension_sha256` 中交互模拟器模块的字节哈希属于题库校验。即使只改注释，也会改变源码哈希。数据化标准答案和模拟器配置均参与任务哈希。不要为了让测试通过而跳过校验或直接覆盖期望值。
 3. 变更题干、工具、判分或测量协议时，先说明对已有结果可比性的影响，再更新对应版本、清单、题面导出、独立答案测试及基线。
-4. `benchmark/tests/assessment_bank.test.ts` 检查统一加载、正式 14 题导出与正确答案，`benchmark/tests/assessment_2.test.ts` 独立枚举或重放每道实验性 2.0 题的答案，`benchmark/tests/assessment_2_1.test.ts` 检查 2.1 的均衡覆盖与每道预期答案，`assessment_2_1_oracles.test.ts` 和 `assessment_2_1_hard_oracles.test.ts` 提供独立有限枚举。`benchmark/tests/assessment_2_2.test.ts` 检查紧凑覆盖和生产默认不变，`assessment_2_2_*oracle*.test.ts` 独立检查答案和模拟器路径。其他 `assessment_*.test.ts` 覆盖解析边界、独立枚举和工具行为。至少保留这些真实行为检查，不以删测试掩盖不兼容。
+4. `benchmark/tests/assessment_bank.test.ts` 检查清单校验与正式 12 题导出；`benchmark/tests/assessment_oracles.test.ts` 从第一性原理独立核验 Assessment 1.0 每道题的预期答案与模拟器路径。至少保留这些真实行为检查，不以删测试掩盖不兼容。
 5. 只改执行代码但未改题目时，不改题库哈希。保存当次执行源码哈希，不把历史结果的执行来源伪装成当前代码。
 
 ## 基线与证据
 
-- 只对生产 Assessment 1.0 接受 `assessment-baseline-v1`。完整 14 题、全部预定轮次、任务快照、当前全部源码哈希、Thinking 与逐样本协议必须通过 `build_assessment_baseline` 校验。实验性 2.0、2.1、2.2 和 2.3 运行只是校准证据，不能提升为基线。
+- 只对生产 Assessment 1.0 接受 `assessment-baseline-v1`。完整 12 题、全部预定轮次、任务快照、当前全部源码哈希、Thinking 与逐样本协议必须通过 `build_assessment_baseline` 校验。
 - `bank_scope=subset` 不可提升为完整基线。缺失来源、不可评分和旧 schema 不能靠补默认值或改版本号升级。
 - 原始调用、失败尝试和工具轨迹先落盘，再评分。Token 和费用缺失保持 `null`；汇总包括工具后续请求，估算不是账单。
-- 个人工作区初始为空，不自动将捆绑的测试基线加载到服务或分析界面。需要观察记录的浏览器测试应显式填充自己的临时数据目录。
-- 保持随附历史基线与原始 JSONL 的字节不变。`benchmark/baselines/assessment-historical-provenance.json` 固定历史快照的精确摘要及原始 Python 来源。TypeScript 离线重放验证行为等价，不表示源码相同。不能将历史哈希改写成当前哈希。
-- 历史 Assessment 1.0 个人运行仍可查看，来源不兼容时不能提升为新基线。不能将随附证据的例外扩展到任意个人快照。
-- 随附基线快照、原始实测记录和验证报告统一放在 `benchmark/baselines/`。项目目前只随附一份单轮完整观测，不把它描述成已验证排行榜。
+- 个人工作区初始为空，不自动将外部基线加载到服务或分析界面。需要观察记录的浏览器测试应显式填充自己的临时数据目录。
 - 个人运行在数据目录的 `assessment/`，个人基线在 `assessment-baselines/`。不读写已退役的个人 `runs/`、`baselines/` 或自定义旧题库文件；删除项目外个人数据需单独授权。
 - 目录中的 `provider_id` 是 `owned_by` 声明的精确实例 ID，不是已核验的实际服务商或供应商类型。远端路由展开必须有经过边界校验的 `magpie_via` 目录证据及正式的 owner 前缀路径，排除本地 `auto/`、`group/` 条目，只展开一级命名空间，完整请求模型名不变。新快照保留 `remote_route` 元数据，不为历史推导补全，也不把随机 hop ID 保存为身份。目录握手会附带非对话模型，必须过滤。快照只保留当时记录的元数据，不用当前目录回填历史身份。`gateway-default` 是并发池，不是上游账号。未知供应商类型和图标使用中性展示，不编造异常标签或检测器。
-- 题库内容相同还不够，Thinking、输出预算、工具轮次等执行配置也必须可比。`default` 是不发送 `reasoning`，不是显式 `none`。
+- 题库内容相同还不够，Thinking、输出预算、工具轮次等执行配置也必须可比。引擎层 `thinking` 可选：省略或 `default` 时不发送 `reasoning`，不等于显式 `none`；`mixed`、`unknown` 为保留值。任务界面对未声明档位的路由只提供 `default`，对声明了档位的路由只提供这些显式档位。
 
 ## 安全与运行约束
 
 - 真实评测、校准和额外实测可能收费，执行前确认模型、账号、次数和预算。离线测试通过不构成真实请求授权。
 - 上游凭证只通过服务进程环境变量引用，不放进路由 JSON、前端、日志或文档。账号名称和模型回显不等于实际身份已核验。
 - 保持 loopback 监听、token、Host/Origin 校验、严格 JSON 和无重定向请求。错误响应不能泄露凭证或完整异常内容。
-- 临时 API 错误按 `max_api_retries` 重试，默认首次请求之外最多 3 次，同账号且共用整题超时时间。新任务默认每题总超时 600 秒，无 token、请求数、费用、工具调用数或交互轮数上限；历史任务手动重试保留原来显式记录的限制。能力问题不重试，不切换账号，重启不自动续跑。手动重试须由用户明确操作，保留历次尝试且不重跑成功样本。创建任务超时先查历史，不自动重发任务创建请求。
-- 一个任务包含独立持久化的单目标子 run。新任务默认完整题库 3 轮、run 内样本并发 6、任务内 run 并发 3，全局默认 18；账号和全局上限可以进一步限流。直接 run 保留每目标串行限制。全部子 run 证据和任务归属提交成功后才允许调度，不改写历史 run 字节。修改调度器时覆盖取消、发布失败、存储失败与重启边界。
+- 临时 API 错误按 `max_api_retries` 重试，默认首次请求之外最多 3 次，同账号且共用整题超时时间。新任务默认每题总超时 600 秒，无 token、请求数、费用、工具调用数或交互轮数上限；历史任务手动重试保留原来显式记录的限制。能力问题不重试，不切换账号，重启不自动续跑。手动重试须由用户明确操作，覆盖失败、超时、已中断与已取消样本，保留历次尝试且不重跑已完成样本。创建任务超时先查历史，不自动重发任务创建请求。
+- 一个任务包含独立持久化的单目标子 run。新任务默认完整题库 3 轮、run 内样本并发 6、任务内 run 并发 3；各任务独立控制自身的 `run_concurrency` 与 `sample_concurrency`，并按渠道和模型交错调度子 run。直接 run 共享全局上限（`MAGPIE_BENCH_CONCURRENCY`，默认 18）、账号并发上限及每目标串行限制。全部子 run 证据和任务归属提交成功后才允许调度，不改写历史 run 字节。已结束运行的摘要和观察记录索引缓存在 `.run-index-cache.json`。修改调度器时覆盖取消、发布失败、存储失败与重启边界。
 - 新任务只暴露整题超时（默认 600 秒），另保留轮数及并发；不重新引入请求、token、费用、工具或交互轮数上限。提交前展示样本规模和超时，历史重试保留当时记录的限制。不能暗示 Magpie 目录路由固定了账号；宿主网关也可能内部重试。账号固定和禁止上游重试需要明确受支持的宿主能力，生成路由名称不构成证据。
 
 ## 维护习惯
