@@ -130,7 +130,7 @@ describe('Responses-only HTTP transport', () => {
                         throw new Error('invalid usage must not reach grading');
                     }
                 },
-                { model: 'm', thinking: 'default' },
+                { model: 'm', thinking: 'high' },
                 1,
                 { max_output_tokens: 100, max_turns: 1, max_tool_calls: 1, timeout: 10 },
                 pricing,

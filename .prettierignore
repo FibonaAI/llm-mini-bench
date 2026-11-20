@@ -1,25 +1,16 @@
-# Bank grader, strict JSON and simulator sources are pinned by byte hash in every bank manifest.
-# Reformatting them would invalidate the banks; they change only together with a new bank version.
+# Bank grader, strict JSON and simulator sources are pinned by byte hash in the bank manifest.
+# Reformatting them would invalidate the bank; they change only together with a bank hash update.
 benchmark/src/assessment_tasks.ts
-benchmark/src/assessment_tools.ts
-benchmark/src/assessment_knowledge.ts
-benchmark/src/assessment_challenges.ts
 benchmark/src/assessment_json.ts
 benchmark/src/assessment_data.ts
-benchmark/src/assessment_resource.ts
-benchmark/src/assessment_dfa.ts
 benchmark/src/assessment_interactive.ts
 benchmark/src/assessment_blackbox.ts
 benchmark/src/assessment_documents.ts
-benchmark/src/assessment_depot.ts
-benchmark/src/assessment_push_planning.ts
 benchmark/src/assessment_delegated_release.ts
-benchmark/src/assessment_safe_control.ts
 # Browser acceptance steps are statement fragments of one async function, not standalone modules.
 # Data, evidence and prose keep their exact bytes.
 benchmark/banks/
 benchmark/baselines/
-benchmark/tests/fixtures/
 benchmark/examples/
 *.md
 *.json

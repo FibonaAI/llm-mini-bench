@@ -91,7 +91,7 @@ async function smoke(channel: string, spec: string, registryUrl?: string) {
     });
     const [output, error, status] = await Promise.all([new Response(child.stdout).text(), new Response(child.stderr).text(), child.exited]);
     assert.equal(status, 0, error);
-    assert.deepEqual(JSON.parse(output), { id: 'magpie-mini-bench', tasks: 14, baselines: 0, page: true });
+    assert.deepEqual(JSON.parse(output), { id: 'magpie-mini-bench', tasks: 12, baselines: 0, page: true });
     return { channel, version: manifest.version, ...JSON.parse(output) };
 }
 try {

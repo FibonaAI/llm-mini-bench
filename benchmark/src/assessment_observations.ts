@@ -18,6 +18,8 @@ export interface AssessmentObservation extends Evidence {
             content_score: number | null;
             instruction_checks: Record<string, boolean>;
             outcome: string | null;
+            elapsed_seconds: number | null;
+            ended_after_submission: string | null;
         }[];
     }[];
 }
@@ -30,13 +32,21 @@ const knownUsage = (value: unknown): value is UsageValue =>
     Number.isInteger(value.output_tokens) &&
     (value.input_tokens as number) >= 0 &&
     (value.output_tokens as number) >= 0;
-const sentNoRequest = (attempt: Evidence) => Array.isArray(attempt.calls) && attempt.calls.length === 0;
+const sentNoRequest = (attempt: Evidence) =>
+    (Array.isArray(attempt.calls) && attempt.calls.length === 0) ||
+    (!Array.isArray(attempt.calls) &&
+        !attempt.started_at &&
+        ['interrupted', 'cancelled', 'budget_not_admitted', 'pending'].includes(String(attempt.status)));
+const isTimeoutSample = (sample: Evidence) =>
+    sample.status === 'timeout' ||
+    (object(sample.grade) && sample.grade.outcome === 'timeout') ||
+    (sample.status === 'api_failure' && sample.runner_error === 'SampleTimeout');
 
 /**
- * Cumulative accounting over every attempt of every sample. An attempt that sent no request
- * (empty `calls`, e.g. budget_not_admitted) consumed nothing, so it is a known zero rather than
- * unknown. Attempts whose request(s) returned no usage stay unknown and are counted; the known
- * sums are a lower bound, never a substitute for the complete total.
+ * Cumulative accounting over every sample. When a sample has known effective usage and cost,
+ * use them directly. An attempt that sent no request (empty `calls`, e.g. budget_not_admitted)
+ * consumed nothing, so it is a known zero rather than unknown. Samples whose effective usage
+ * remains unknown stay counted for lower-bound presentation.
  */
 export function observation_usage_accounting(samples: readonly Evidence[]) {
     const usage_known = { input_tokens: 0, output_tokens: 0 };
@@ -56,6 +66,13 @@ export function observation_usage_accounting(samples: readonly Evidence[]) {
     };
     for (const sample of samples) {
         const prior = Array.isArray(sample.attempts) ? (sample.attempts as unknown[]).filter(object) : [];
+        if (knownUsage(sample.usage) && knownNumber(sample.estimated_uncached_cost_usd)) {
+            attempts += prior.length + 1;
+            usage_known.input_tokens += sample.usage.input_tokens;
+            usage_known.output_tokens += sample.usage.output_tokens;
+            cost_known += sample.estimated_uncached_cost_usd;
+            continue;
+        }
         const latest = (attempt: Evidence, key: 'usage' | 'cost') =>
             key === 'usage'
                 ? Object.hasOwn(attempt, 'latest_attempt_usage')
@@ -91,18 +108,31 @@ export function project_assessment_observation(
             .filter(sample => sample.task === card.id)
             .map(sample => {
                 const grade: Partial<BaselineGrade> = sample.grade ?? {};
+                const timeout = isTimeoutSample(sample);
+                const submission = object(sample.answer_submission) ? sample.answer_submission : null;
+                const ended_after_submission =
+                    typeof submission?.ended_after_submission === 'string' && submission.ended_after_submission.trim()
+                        ? submission.ended_after_submission
+                        : null;
                 return {
                     round: sample.round ?? null,
-                    status: sample.status ?? null,
-                    content_score: sample.status === 'completed' && finiteScore(grade.content_score) ? grade.content_score : null,
+                    status: timeout ? 'timeout' : (sample.status ?? null),
+                    content_score:
+                        sample.status === 'completed' && finiteScore(grade.content_score) ? grade.content_score : timeout ? 0 : null,
                     instruction_checks: structuredClone(grade.instruction_checks ?? {}),
-                    outcome: grade.outcome ?? null
+                    outcome: grade.outcome ?? (timeout ? 'timeout' : null),
+                    elapsed_seconds: knownNumber(sample.elapsed_seconds) ? sample.elapsed_seconds : null,
+                    ended_after_submission
                 };
             })
     }));
     const accounting = observation_usage_accounting(samples);
     const usage = accounting.unknown_usage_attempts === 0 && samples.length ? accounting.usage_known : null;
     const cost = accounting.unknown_cost_attempts === 0 && samples.length ? accounting.cost_known : null;
+    const elapsed_seconds =
+        samples.length && samples.every(sample => knownNumber(sample.elapsed_seconds))
+            ? samples.reduce((sum, sample) => sum + Number(sample.elapsed_seconds), 0)
+            : null;
     return {
         id: baseline?.id ?? run.id + ':' + target.id,
         source,
@@ -120,6 +150,7 @@ export function project_assessment_observation(
         model_display_name: target.model_display_name ?? null,
         remote_route: target.remote_route === undefined ? null : structuredClone(target.remote_route),
         created_at: run.created_at ?? null,
+        elapsed_seconds,
         usage,
         estimated_cost_usd: cost,
         usage_accounting: {
@@ -137,7 +168,12 @@ export function project_assessment_observation(
         implementation: Object.keys(bank.source_sha256 ?? {}).some(key => key.endsWith('.py')) ? 'python-historical' : 'typescript-bun',
         assessment_protocol_sha256: candidate?.assessment_protocol_sha256 ?? null,
         rounds: plan.rounds ?? null,
-        status: run.status ?? null,
+        status:
+            run.status === 'failed' &&
+            samples.length > 0 &&
+            samples.every(sample => sample.status === 'completed' || isTimeoutSample(sample))
+                ? 'completed'
+                : (run.status ?? null),
         baseline_eligible: candidate !== null,
         ineligibility_reason: reason,
         tasks

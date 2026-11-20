@@ -18,7 +18,7 @@ describe('sample protocol identity compatibility', () => {
         for (const max_output_tokens of ['omit', undefined, null, 128] as const)
             for (const max_api_retries of ['omit', undefined, 0, 3] as const)
                 for (const timeout_scope of ['omit', undefined, 'sample'] as const)
-                    for (const thinking of ['default', 'none', 'high'])
+                    for (const thinking of ['none', 'low', 'high'])
                         for (const stream of [false, true]) {
                             const config: AssessmentSampleConfig = {
                                 ...base,
@@ -45,7 +45,7 @@ describe('sample protocol identity compatibility', () => {
                         }
     });
     test('undefined is omitted but null and new policies remain distinct assessment identities', () => {
-        const identity = (config: AssessmentSampleConfig, thinking = 'default', stream = true) =>
+        const identity = (config: AssessmentSampleConfig, thinking = 'high', stream = true) =>
             assessment_sample_protocol(task, thinking, config, stream);
         const omitted = identity(base);
         expect(identity({ ...base, max_output_tokens: undefined, max_api_retries: undefined, timeout_scope: undefined })).toEqual(omitted);
@@ -62,8 +62,9 @@ describe('sample protocol identity compatibility', () => {
             expect(changed.execution_protocol).toEqual(omitted.execution_protocol);
             expect(changed.assessment_protocol_sha256).not.toBe(omitted.assessment_protocol_sha256);
         }
-        expect(omitted.execution_protocol.requests.fixture).toEqual({ stream: true });
+        expect(omitted.execution_protocol.requests.fixture).toEqual({ stream: true, reasoning: { effort: 'high' } });
         expect(identity(base, 'none').execution_protocol.requests.fixture).toEqual({ stream: true, reasoning: { effort: 'none' } });
+        expect(identity(base, 'high', false).execution_protocol.requests.fixture).toEqual({ reasoning: { effort: 'high' } });
         expect(identity(base, 'default', false).execution_protocol.requests.fixture).toEqual({});
     });
 });

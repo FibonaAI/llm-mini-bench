@@ -1,13 +1,22 @@
 import { PRODUCTION_BANK_VERSION } from '../src/production_bank.ts';
 import { RunCallSummaryReader } from '../src/bench_call_summaries.ts';
-import { existsSync, lstatSync, readFileSync, readdirSync, realpathSync } from 'node:fs';
+import { existsSync, lstatSync, readFileSync, readdirSync, realpathSync, statSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { dirname, extname, join, relative, resolve } from 'node:path';
 import { createHash, randomUUID, timingSafeEqual } from 'node:crypto';
 import { fileURLToPath } from 'node:url';
-import { assessment_observations, build_assessment_baseline, load_assessment_baselines } from '../src/assessment_baselines.ts';
+import {
+    build_assessment_baseline,
+    load_assessment_baselines,
+    project_validated_baseline_observations,
+    type AssessmentBaseline
+} from '../src/assessment_baselines.ts';
 import { load_assessment_bank } from '../src/assessment_bank.ts';
-import { create_assessment_source_context, type AssessmentSourceContext } from '../src/assessment_provenance.ts';
+import {
+    assessment_source_signature,
+    create_assessment_source_context,
+    type AssessmentSourceContext
+} from '../src/assessment_provenance.ts';
 import { parseAssessmentJson } from '../src/assessment_json.ts';
 import { readBenchLimitedBody } from '../src/bench_http_body.ts';
 export { readBenchLimitedBody } from '../src/bench_http_body.ts';
@@ -93,26 +102,110 @@ export class BenchService {
     async quota_cards(refresh = false): Promise<BenchQuotaCatalog> {
         return this.adapter?.quotas ? this.adapter.quotas.read(refresh) : { status: 'unavailable', fetched_at: null, cards: [] };
     }
-    baselines(context: AssessmentSourceContext = create_assessment_source_context()) {
+    private _baselines_cache: { key: string; baselines: AssessmentBaseline[] } | null = null;
+    private _observations_cache: { key: string; etag: string; body: string; gzip: Uint8Array<ArrayBuffer> | null } | null = null;
+    private _banks_cache: { key: string; body: string; gzip: Uint8Array<ArrayBuffer> | null } | null = null;
+    private _tasks_cache: { revision: number; body: string; gzip: Uint8Array<ArrayBuffer> | null } | null = null;
+    private _runs_cache: { revision: number; body: string; gzip: Uint8Array<ArrayBuffer> | null } | null = null;
+    private baselines_signature(): { signature: string; paths: string[] } {
         const paths: string[] = [];
+        const parts: string[] = [];
         // Historical fixtures are retained for offline replay, never mixed into personal workspaces.
         const directory = join(this.data_dir, 'assessment-baselines');
-        if (existsSync(directory))
-            for (const name of readdirSync(directory).sort()) if (name.endsWith('.json')) paths.push(join(directory, name));
-        const baselines = load_assessment_baselines(paths, context);
-        return [...new Map(baselines.map(baseline => [baseline.id, baseline])).values()];
+        if (existsSync(directory)) {
+            for (const name of readdirSync(directory).sort()) {
+                if (!name.endsWith('.json')) continue;
+                const full = join(directory, name);
+                paths.push(full);
+                try {
+                    const st = statSync(full);
+                    parts.push(`${name}:${st.size}:${st.mtimeMs}`);
+                } catch {
+                    parts.push(`${name}:missing`);
+                }
+            }
+        }
+        return { signature: parts.join('|'), paths };
+    }
+    baselines(context?: AssessmentSourceContext, sourceSig = assessment_source_signature()): AssessmentBaseline[] {
+        const { signature, paths } = this.baselines_signature();
+        const key = `${sourceSig}\u0000${signature}`;
+        if (!context && this._baselines_cache?.key === key) return this._baselines_cache.baselines;
+        const resolvedContext = context ?? create_assessment_source_context();
+        const baselines = load_assessment_baselines(paths, resolvedContext);
+        const deduped = [...new Map(baselines.map(baseline => [baseline.id, baseline])).values()];
+        if (!context) this._baselines_cache = { key, baselines: deduped };
+        return deduped;
     }
     create_run_baseline(run_id: string, target_id: string) {
         const run = this.bench_execution().get_run(run_id);
         if (!run) return null;
         const baseline = build_assessment_baseline(run, target_id);
         save_execution_json(join(this.data_dir, 'assessment-baselines', randomUUID().replaceAll('-', '') + '.json'), baseline);
+        this._baselines_cache = null;
+        this._observations_cache = null;
         return baseline;
     }
     observations() {
         const execution = this.bench_execution(),
+            sourceSig = assessment_source_signature(),
             context = create_assessment_source_context();
-        return assessment_observations(this.baselines(context), execution.list_run_snapshots(), context);
+        const baselineRows = project_validated_baseline_observations(this.baselines(undefined, sourceSig));
+        const runRows = execution.list_observations(context, sourceSig);
+        return [...baselineRows, ...runRows];
+    }
+    cached_observations_payload(): { etag: string; body: string; gzip: Uint8Array<ArrayBuffer> | null } {
+        const execution = this.bench_execution();
+        const sourceSig = assessment_source_signature();
+        const { signature: baselineSig } = this.baselines_signature();
+        const key = `${sourceSig}\u0000${baselineSig}\u0000${execution.revision}`;
+        if (this._observations_cache?.key === key) return this._observations_cache;
+        const observations = this.observations();
+        const etag = createHash('sha256').update(JSON.stringify(observations)).digest('hex').slice(0, 32);
+        const body = JSON.stringify({ etag, observations });
+        this._observations_cache = { key, etag, body, gzip: null };
+        return this._observations_cache;
+    }
+    cached_banks_payload(): { body: string; gzip: Uint8Array<ArrayBuffer> | null } {
+        const sourceSig = assessment_source_signature();
+        if (this._banks_cache?.key === sourceSig) return this._banks_cache;
+        const bank = load_assessment_bank(PRODUCTION_BANK_VERSION);
+        const tasks = bank.tasks.map(task => Object.fromEntries(Object.entries(task).filter(([, value]) => typeof value !== 'function')));
+        const body = JSON.stringify({
+            execution_policy: 'sample-timeout-v1',
+            banks: [
+                {
+                    id: 'assessment-' + bank.version,
+                    version: bank.version,
+                    production: true,
+                    kind: 'assessment',
+                    title: 'Mini Bench',
+                    task_sha256: bank.task_sha256,
+                    tasks,
+                    scoring_policy: bank.scoring_policy
+                }
+            ]
+        });
+        this._banks_cache = { key: sourceSig, body, gzip: null };
+        return this._banks_cache;
+    }
+    cached_tasks_payload(execution: BenchExecutionService): { body: string; gzip: Uint8Array<ArrayBuffer> | null } {
+        if (execution.list_tasks !== BenchExecutionService.prototype.list_tasks)
+            return { body: JSON.stringify({ tasks: execution.list_tasks() }), gzip: null };
+        const revision = execution.revision;
+        if (this._tasks_cache?.revision === revision) return this._tasks_cache;
+        const body = JSON.stringify({ tasks: execution.list_tasks() });
+        this._tasks_cache = { revision, body, gzip: null };
+        return this._tasks_cache;
+    }
+    cached_runs_payload(execution: BenchExecutionService): { body: string; gzip: Uint8Array<ArrayBuffer> | null } {
+        if (execution.list_runs !== BenchExecutionService.prototype.list_runs)
+            return { body: JSON.stringify({ runs: execution.list_runs() }), gzip: null };
+        const revision = execution.revision;
+        if (this._runs_cache?.revision === revision) return this._runs_cache;
+        const body = JSON.stringify({ runs: execution.list_runs() });
+        this._runs_cache = { revision, body, gzip: null };
+        return this._runs_cache;
     }
 }
 function secureRequest(request: Request): boolean {
@@ -185,6 +278,13 @@ export function make_handler(service: BenchService, web_dir?: string): (request:
         }
         // Larger JSON bodies (observations, task/run lists polled every 2 s) compress roughly 10x.
         const acceptsGzip = /\bgzip\b/i.test(request.headers.get('accept-encoding') ?? '');
+        const jsonCached = (status: number, cached: { body: string; gzip: Uint8Array<ArrayBuffer> | null }) => {
+            if (!acceptsGzip || cached.body.length < JSON_GZIP_MIN_BYTES) return new Response(cached.body, { status, headers });
+            if (!cached.gzip) cached.gzip = Bun.gzipSync(cached.body);
+            headers.set('Content-Encoding', 'gzip');
+            headers.append('Vary', 'Accept-Encoding');
+            return new Response(cached.gzip, { status, headers });
+        };
         const json = (status: number, value: unknown) => {
             const body = JSON.stringify(value);
             if (!acceptsGzip || body.length < JSON_GZIP_MIN_BYTES) return new Response(body, { status, headers });
@@ -208,34 +308,14 @@ export function make_handler(service: BenchService, web_dir?: string): (request:
         }
         try {
             if (path.startsWith('/api/bench/')) {
-                if (request.method === 'GET' && path === '/api/bench/banks') {
-                    const bank = load_assessment_bank(PRODUCTION_BANK_VERSION);
-                    const tasks = bank.tasks.map(task =>
-                        Object.fromEntries(Object.entries(task).filter(([, value]) => typeof value !== 'function'))
-                    );
-                    return json(200, {
-                        execution_policy: 'sample-timeout-v1',
-                        banks: [
-                            {
-                                id: 'assessment-' + bank.version,
-                                version: bank.version,
-                                production: true,
-                                kind: 'assessment',
-                                title: 'Mini Bench',
-                                task_sha256: bank.task_sha256,
-                                tasks,
-                                scoring_policy: bank.scoring_policy
-                            }
-                        ]
-                    });
-                }
+                if (request.method === 'GET' && path === '/api/bench/banks') return jsonCached(200, service.cached_banks_payload());
                 if (request.method === 'GET' && path === '/api/bench/baselines') return json(200, { baselines: service.baselines() });
                 if (request.method === 'GET' && path === '/api/bench/observations') {
                     // `known` lets a client that already holds this exact list skip the download.
-                    const observations = service.observations();
-                    const etag = createHash('sha256').update(JSON.stringify(observations)).digest('hex').slice(0, 32);
-                    if (new URL(request.url).searchParams.get('known') === etag) return json(200, { etag, unchanged: true });
-                    return json(200, { etag, observations });
+                    const cached = service.cached_observations_payload();
+                    if (new URL(request.url).searchParams.get('known') === cached.etag)
+                        return json(200, { etag: cached.etag, unchanged: true });
+                    return jsonCached(200, cached);
                 }
                 const execution = service.bench_execution();
                 if (request.method === 'GET' && path === '/api/bench/quota-cards')
@@ -246,7 +326,8 @@ export function make_handler(service: BenchService, web_dir?: string): (request:
                 }
                 if (request.method === 'POST' && path === '/api/bench/task-plans')
                     return json(200, await execution.plan_task(await requestBody(request)));
-                if (request.method === 'GET' && path === '/api/bench/tasks') return json(200, { tasks: execution.list_tasks() });
+                if (request.method === 'GET' && path === '/api/bench/tasks')
+                    return jsonCached(200, service.cached_tasks_payload(execution));
                 if (request.method === 'POST' && path === '/api/bench/tasks')
                     return json(202, { id: await execution.start_task(await requestBody(request)) });
                 const taskMatch = path.match(/^\/api\/bench\/tasks\/([0-9a-f]{32})(\/cancel|\/retry)?$/);
@@ -266,7 +347,7 @@ export function make_handler(service: BenchService, web_dir?: string): (request:
                 }
                 if (request.method === 'POST' && path === '/api/bench/plans')
                     return json(200, await execution.plan(await requestBody(request)));
-                if (request.method === 'GET' && path === '/api/bench/runs') return json(200, { runs: execution.list_runs() });
+                if (request.method === 'GET' && path === '/api/bench/runs') return jsonCached(200, service.cached_runs_payload(execution));
                 if (request.method === 'POST' && path === '/api/bench/runs')
                     return json(202, { id: await execution.start_run(await requestBody(request)) });
                 const match = path.match(/^\/api\/bench\/runs\/([0-9a-f]{32})(\/cancel|\/retry|\/baseline|\/calls)?$/);
@@ -274,7 +355,10 @@ export function make_handler(service: BenchService, web_dir?: string): (request:
                     const id = match[1]!;
                     if (request.method === 'GET' && match[2] === '/calls') {
                         const execution = service.bench_execution();
-                        if (!execution.get_run(id)) return json(404, { error: 'run not found' });
+                        const exists =
+                            execution.has_run(id) ||
+                            (execution.get_run !== BenchExecutionService.prototype.get_run && Boolean(execution.get_run(id)));
+                        if (!exists) return json(404, { error: 'run not found' });
                         return json(200, { calls: (await service.call_summaries(execution.data_dir).read(id)) ?? [] });
                     }
                     if (request.method === 'GET' && !match[2]) {

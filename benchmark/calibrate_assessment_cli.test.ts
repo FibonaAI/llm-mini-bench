@@ -114,7 +114,7 @@ describe('standalone calibration CLI', () => {
         expect(sources['src/bench_routes.ts']).toMatch(/^[0-9a-f]{64}$/);
         expect(rows.at(-1)).toMatchObject({ type: 'summary', samples: 2, completed: 2, planned_samples: 2 });
     });
-    test.each(['1.0', '2.2'])('recorded %s source map imports frozen streaming execution without the repository', async version => {
+    test.each(['1.0'])('recorded %s source map imports frozen streaming execution without the repository', async version => {
         const fixture = setup(version);
         await main([...fixture.args, '--bank-version', version], {
             ...fixture.dependencies,

@@ -13,12 +13,15 @@ describe('execution protocol provenance', () => {
         ).toEqual(['low', 'ultra', 'future-effort']);
         expect(advertised_thinking_levels({ reasoning_levels: 'high' })).toEqual([]);
     });
-    test('default omits reasoning and is not explicit none; budgets change hash', () => {
+    test('default omits reasoning and is not explicit none; efforts and budgets change hash', () => {
         const questions = [{ id: 'task', max_output_tokens: 8192 }];
-        const ordinary = target_execution_protocol(questions, 'default'),
+        const high = target_execution_protocol(questions, 'high'),
             none = target_execution_protocol(questions, 'none');
-        expect(ordinary.requests.task).toEqual({ max_output_tokens: 8192 });
+        expect(high.requests.task).toEqual({ reasoning: { effort: 'high' }, max_output_tokens: 8192 });
         expect(none.requests.task!.reasoning).toEqual({ effort: 'none' });
+        expect(execution_protocol_hash(high)).not.toBe(execution_protocol_hash(none));
+        const ordinary = target_execution_protocol(questions, 'default');
+        expect(ordinary.requests.task).toEqual({ max_output_tokens: 8192 });
         expect(execution_protocol_hash(ordinary)).not.toBe(execution_protocol_hash(none));
         expect(execution_protocol_hash(none)).not.toBe(
             execution_protocol_hash(target_execution_protocol([{ id: 'task', max_output_tokens: 1024 }], 'none'))
@@ -52,7 +55,8 @@ describe('execution protocol provenance', () => {
             { reasoning: { effort: 'high', extra: true } }
         ])
             expect(() => execution_protocol_hash({ ...original, requests: { task: config } })).toThrow();
-        for (const value of ['', 'unknown', 'mixed', null]) expect(() => target_execution_protocol([{ id: 'task' }], value)).toThrow();
+        for (const value of ['', 'unknown', 'mixed', null, undefined])
+            expect(() => target_execution_protocol([{ id: 'task' }], value)).toThrow();
         expect(() =>
             execution_protocol_hash(
                 parseAssessmentJson(

@@ -48,7 +48,7 @@ test('production runner streamed results promote offline with legacy and new sam
     try {
         const client = new GatewayClient(`http://127.0.0.1:${server.port}`, 'offline-key');
         const policies: { thinking: string; config: RunnerConfig & { max_output_tokens: number | null } }[] = [
-            { thinking: 'default', config: { max_output_tokens: null, max_turns: null, max_tool_calls: null, timeout: 120 } },
+            { thinking: 'high', config: { max_output_tokens: null, max_turns: null, max_tool_calls: null, timeout: 120 } },
             {
                 thinking: 'none',
                 config: {
@@ -122,7 +122,7 @@ test('production runner streamed results promote offline with legacy and new sam
                 samples
             };
             const baseline = build_assessment_baseline(run, target.id);
-            expect(baseline.samples).toHaveLength(14);
+            expect(baseline.samples).toHaveLength(12);
             expect(baseline.limits).toEqual(config);
             expect(baseline.samples.every(sample => sample.execution_protocol.requests[sample.task]!.stream === true)).toBe(true);
             expect(assessment_observations([baseline], [run]).map(row => row.baseline_eligible)).toEqual([true, true]);
@@ -138,7 +138,7 @@ test('production runner streamed results promote offline with legacy and new sam
                 'sample execution protocol is unknown or contradictory'
             );
         }
-        expect(requests).toHaveLength(48);
+        expect(requests).toHaveLength(45);
     } finally {
         server.stop(true);
     }

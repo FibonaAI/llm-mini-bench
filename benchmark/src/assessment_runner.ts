@@ -342,7 +342,8 @@ export async function run_assessment_sample(
         if (submitProtocol) Object.assign(body, { instructions: SUBMIT_ANSWER_INSTRUCTIONS, tools: requestTools });
         else if (simulator) Object.assign(body, { tools: task.tools });
         let payload: Record<string, unknown> = {},
-            status = -1;
+            status = -1,
+            turnCost: number | null = null;
         let admitted = false,
             apiFailed = false;
         const retryPolicy = config.max_api_retries !== undefined;
@@ -433,8 +434,7 @@ export async function run_assessment_sample(
             last_http_status = status;
             payload = record(raw) ? raw : { error: 'non-object response', received: raw ?? null };
             const cost = budget.settle(reservation, payload, pricing, outputCap, status === -1, retryPolicy);
-            costs.push(cost);
-            usages.push(assessment_usage(payload));
+            turnCost = cost;
             journal.write({
                 type: 'call',
                 ...sample,
@@ -480,6 +480,12 @@ export async function run_assessment_sample(
             outcome = 'cancelled';
             break;
         }
+        const cost = turnCost;
+        const usage = assessment_usage(payload);
+        if (cost !== null && usage !== null) {
+            costs.push(cost);
+            usages.push(usage);
+        }
         if (expired()) {
             outcome = 'api_failure';
             local_error = 'SampleTimeout';
@@ -497,10 +503,8 @@ export async function run_assessment_sample(
             outcome = retryPolicy ? 'incomplete' : 'response_incomplete_or_error';
             break;
         }
-        const cost = costs.at(-1);
-        const usage = assessment_usage(payload);
-        if (cost === null || (outputCap !== undefined && (usage?.output_tokens ?? 0) > outputCap)) {
-            outcome = retryPolicy ? (cost === null ? 'api_failure' : 'incomplete') : 'usage_or_cap_failure';
+        if (cost === null || usage === null || (outputCap !== undefined && usage.output_tokens > outputCap)) {
+            outcome = retryPolicy ? (cost === null || usage === null ? 'api_failure' : 'incomplete') : 'usage_or_cap_failure';
             break;
         }
         const output = Object.hasOwn(payload, 'output') ? payload.output : [];
@@ -611,6 +615,21 @@ export async function run_assessment_sample(
         } catch (error) {
             outcome = 'grading_error';
             local_error = error_name(error);
+        }
+    }
+    if (outcome !== 'completed' && ended_after_submission === null && usages.length < calls.length) {
+        if (
+            ![
+                'incomplete',
+                'turn_limit',
+                'tool_call_limit',
+                'empty_final_answer',
+                'unsupported_tool_sequence',
+                'invalid_tool_call_id'
+            ].includes(outcome)
+        ) {
+            costs.push(null);
+            usages.push(null);
         }
     }
     const completeUsage = usages.length > 0 && usages.every((value): value is AssessmentUsage => value !== null);

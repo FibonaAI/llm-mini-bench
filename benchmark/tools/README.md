@@ -44,23 +44,14 @@ Converts one `benchmark/calibrate_assessment.ts` journal into a read-only run in
 
 ## Import a baseline from a complete run
 
-
 ```sh
 bun benchmark/tools/import_assessment_baseline.ts /path/to/assessment/RUN_ID/run.json \
   --target-id TARGET_ID --output-dir benchmark/baselines
 ```
 
-The input must be a complete `run.json` saved by the execution service, not the calibrator's JSONL or an old baseline summary. The tool validates all 14 tasks in 1.0, every planned round, the bank hash, source code, and per-sample execution protocols. It accepts only completed, gradable results.
+The input must be a complete `run.json` saved by the execution service, not the calibrator's JSONL. The tool validates all 12 tasks in Assessment 1.0, every planned round, the bank hash, source code, and per-sample execution protocols. It accepts only completed, gradable results.
 
-The output filename is generated from the content hash of the full snapshot. Importing the same evidence again does not overwrite different content. The bundled baseline directory is part of the project. Save personal baselines through the plugin page instead to avoid writing personal data into the project.
-
-## Replay bundled historical evidence
-
-```sh
-bun benchmark/tools/replay_assessment_evidence.ts
-```
-
-This command verifies the registered snapshot and raw-file digests, then replays 19 saved responses, five simulator calls, and 14 grades with the current TypeScript implementation. It prints a report without making network requests or modifying the historical evidence. Use `--output NEW_FILE` to save a report to a new file. The report distinguishes historical Python source hashes from current TypeScript source hashes; matching results do not make those sources identical.
+The output filename is generated from the content hash of the full snapshot. Importing the same evidence again does not overwrite different content. Save personal baselines through the plugin page instead to avoid writing personal data into the project.
 
 ## Live evaluation entry points
 

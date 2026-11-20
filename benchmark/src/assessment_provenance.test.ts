@@ -24,7 +24,7 @@ const temporary = () => {
 
 test('production 1.0 archives the unconditional loader closure without changing bank hashes', async () => {
     const bank = load_assessment_bank();
-    expect(bank.extension_sha256).toBeUndefined();
+    expect(bank.extension_sha256).toBeDefined();
     const paths = assessment_execution_source_paths(bank),
         { sources, hashes } = capture_assessment_sources(bank);
     for (const path of [
@@ -51,7 +51,7 @@ test('production 1.0 archives the unconditional loader closure without changing 
         mkdirSync(dirname(join(root, path)), { recursive: true });
         writeFileSync(join(root, path), readFileSync(join(ASSESSMENT_PROJECT_ROOT, path)));
     }
-    const program = `const {load_assessment_bank}=await import(${JSON.stringify(join(root, 'src/assessment_bank.ts'))}); const bank=load_assessment_bank(); if(bank.task_ids.length!==14) throw new Error('Wrong production bank'); await import(${JSON.stringify(join(root, 'src/bench_execution.ts'))}); await import(${JSON.stringify(join(root, 'src/assessment_baselines.ts'))}); console.log(bank.task_sha256);`;
+    const program = `const {load_assessment_bank}=await import(${JSON.stringify(join(root, 'src/assessment_bank.ts'))}); const bank=load_assessment_bank(); if(bank.task_ids.length!==12) throw new Error('Wrong production bank'); await import(${JSON.stringify(join(root, 'src/bench_execution.ts'))}); await import(${JSON.stringify(join(root, 'src/assessment_baselines.ts'))}); console.log(bank.task_sha256);`;
     const child = Bun.spawn([process.execPath, '--eval', program], {
         cwd: tmpdir(),
         stdout: 'pipe',
@@ -79,7 +79,7 @@ test('service and calibration source registry select identical core bytes for ev
                 base_url: 'http://127.0.0.1:1',
                 model: 'offline/model',
                 api_key: 'fixture-key',
-                thinking_levels: [],
+                thinking_levels: ['high'],
                 account_concurrency: 1,
                 pricing: { prompt: 0, completion: 0 }
             };
@@ -90,13 +90,11 @@ test('service and calibration source registry select identical core bytes for ev
     };
     const service = new BenchExecutionService(temporary(), routes);
     try {
-        for (const version of ['1.0', '2.0', '2.1', '2.2', '2.3']) {
-            const plan = await service.plan({
-                bank_version: version,
-                targets: [{ id: 'offline', route_id: 'offline', thinking: 'default' }]
-            });
-            expect(plan.source_sha256).toEqual(capture_assessment_sources(load_assessment_bank(version)).hashes);
-        }
+        const plan = await service.plan({
+            bank_version: '1.0',
+            targets: [{ id: 'offline', route_id: 'offline', thinking: 'high' }]
+        });
+        expect(plan.source_sha256).toEqual(capture_assessment_sources(load_assessment_bank('1.0')).hashes);
     } finally {
         await service.close();
     }

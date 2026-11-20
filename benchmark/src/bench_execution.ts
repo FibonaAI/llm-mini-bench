@@ -1,13 +1,38 @@
 import { PRODUCTION_BANK_VERSION } from './production_bank.ts';
 import { run_journal_path, scan_journal_call_records, scan_journal_call_records_async } from './bench_call_summaries.ts';
-import { closeSync, existsSync, fsyncSync, lstatSync, openSync, readFileSync, readdirSync, writeFileSync } from 'node:fs';
+import {
+    closeSync,
+    existsSync,
+    fsyncSync,
+    lstatSync,
+    openSync,
+    readFileSync,
+    readdirSync,
+    renameSync,
+    statSync,
+    unlinkSync,
+    writeFileSync
+} from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { createHash, randomUUID } from 'node:crypto';
 import { AssessmentBudget, run_assessment_sample } from './assessment_runner.ts';
 import { load_assessment_bank } from './assessment_bank.ts';
-import { capture_assessment_sources } from './assessment_provenance.ts';
+import {
+    assessment_source_digest,
+    assessment_source_signature,
+    capture_assessment_sources,
+    create_assessment_source_context,
+    type AssessmentSourceContext
+} from './assessment_provenance.ts';
+import { project_run_observations } from './assessment_baselines.ts';
+import type { AssessmentObservation } from './assessment_observations.ts';
 import { private_directory, save_execution_json, RunJournal, SampleJournal } from './bench_execution_storage.ts';
-import { execution_retryable_samples, execution_run_summary, execution_task_summary } from './bench_execution_queries.ts';
+import {
+    execution_retryable_samples,
+    execution_run_summary,
+    execution_task_summary,
+    is_timeout_sample
+} from './bench_execution_queries.ts';
 export { EXECUTION_SOURCE_PATHS } from './assessment_provenance.ts';
 export { private_directory, save_execution_json } from './bench_execution_storage.ts';
 import { GatewayClient } from './client.ts';
@@ -194,14 +219,98 @@ class RunBudget extends AssessmentBudget {
         };
     }
 }
+const RUN_INDEX_CACHE_VERSION = 1;
+const RUN_INDEX_CACHE_FILE = '.run-index-cache.json';
+
+interface LegacyRunOverlay {
+    status?: string;
+    known_cost_lower_bound_usd?: number;
+    samples: Record<
+        string,
+        {
+            status?: string;
+            usage?: { input_tokens: number; output_tokens: number };
+            estimated_uncached_cost_usd?: number;
+        }
+    >;
+}
+
+interface IndexedRun {
+    id: string;
+    task_id?: string;
+    execution_kind?: string;
+    status: string;
+    stop_reason: string | null;
+    created_at: string;
+    updated_at: string;
+    summary: ReturnType<typeof execution_run_summary>;
+    observations: AssessmentObservation[];
+    legacy_overlay?: LegacyRunOverlay;
+}
+
+interface RunIndexCacheEntry {
+    run_stat: string;
+    journal_sig: string;
+    entry: IndexedRun;
+}
+
+interface RunIndexCacheFile {
+    version: number;
+    source_digest: string;
+    runs: Record<string, RunIndexCacheEntry>;
+}
+
+function file_stat_token(path: string): string | null {
+    try {
+        const st = statSync(path);
+        return `${st.size}:${st.mtimeMs}:${st.ctimeMs}:${st.ino}`;
+    } catch {
+        return null;
+    }
+}
+
+function run_journal_signature(directory: string): string {
+    const parts: string[] = [];
+    const main = run_journal_path(directory);
+    if (main) parts.push(`${main}:${file_stat_token(main) ?? 'missing'}`);
+    try {
+        const retries = readdirSync(directory)
+            .filter(name => /^retry-[0-9a-f]{32}$/.test(name))
+            .sort();
+        for (const name of retries) {
+            const sub = run_journal_path(join(directory, name));
+            if (sub) parts.push(`${name}:${sub}:${file_stat_token(sub) ?? 'missing'}`);
+        }
+    } catch {
+        /* Ignore unreadable subdirectories during signature checks. */
+    }
+    return parts.join('|');
+}
+
+function slim_task_state(task: ExecutionTaskState): ExecutionTaskState {
+    const { task_snapshots: _snapshots, bank_snapshot: _bank, source_sha256: _sources, ...plan } = task.plan as unknown as RecordValue;
+    return {
+        ...task,
+        plan: { ...plan, provenance_omitted: true } as unknown as ExecutionTaskPlan
+    };
+}
+
 /** Event-driven scheduler serializes admission; only network requests run concurrently. */
 export class BenchExecutionService {
     readonly concurrency: number;
     readonly data_dir: string;
+    /** Active runs (and any run whose final persistence failed) stay in memory; terminal runs are indexed and loaded on demand. */
     readonly _runs = new Map<string, ExecutionRun>();
     readonly _runtime = new Map<string, RunRuntime>();
     readonly _tasks = new Map<string, ExecutionTaskState>();
+    private readonly _run_index = new Map<string, IndexedRun>();
+    private readonly _cache_entries = new Map<string, RunIndexCacheEntry>();
+    private readonly slim_tasks = new Set<string>();
+    private _cached_source_sig = '';
+    private _cached_source_digest = '';
+    private _revision = 0;
     private readonly task_active_runs = new Map<string, Set<string>>();
+    private readonly task_last_admitted_run = new Map<string, string>();
     readonly _account_active = new Map<string, number>();
     readonly _account_limits = new Map<string, number>();
     retry_wait?: (milliseconds: number, cancelled?: () => boolean) => Promise<void>;
@@ -222,13 +331,318 @@ export class BenchExecutionService {
         this.load_runs();
         this.load_tasks();
     }
+    get revision(): number {
+        return this._revision;
+    }
+    has_run(id: string): boolean {
+        return this._runs.has(id) || this._run_index.has(id);
+    }
+    private run_status(id: string): string | null {
+        return this._runs.get(id)?.status ?? this._run_index.get(id)?.status ?? null;
+    }
+    private run_summary(id: string): ReturnType<typeof execution_run_summary> {
+        const active = this._runs.get(id);
+        if (active) return execution_run_summary(active, this._runtime.get(id)?.budget.snapshot());
+        return clone(this._run_index.get(id)!.summary);
+    }
+    private index_run(run: ExecutionRun, context: AssessmentSourceContext, legacy_overlay?: LegacyRunOverlay): IndexedRun {
+        return {
+            id: run.id,
+            ...(typeof run.task_id === 'string' ? { task_id: run.task_id } : {}),
+            ...(typeof run.execution_kind === 'string' ? { execution_kind: run.execution_kind } : {}),
+            status: run.status,
+            stop_reason: run.stop_reason,
+            created_at: run.created_at,
+            updated_at: run.updated_at,
+            summary: execution_run_summary(run, this._runtime.get(run.id)?.budget.snapshot()),
+            observations: project_run_observations(run, context),
+            ...(legacy_overlay ? { legacy_overlay } : {})
+        };
+    }
+    private update_active_index(run: ExecutionRun): void {
+        const existing = this._run_index.get(run.id);
+        const summary = execution_run_summary(run, this._runtime.get(run.id)?.budget.snapshot());
+        this._run_index.set(run.id, {
+            id: run.id,
+            ...(typeof run.task_id === 'string' ? { task_id: run.task_id } : {}),
+            ...(typeof run.execution_kind === 'string' ? { execution_kind: run.execution_kind } : {}),
+            status: run.status,
+            stop_reason: run.stop_reason,
+            created_at: run.created_at,
+            updated_at: run.updated_at,
+            summary,
+            observations: existing?.observations ?? []
+        });
+    }
+    private cache_path(): string {
+        return join(this.data_dir, RUN_INDEX_CACHE_FILE);
+    }
+    private read_index_cache(source_digest: string): Map<string, RunIndexCacheEntry> {
+        const result = new Map<string, RunIndexCacheEntry>();
+        try {
+            const path = this.cache_path();
+            if (!existsSync(path)) return result;
+            const parsed = JSON.parse(readFileSync(path, 'utf8')) as RunIndexCacheFile;
+            if (
+                !object(parsed) ||
+                parsed.version !== RUN_INDEX_CACHE_VERSION ||
+                parsed.source_digest !== source_digest ||
+                !object(parsed.runs)
+            )
+                return result;
+            for (const [id, item] of Object.entries(parsed.runs)) {
+                if (
+                    /^[a-f0-9]{32}$/.test(id) &&
+                    object(item) &&
+                    typeof item.run_stat === 'string' &&
+                    typeof item.journal_sig === 'string' &&
+                    object(item.entry) &&
+                    item.entry.id === id &&
+                    typeof item.entry.status === 'string' &&
+                    TERMINAL_RUN_STATUSES.has(item.entry.status) &&
+                    object(item.entry.summary) &&
+                    Array.isArray(item.entry.observations)
+                )
+                    result.set(id, item as RunIndexCacheEntry);
+            }
+        } catch {
+            /* Corrupt or incompatible derived cache is ignored and rebuilt from durable evidence. */
+        }
+        return result;
+    }
+    private write_index_cache(): void {
+        try {
+            const payload: RunIndexCacheFile = {
+                version: RUN_INDEX_CACHE_VERSION,
+                source_digest: this._cached_source_digest,
+                runs: Object.fromEntries(this._cache_entries)
+            };
+            const temporary = join(this.data_dir, '.run-index-cache-' + uuid());
+            let fd: number | undefined;
+            try {
+                fd = openSync(temporary, 'wx', 0o600);
+                writeFileSync(fd, JSON.stringify(payload));
+                closeSync(fd);
+                fd = undefined;
+                renameSync(temporary, this.cache_path());
+            } finally {
+                if (fd !== undefined) closeSync(fd);
+                if (existsSync(temporary)) unlinkSync(temporary);
+            }
+        } catch {
+            /* Derived index cache is best-effort; never interrupt execution or mark storage failed. */
+        }
+    }
+    private apply_legacy_overlay(run: ExecutionRun, overlay?: LegacyRunOverlay): void {
+        for (const sample of run.samples) {
+            if (!object(sample.usage) && object(sample.latest_attempt_usage)) sample.usage = clone(sample.latest_attempt_usage);
+            if (
+                typeof sample.estimated_uncached_cost_usd !== 'number' &&
+                typeof sample.latest_attempt_cost_usd === 'number' &&
+                Number.isFinite(sample.latest_attempt_cost_usd)
+            )
+                sample.estimated_uncached_cost_usd = sample.latest_attempt_cost_usd;
+        }
+        if (!overlay) return;
+        if (overlay.status) run.status = overlay.status;
+        for (const sample of run.samples) {
+            const patch = overlay.samples[sample.sample_id];
+            if (!patch) continue;
+            if (patch.status) sample.status = patch.status;
+            if (patch.usage) {
+                if (!object(sample.usage)) sample.usage = clone(patch.usage);
+                if (Object.hasOwn(sample, 'latest_attempt_usage') && !object(sample.latest_attempt_usage))
+                    sample.latest_attempt_usage = clone(patch.usage);
+            }
+            if (patch.estimated_uncached_cost_usd !== undefined) {
+                if (typeof sample.estimated_uncached_cost_usd !== 'number')
+                    sample.estimated_uncached_cost_usd = patch.estimated_uncached_cost_usd;
+                if (Object.hasOwn(sample, 'latest_attempt_cost_usd') && typeof sample.latest_attempt_cost_usd !== 'number')
+                    sample.latest_attempt_cost_usd = patch.estimated_uncached_cost_usd;
+            }
+        }
+        if (object(run.budget) && overlay.known_cost_lower_bound_usd !== undefined) {
+            if (overlay.known_cost_lower_bound_usd > Number(run.budget.known_cost_lower_bound_usd ?? 0))
+                run.budget.known_cost_lower_bound_usd = overlay.known_cost_lower_bound_usd;
+        }
+    }
+    private load_run_from_disk(id: string): ExecutionRun | null {
+        const path = join(this.data_dir, id, 'run.json');
+        if (!existsSync(path)) return null;
+        const run = JSON.parse(readFileSync(path, 'utf8')) as ExecutionRun;
+        if (!object(run) || run.id !== id || !Array.isArray(run.samples) || !object(run.plan))
+            throw new TypeError('Saved bench run identity mismatch');
+        this.apply_legacy_overlay(run, this._run_index.get(id)?.legacy_overlay);
+        return run;
+    }
+    private normalize_legacy_run(directory: string, run: ExecutionRun): LegacyRunOverlay | undefined {
+        const overlay: LegacyRunOverlay = { samples: {} };
+        let patched = false;
+        // Classify legacy outcomes in memory; never rewrite historical evidence on load.
+        // Only legacy response_incomplete_or_error samples need journal evidence; journals can be
+        // hundreds of MB, so skip them otherwise and stream only call lines when required.
+        if (run.status === 'failed') {
+            const calls = new Map<string, RecordValue>();
+            const journal = run_journal_path(directory);
+            const legacy = run.samples.some(sample => sample.status === 'response_incomplete_or_error');
+            if (legacy && journal)
+                scan_journal_call_records(journal, row => {
+                    calls.set(String(row.call_id), row);
+                });
+            for (const sample of run.samples)
+                if (sample.status === 'response_incomplete_or_error') {
+                    const ids = Array.isArray(sample.calls) ? sample.calls : [];
+                    const last = calls.get(String(ids.at(-1)));
+                    sample.status =
+                        last && (last.http_status !== 200 || (object(last.raw_response) && !!last.raw_response.error))
+                            ? 'api_failure'
+                            : 'incomplete';
+                    overlay.samples[sample.sample_id] = { ...(overlay.samples[sample.sample_id] ?? {}), status: sample.status };
+                    patched = true;
+                }
+            if (
+                !run.samples.some(
+                    sample => ['api_failure', 'worker_error', 'storage_error'].includes(sample.status) && !is_timeout_sample(sample)
+                )
+            ) {
+                run.status =
+                    run.samples.length && run.samples.every(sample => sample.status === 'completed' || is_timeout_sample(sample))
+                        ? 'completed'
+                        : 'incomplete';
+                overlay.status = run.status;
+                patched = true;
+            }
+        }
+        for (const sample of run.samples) {
+            if (!object(sample.usage) && object(sample.latest_attempt_usage)) sample.usage = clone(sample.latest_attempt_usage);
+            if (
+                typeof sample.estimated_uncached_cost_usd !== 'number' &&
+                typeof sample.latest_attempt_cost_usd === 'number' &&
+                Number.isFinite(sample.latest_attempt_cost_usd)
+            )
+                sample.estimated_uncached_cost_usd = sample.latest_attempt_cost_usd;
+        }
+        const needsJournalUsage = run.samples.some(
+            sample =>
+                (sample.status === 'completed' || is_timeout_sample(sample)) &&
+                (!object(sample.usage) || typeof sample.estimated_uncached_cost_usd !== 'number')
+        );
+        if (needsJournalUsage) {
+            const callUsage = new Map<string, { usage: { input_tokens: number; output_tokens: number }; cost: number | null }>();
+            const journals = [
+                run_journal_path(directory),
+                ...(Array.isArray(run.retry_batches)
+                    ? (run.retry_batches as RecordValue[]).map(batch =>
+                          typeof batch?.request_id === 'string' ? run_journal_path(join(directory, 'retry-' + batch.request_id)) : null
+                      )
+                    : [])
+            ];
+            for (const journalPath of journals) {
+                if (!journalPath) continue;
+                scan_journal_call_records(journalPath, row => {
+                    const raw = object(row.raw_response) ? row.raw_response : null;
+                    const usage = raw && object(raw.usage) ? raw.usage : null;
+                    if (
+                        usage &&
+                        typeof usage.input_tokens === 'number' &&
+                        Number.isSafeInteger(usage.input_tokens) &&
+                        usage.input_tokens >= 0 &&
+                        typeof usage.output_tokens === 'number' &&
+                        Number.isSafeInteger(usage.output_tokens) &&
+                        usage.output_tokens >= 0
+                    ) {
+                        callUsage.set(String(row.call_id), {
+                            usage: { input_tokens: usage.input_tokens, output_tokens: usage.output_tokens },
+                            cost:
+                                typeof row.estimated_uncached_cost_usd === 'number' && Number.isFinite(row.estimated_uncached_cost_usd)
+                                    ? row.estimated_uncached_cost_usd
+                                    : null
+                        });
+                    }
+                });
+            }
+            for (const sample of run.samples) {
+                if (sample.status !== 'completed' && !is_timeout_sample(sample)) continue;
+                if (object(sample.usage) && typeof sample.estimated_uncached_cost_usd === 'number') continue;
+                const ids = Array.isArray(sample.calls) ? (sample.calls as string[]) : [];
+                const known = ids.map(callId => callUsage.get(String(callId))).filter(Boolean) as {
+                    usage: { input_tokens: number; output_tokens: number };
+                    cost: number | null;
+                }[];
+                if (known.length > 0 || is_timeout_sample(sample)) {
+                    const usage = known.reduce(
+                        (acc, item) => ({
+                            input_tokens: acc.input_tokens + item.usage.input_tokens,
+                            output_tokens: acc.output_tokens + item.usage.output_tokens
+                        }),
+                        { input_tokens: 0, output_tokens: 0 }
+                    );
+                    const target = run.plan.targets.find(item => item.id === sample.target_id);
+                    const pricing = target?.pricing;
+                    const cost = known.every(item => item.cost !== null)
+                        ? known.reduce((acc, item) => acc + (item.cost ?? 0), 0)
+                        : pricing
+                          ? usage.input_tokens * pricing.prompt + usage.output_tokens * pricing.completion
+                          : null;
+                    const patch = overlay.samples[sample.sample_id] ?? {};
+                    if (!object(sample.usage)) {
+                        sample.usage = usage;
+                        patch.usage = clone(usage);
+                        patched = true;
+                    }
+                    if (Object.hasOwn(sample, 'latest_attempt_usage') && !object(sample.latest_attempt_usage))
+                        sample.latest_attempt_usage = clone(usage);
+                    if (typeof sample.estimated_uncached_cost_usd !== 'number' && cost !== null) {
+                        sample.estimated_uncached_cost_usd = cost;
+                        patch.estimated_uncached_cost_usd = cost;
+                        patched = true;
+                    }
+                    if (
+                        Object.hasOwn(sample, 'latest_attempt_cost_usd') &&
+                        typeof sample.latest_attempt_cost_usd !== 'number' &&
+                        cost !== null
+                    )
+                        sample.latest_attempt_cost_usd = cost;
+                    if (patch.usage || patch.estimated_uncached_cost_usd !== undefined) overlay.samples[sample.sample_id] = patch;
+                }
+            }
+        }
+        if (object(run.budget)) {
+            const sampleCosts = run.samples
+                .map(sample => sample.estimated_uncached_cost_usd)
+                .filter((cost): cost is number => typeof cost === 'number' && Number.isFinite(cost) && cost >= 0);
+            const totalKnownCost = sampleCosts.reduce((sum, cost) => sum + cost, 0);
+            if (totalKnownCost > Number(run.budget.known_cost_lower_bound_usd ?? 0)) {
+                run.budget.known_cost_lower_bound_usd = totalKnownCost;
+                overlay.known_cost_lower_bound_usd = totalKnownCost;
+                patched = true;
+            }
+        }
+        return patched ? overlay : undefined;
+    }
     private load_runs(): void {
+        const context = create_assessment_source_context();
+        this._cached_source_sig = assessment_source_signature();
+        this._cached_source_digest = assessment_source_digest(context);
+        const existingCache = this.read_index_cache(this._cached_source_digest);
+        let cacheDirty = false;
+        const present = new Set<string>();
         for (const name of readdirSync(this.data_dir)) {
             const directory = join(this.data_dir, name);
             if (!/^[a-f0-9]{32}$/.test(name) || lstatSync(directory).isSymbolicLink() || !lstatSync(directory).isDirectory()) continue;
             const path = join(directory, 'run.json');
             if (!existsSync(path)) continue;
-            const run = parseAssessmentJson(readFileSync(path, 'utf8')) as ExecutionRun;
+            present.add(name);
+            let runStat = file_stat_token(path);
+            const journalSig = run_journal_signature(directory);
+            const cached = existingCache.get(name);
+            if (cached && runStat && cached.run_stat === runStat && cached.journal_sig === journalSig) {
+                this._run_index.set(name, cached.entry);
+                this._cache_entries.set(name, cached);
+                continue;
+            }
+            cacheDirty = true;
+            const run = JSON.parse(readFileSync(path, 'utf8')) as ExecutionRun;
             if (!object(run) || run.id !== name || !Array.isArray(run.samples) || !object(run.plan))
                 throw new TypeError('Saved bench run identity mismatch');
             if (!TERMINAL_RUN_STATUSES.has(run.status)) {
@@ -237,34 +651,29 @@ export class BenchExecutionService {
                 run.stop_reason = 'service_restart';
                 for (const sample of run.samples) if (['pending', 'running'].includes(sample.status)) sample.status = 'interrupted';
                 save_execution_json(path, run);
+                runStat = file_stat_token(path);
             }
-            // Classify legacy outcomes in memory; never rewrite historical evidence on load.
-            // Only legacy response_incomplete_or_error samples need journal evidence; journals can be
-            // hundreds of MB, so skip them otherwise and stream only call lines when required.
-            if (run.status === 'failed') {
-                const calls = new Map<string, RecordValue>();
-                const journal = run_journal_path(directory);
-                const legacy = run.samples.some(sample => sample.status === 'response_incomplete_or_error');
-                if (legacy && journal)
-                    scan_journal_call_records(journal, row => {
-                        calls.set(String(row.call_id), row);
-                    });
-                for (const sample of run.samples)
-                    if (sample.status === 'response_incomplete_or_error') {
-                        const ids = Array.isArray(sample.calls) ? sample.calls : [];
-                        const last = calls.get(String(ids.at(-1)));
-                        if (last && (last.http_status !== 200 || (object(last.raw_response) && !!last.raw_response.error)))
-                            sample.status = 'api_failure';
-                        else sample.status = 'incomplete';
-                    }
-                if (!run.samples.some(sample => ['api_failure', 'worker_error', 'storage_error'].includes(sample.status)))
-                    run.status = 'incomplete';
-            }
-            this._runs.set(name, run);
+            const legacyOverlay = this.normalize_legacy_run(directory, run);
+            const indexed = this.index_run(run, context, legacyOverlay);
+            this._run_index.set(name, indexed);
+            if (runStat && TERMINAL_RUN_STATUSES.has(indexed.status))
+                this._cache_entries.set(name, { run_stat: runStat, journal_sig: journalSig, entry: indexed });
         }
+        if (existingCache.size !== present.size) cacheDirty = true;
+        if (cacheDirty && this._cache_entries.size > 0) this.write_index_cache();
     }
     private task_path(id: string): string {
         return join(this.data_dir, 'tasks', id, 'task.json');
+    }
+    private load_full_task_from_disk(id: string): ExecutionTaskState {
+        const task = JSON.parse(readFileSync(this.task_path(id), 'utf8')) as unknown as ExecutionTaskState;
+        const cached = this._tasks.get(id);
+        if (cached) {
+            task.status = cached.status;
+            task.stop_reason = cached.stop_reason;
+            task.updated_at = cached.updated_at;
+        }
+        return task;
     }
     private load_tasks(): void {
         const root = join(this.data_dir, 'tasks');
@@ -275,7 +684,7 @@ export class BenchExecutionService {
             if (lstatSync(directory).isSymbolicLink() || !lstatSync(directory).isDirectory()) continue;
             const path = this.task_path(id);
             if (!existsSync(path)) continue; // Uncommitted staging directory never admits work.
-            const task = parseAssessmentJson(readFileSync(path, 'utf8')) as unknown as ExecutionTaskState;
+            const task = JSON.parse(readFileSync(path, 'utf8')) as unknown as ExecutionTaskState;
             if (
                 !object(task) ||
                 task.id !== id ||
@@ -283,7 +692,7 @@ export class BenchExecutionService {
                 !Array.isArray(task.child_run_ids) ||
                 !task.child_run_ids.length ||
                 new Set(task.child_run_ids).size !== task.child_run_ids.length ||
-                task.child_run_ids.some(child => typeof child !== 'string' || this._runs.get(child)?.task_id !== id)
+                task.child_run_ids.some(child => typeof child !== 'string' || this._run_index.get(child)?.task_id !== id)
             )
                 throw new TypeError('Saved bench task membership mismatch');
             if (!TERMINAL_RUN_STATUSES.has(task.status)) {
@@ -293,11 +702,12 @@ export class BenchExecutionService {
                 save_execution_json(path, task);
             }
             if (['failed', 'incomplete'].includes(task.status)) {
-                const children = task.child_run_ids.map(child => this._runs.get(child)!);
+                const children = task.child_run_ids.map(child => this._run_index.get(child)!);
                 if (children.every(run => TERMINAL_RUN_STATUSES.has(run.status)) && !children.some(run => run.status === 'failed'))
                     task.status = children.every(run => run.status === 'completed') ? 'completed' : 'incomplete';
             }
-            this._tasks.set(id, task);
+            this._tasks.set(id, slim_task_state(task));
+            this.slim_tasks.add(id);
         }
     }
     private async prepare_task(request: unknown) {
@@ -389,80 +799,100 @@ export class BenchExecutionService {
             throw error;
         }
         this._tasks.set(id, task);
+        this.slim_tasks.delete(id);
         this.task_active_runs.set(id, new Set());
+        this.task_last_admitted_run.delete(id);
         for (const { run, runtime } of staged) {
             this._runs.set(run.id, run);
             this._runtime.set(run.id, runtime);
+            this.update_active_index(run);
             for (const route of runtime.bindings.values())
                 this._account_limits.set(
                     route.account_ref,
                     Math.min(this._account_limits.get(route.account_ref) ?? 500, route.account_concurrency)
                 );
         }
+        this._revision++;
         this.schedule();
         return id;
     }
     _persist_task(task: ExecutionTaskState): void {
         task.updated_at = now();
         save_execution_json(this.task_path(task.id), task);
+        this._revision++;
     }
     private update_task(id: string): void {
         const task = this._tasks.get(id);
         if (!task || TERMINAL_RUN_STATUSES.has(task.status)) return;
-        const runs = task.child_run_ids.map(child => this._runs.get(child)!);
-        const finished = runs.every(run => TERMINAL_RUN_STATUSES.has(run.status));
+        const statuses = task.child_run_ids.map(child => this.run_status(child)!);
+        const finished = statuses.every(status => TERMINAL_RUN_STATUSES.has(status));
         const status = finished
             ? task.stop_reason === 'storage_error'
                 ? 'failed'
-                : task.stop_reason === 'cancelled'
-                  ? 'cancelled'
-                  : runs.every(run => run.status === 'completed')
-                    ? 'completed'
-                    : runs.some(run => run.status === 'failed')
+                : statuses.every(value => value === 'completed')
+                  ? 'completed'
+                  : task.stop_reason === 'cancelled' || statuses.every(value => value === 'cancelled')
+                    ? 'cancelled'
+                    : statuses.some(value => value === 'failed')
                       ? 'failed'
-                      : 'incomplete'
+                      : statuses.some(value => value === 'interrupted')
+                        ? 'interrupted'
+                        : 'incomplete'
             : task.stop_reason === 'cancelled'
               ? 'cancelling'
-              : runs.some(run => run.status !== 'queued')
+              : statuses.some(value => value !== 'queued')
                 ? 'running'
                 : 'queued';
         if (task.status === status) return;
-        task.status = status;
-        if (finished && status === 'failed' && !task.stop_reason) task.stop_reason = 'child_failure';
+        const targetTask = this.slim_tasks.has(id) ? this.load_full_task_from_disk(id) : task;
+        targetTask.status = status;
+        if (finished && status === 'failed' && !targetTask.stop_reason) targetTask.stop_reason = 'child_failure';
         try {
-            this._persist_task(task);
+            this._persist_task(targetTask);
+            if (finished) {
+                this._tasks.set(id, slim_task_state(targetTask));
+                this.slim_tasks.add(id);
+            } else {
+                this._tasks.set(id, targetTask);
+                this.slim_tasks.delete(id);
+            }
         } catch {
             this.fail_storage();
         }
     }
     /** Task summaries expose child run IDs; raw samples and evidence remain at get_run. */
     get_task(id: string): RecordValue | null {
-        const task = this._tasks.get(id);
-        if (!task) return null;
+        const cached = this._tasks.get(id);
+        if (!cached) return null;
+        const task = this.slim_tasks.has(id) ? this.load_full_task_from_disk(id) : cached;
         return execution_task_summary(
             task,
-            task.child_run_ids.map(run_id => {
-                const run = this._runs.get(run_id)!;
-                return execution_run_summary(run, this._runtime.get(run_id)?.budget.snapshot());
-            })
+            task.child_run_ids.map(run_id => this.run_summary(run_id))
         );
     }
     /** List independently persisted batches without duplicating raw child evidence. */
     /** History polling omits bulky frozen provenance; get_task keeps the complete plan. */
     list_tasks(): RecordValue[] {
         return [...this._tasks.keys()].reverse().map(id => {
-            const task = this.get_task(id)!;
-            const { task_snapshots: _snapshots, bank_snapshot: _bank, source_sha256: _sources, ...plan } = task.plan as RecordValue;
-            return { ...task, plan: { ...plan, provenance_omitted: true } };
+            const task = this._tasks.get(id)!;
+            const summary = execution_task_summary(
+                task,
+                task.child_run_ids.map(run_id => this.run_summary(run_id))
+            );
+            const { task_snapshots: _snapshots, bank_snapshot: _bank, source_sha256: _sources, ...plan } = summary.plan as RecordValue;
+            return { ...summary, plan: { ...plan, provenance_omitted: true } };
         });
     }
     /** Persist cancellation intent before cancelling any child; never resume queued work. */
     cancel_task(id: string): boolean {
-        const task = this._tasks.get(id);
-        if (!task) return false;
-        if (TERMINAL_RUN_STATUSES.has(task.status)) return true;
+        const cached = this._tasks.get(id);
+        if (!cached) return false;
+        if (TERMINAL_RUN_STATUSES.has(cached.status)) return true;
+        const task = this.slim_tasks.has(id) ? this.load_full_task_from_disk(id) : cached;
         task.status = 'cancelling';
         if (task.stop_reason !== 'storage_error') task.stop_reason = 'cancelled';
+        this._tasks.set(id, task);
+        this.slim_tasks.delete(id);
         try {
             this._persist_task(task);
         } catch {
@@ -482,7 +912,7 @@ export class BenchExecutionService {
             concurrency = integer(
                 req.concurrency === undefined ? this.concurrency : req.concurrency,
                 1,
-                this.concurrency,
+                scope === 'task' ? 64 : this.concurrency,
                 'concurrency',
                 req
             );
@@ -638,6 +1068,7 @@ export class BenchExecutionService {
             );
         this._runs.set(id, run);
         this._runtime.set(id, runtime);
+        this.update_active_index(run);
         if (!this.persist_safe(run)) {
             this.schedule();
             throw Object.assign(new Error('Bench run persistence failed'), { code: 'EIO' });
@@ -717,6 +1148,27 @@ export class BenchExecutionService {
         const runtime = this._runtime.get(run.id);
         if (runtime) run.budget = runtime.budget.snapshot();
         save_execution_json(join(this.data_dir, run.id, 'run.json'), run);
+        if (this._runs.has(run.id)) this.update_active_index(run);
+        else if (this._run_index.has(run.id)) this.finalize_indexed_run(run, true);
+        this._revision++;
+    }
+    private finalize_indexed_run(run: ExecutionRun, writeCache: boolean): void {
+        const context = create_assessment_source_context();
+        this._cached_source_sig = assessment_source_signature();
+        this._cached_source_digest = assessment_source_digest(context);
+        const existing = this._run_index.get(run.id);
+        const indexed = this.index_run(run, context, existing?.legacy_overlay);
+        this._run_index.set(run.id, indexed);
+        const runPath = join(this.data_dir, run.id, 'run.json');
+        const runStat = file_stat_token(runPath);
+        if (runStat && TERMINAL_RUN_STATUSES.has(indexed.status)) {
+            this._cache_entries.set(run.id, {
+                run_stat: runStat,
+                journal_sig: run_journal_signature(join(this.data_dir, run.id)),
+                entry: indexed
+            });
+            if (writeCache) this.write_index_cache();
+        }
     }
     private fail_storage(): void {
         this._closing = true;
@@ -729,7 +1181,9 @@ export class BenchExecutionService {
             run.stop_reason = 'storage_error';
             if (!runtime.active) run.status = 'failed';
             for (const sample of run.samples) if (sample.status === 'pending') sample.status = 'storage_error';
+            this.update_active_index(run);
         }
+        this._revision++;
         this.schedule();
     }
     private persist_safe(run: ExecutionRun): boolean {
@@ -742,20 +1196,62 @@ export class BenchExecutionService {
         }
     }
     get_run(id: string): ExecutionRun | null {
-        const run = this._runs.get(id);
+        const active = this._runs.get(id);
+        if (active) {
+            const result = clone(active),
+                runtime = this._runtime.get(id);
+            if (runtime) result.budget = runtime.budget.snapshot();
+            result.retryable_samples = execution_retryable_samples(active);
+            return result;
+        }
+        if (!this._run_index.has(id)) return null;
+        const run = this.load_run_from_disk(id);
         if (!run) return null;
-        const result = clone(run),
-            runtime = this._runtime.get(id);
-        if (runtime) result.budget = runtime.budget.snapshot();
-        result.retryable_samples = execution_retryable_samples(run);
+        run.retryable_samples = execution_retryable_samples(run);
+        return run;
+    }
+    /** Full cloned evidence for callers that inspect complete runs; analysis uses list_observations. */
+    list_run_snapshots(): ExecutionRun[] {
+        return [...this._run_index.keys()].reverse().map(id => this.get_run(id)!);
+    }
+    /** Return cached terminal observations plus live projections for active runs without loading terminal run.json files. */
+    list_observations(
+        context: AssessmentSourceContext = create_assessment_source_context(),
+        source_sig = assessment_source_signature()
+    ): AssessmentObservation[] {
+        if (source_sig !== this._cached_source_sig) {
+            const digest = assessment_source_digest(context);
+            this._cached_source_sig = source_sig;
+            this._cached_source_digest = digest;
+            let cacheUpdated = false;
+            for (const [id, entry] of this._run_index) {
+                if (this._runs.has(id)) continue;
+                const run = this.load_run_from_disk(id);
+                if (!run) continue;
+                const refreshed = this.index_run(run, context, entry.legacy_overlay);
+                this._run_index.set(id, refreshed);
+                const runStat = file_stat_token(join(this.data_dir, id, 'run.json'));
+                if (runStat && TERMINAL_RUN_STATUSES.has(refreshed.status)) {
+                    this._cache_entries.set(id, {
+                        run_stat: runStat,
+                        journal_sig: run_journal_signature(join(this.data_dir, id)),
+                        entry: refreshed
+                    });
+                    cacheUpdated = true;
+                }
+            }
+            if (cacheUpdated) this.write_index_cache();
+        }
+        const result: AssessmentObservation[] = [];
+        for (const id of [...this._run_index.keys()].reverse()) {
+            const active = this._runs.get(id);
+            if (active) result.push(...project_run_observations(active, context));
+            else result.push(...this._run_index.get(id)!.observations);
+        }
         return result;
     }
-    /** Full cloned evidence for analysis queries; history polling uses lightweight list_runs. */
-    list_run_snapshots(): ExecutionRun[] {
-        return [...this._runs.keys()].reverse().map(id => this.get_run(id)!);
-    }
     list_runs(): RecordValue[] {
-        return [...this._runs.values()].reverse().map(run => execution_run_summary(run, this._runtime.get(run.id)?.budget.snapshot()));
+        return [...this._run_index.keys()].reverse().map(id => this.run_summary(id));
     }
     /** Batch retries reuse one idempotency key and report partial publication without resending successes. */
     async retry_task(id: string, request_id: string): Promise<{ ids: string[]; rejected: string[] }> {
@@ -781,49 +1277,67 @@ export class BenchExecutionService {
     /** Explicitly retry API-failed samples, retaining successes and immutable prior evidence. */
     async retry_run(id: string, request_id: string, policy?: 'sample-timeout-v1'): Promise<string> {
         if (policy !== undefined && policy !== 'sample-timeout-v1') throw new TypeError('Unknown rerun policy');
-        if (this._runs.get(id)?.execution_kind === 'calibration-import-v1')
+        const indexed = this._run_index.get(id);
+        if ((this._runs.get(id)?.execution_kind ?? indexed?.execution_kind) === 'calibration-import-v1')
             throw new TypeError('Imported calibration runs are read-only and cannot be retried');
         if (!/^[a-f0-9]{32}$/.test(request_id)) throw new TypeError('retry request_id must be 32 lowercase hex characters');
-        const run = this._runs.get(id);
-        if (!run) throw new TypeError('Run not found');
-        const batches = Array.isArray(run.retry_batches) ? (run.retry_batches as RecordValue[]) : [];
+        if (!this.has_run(id)) throw new TypeError('Run not found');
+        const loaded = this._runs.get(id) ?? this.load_run_from_disk(id);
+        if (!loaded) throw new TypeError('Run not found');
+        const batches = Array.isArray(loaded.retry_batches) ? (loaded.retry_batches as RecordValue[]) : [];
         const existingBatch = batches.find(batch => batch.request_id === request_id);
         if (existingBatch) {
             if (existingBatch.policy !== policy) throw new TypeError('Retry request_id policy mismatch');
             return id;
         }
-        if (this._closing || this._runtime.has(id) || !TERMINAL_RUN_STATUSES.has(run.status))
+        if (this._closing || this._runtime.has(id) || !TERMINAL_RUN_STATUSES.has(loaded.status))
             throw new TypeError('Run is still active or service unavailable');
-        const eligible = run.samples.filter(sample =>
+        const eligible = loaded.samples.filter(sample =>
             policy === 'sample-timeout-v1'
                 ? sample.status !== 'completed'
                 : sample.status === 'api_failure' ||
-                  (sample.status === 'budget_not_admitted' && ['transport_failure', 'missing_usage_cost'].includes(run.stop_reason ?? ''))
+                  is_timeout_sample(sample) ||
+                  sample.status === 'interrupted' ||
+                  sample.status === 'cancelled' ||
+                  (sample.status === 'budget_not_admitted' &&
+                      ['transport_failure', 'missing_usage_cost', 'cancelled'].includes(loaded.stop_reason ?? ''))
         );
         if (!eligible.length) throw new TypeError(policy ? 'No unfinished samples to rerun' : 'No API-failed samples to retry');
         const latestLimits = batches.at(-1)?.limits;
-        const retryLimits = policy ? clone(DEFAULT_LIMITS) : object(latestLimits) ? (latestLimits as Limits) : run.plan.limits;
+        const retryLimits = policy ? clone(DEFAULT_LIMITS) : object(latestLimits) ? (latestLimits as Limits) : loaded.plan.limits;
         const prepared = await this.prepare(
             {
-                bank_version: run.plan.bank_version,
-                targets: run.plan.targets.map(target => ({ id: target.id, route_id: target.route_id, thinking: target.thinking })),
-                task_ids: run.plan.task_ids,
-                rounds: run.plan.rounds,
-                concurrency: Math.min(run.plan.concurrency, this.concurrency),
+                bank_version: loaded.plan.bank_version,
+                targets: loaded.plan.targets.map(target => ({ id: target.id, route_id: target.route_id, thinking: target.thinking })),
+                task_ids: loaded.plan.task_ids,
+                rounds: loaded.plan.rounds,
+                concurrency: loaded.task_id ? loaded.plan.concurrency : Math.min(loaded.plan.concurrency, this.concurrency),
                 limits: retryLimits
             },
-            run.task_id ? 'task' : 'run'
+            loaded.task_id ? 'task' : 'run'
         );
         // A second request may have arrived while route discovery was awaiting I/O.
-        const publishedBatch = Array.isArray(run.retry_batches)
-            ? (run.retry_batches as RecordValue[]).find(batch => batch.request_id === request_id)
-            : undefined;
+        const run = this._runs.get(id) ?? this.load_run_from_disk(id);
+        if (!run) throw new TypeError('Run not found');
+        const currentBatches = Array.isArray(run.retry_batches) ? (run.retry_batches as RecordValue[]) : [];
+        const publishedBatch = currentBatches.find(batch => batch.request_id === request_id);
         if (publishedBatch) {
             if (publishedBatch.policy !== policy) throw new TypeError('Retry request_id policy mismatch');
             return id;
         }
         if (this._closing || this._runtime.has(id) || !TERMINAL_RUN_STATUSES.has(run.status))
             throw new TypeError('Run retry already active or service closing');
+        const currentEligible = run.samples.filter(sample =>
+            policy === 'sample-timeout-v1'
+                ? sample.status !== 'completed'
+                : sample.status === 'api_failure' ||
+                  is_timeout_sample(sample) ||
+                  sample.status === 'interrupted' ||
+                  sample.status === 'cancelled' ||
+                  (sample.status === 'budget_not_admitted' &&
+                      ['transport_failure', 'missing_usage_cost', 'cancelled'].includes(run.stop_reason ?? ''))
+        );
+        if (!currentEligible.length) throw new TypeError(policy ? 'No unfinished samples to rerun' : 'No API-failed samples to retry');
         for (const target of run.plan.targets) {
             const current = prepared.plan.targets.find(value => value.id === target.id)!;
             for (const key of [
@@ -869,7 +1383,6 @@ export class BenchExecutionService {
         const directory = join(this.data_dir, id),
             generation = 'retry-' + request_id;
         private_directory(join(directory, generation));
-        const original = clone(run);
         let journal: RunJournal | undefined;
         try {
             // Archive exact prior bytes before publishing any replacement result.
@@ -899,7 +1412,7 @@ export class BenchExecutionService {
                     route.api_key_env ?? ''
                 ])
             );
-            for (const sample of eligible) {
+            for (const sample of currentEligible) {
                 const { attempts, ...previous } = clone(sample);
                 const history = [...(Array.isArray(attempts) ? attempts : []), previous];
                 for (const key of [
@@ -924,10 +1437,10 @@ export class BenchExecutionService {
                 });
             }
             run.retry_batches = [
-                ...batches,
+                ...currentBatches,
                 {
                     request_id,
-                    sample_ids: eligible.map(sample => sample.sample_id),
+                    sample_ids: currentEligible.map(sample => sample.sample_id),
                     source_sha256: prepared.plan.source_sha256,
                     limits: clone(retryLimits),
                     ...(policy ? { policy } : {}),
@@ -948,15 +1461,24 @@ export class BenchExecutionService {
                 journal
             };
             run.budget = budget.snapshot();
+            this._runs.set(id, run);
+            this._cache_entries.delete(id);
             this._persist(run);
             if (typeof run.task_id === 'string') {
-                const task = this._tasks.get(run.task_id)!;
-                task.status = 'queued';
+                const task = this.slim_tasks.has(run.task_id) ? this.load_full_task_from_disk(run.task_id) : this._tasks.get(run.task_id)!;
+                const anyActive = task.child_run_ids.some(childId => {
+                    const childStatus = this.run_status(childId);
+                    return childStatus === 'running' || childStatus === 'cancelling';
+                });
+                task.status = anyActive ? 'running' : 'queued';
                 task.stop_reason = null;
+                this._tasks.set(run.task_id, task);
+                this.slim_tasks.delete(run.task_id);
                 this._persist_task(task);
                 if (!this.task_active_runs.has(task.id)) this.task_active_runs.set(task.id, new Set());
             }
             this._runtime.set(id, runtime);
+            this.update_active_index(run);
             for (const route of prepared.bindings.values())
                 this._account_limits.set(
                     route.account_ref,
@@ -966,14 +1488,15 @@ export class BenchExecutionService {
             return id;
         } catch (error) {
             journal?.close();
-            this._runs.set(id, original);
+            if (indexed) this._run_index.set(id, indexed);
+            this._runs.delete(id);
             this.fail_storage();
             throw error;
         }
     }
     cancel_run(id: string): boolean {
         const run = this._runs.get(id);
-        if (!run) return false;
+        if (!run) return this._run_index.has(id);
         if (!TERMINAL_RUN_STATUSES.has(run.status)) {
             this._runtime.get(id)!.cancel.value = true;
             run.status = 'cancelling';
@@ -983,8 +1506,8 @@ export class BenchExecutionService {
         return true;
     }
     async wait_for_run(id: string, timeout?: number): Promise<boolean> {
-        if (!this._runs.has(id)) return false;
-        if (TERMINAL_RUN_STATUSES.has(this._runs.get(id)!.status) && !this._runtime.has(id)) return true;
+        if (!this.has_run(id)) return false;
+        if (TERMINAL_RUN_STATUSES.has(this.run_status(id)!) && !this._runtime.has(id)) return true;
         return new Promise(resolve => {
             let timer: ReturnType<typeof setTimeout> | undefined;
             const done = () => {
@@ -1002,7 +1525,7 @@ export class BenchExecutionService {
         });
     }
     async wait_run(id: string, timeout?: number): Promise<ExecutionRun | null> {
-        if (!this._runs.has(id)) return null;
+        if (!this.has_run(id)) return null;
         if (!(await this.wait_for_run(id, timeout))) throw new Error('Bench run is still active');
         return this.get_run(id);
     }
@@ -1017,6 +1540,82 @@ export class BenchExecutionService {
     private rotate<T>(values: T[], last: T | null): T[] {
         const pivot = last === null ? -1 : values.indexOf(last);
         return pivot < 0 ? values : [...values.slice(pivot + 1), ...values.slice(0, pivot + 1)];
+    }
+    private target_channel_key(target: ExecutionTarget): string {
+        return target.remote_route
+            ? `${target.provider_id ?? ''}\u0000${target.remote_route.namespace}`
+            : (target.provider_id ?? target.account_ref ?? target.route_id);
+    }
+    /** Interleave child runs across channels and models so concurrent slots do not bunch on one channel's Thinking levels. */
+    private task_interleaved_children(task: ExecutionTaskState): string[] {
+        const channels = new Map<string, { routes: Map<string, string[]>; order: string[]; cursor: number }>();
+        for (const childId of task.child_run_ids) {
+            const target = this._runs.get(childId)?.plan.targets[0] ?? this._run_index.get(childId)?.summary.targets[0];
+            if (!target) continue;
+            const channelKey = this.target_channel_key(target);
+            let channel = channels.get(channelKey);
+            if (!channel) {
+                channel = { routes: new Map(), order: [], cursor: 0 };
+                channels.set(channelKey, channel);
+            }
+            let queue = channel.routes.get(target.route_id);
+            if (!queue) {
+                queue = [];
+                channel.routes.set(target.route_id, queue);
+                channel.order.push(target.route_id);
+            }
+            queue.push(childId);
+        }
+        const interleaved: string[] = [];
+        let remaining = true;
+        while (remaining) {
+            remaining = false;
+            for (const channel of channels.values()) {
+                for (let checked = 0; checked < channel.order.length; checked++) {
+                    const routeId = channel.order[(channel.cursor + checked) % channel.order.length]!;
+                    const queue = channel.routes.get(routeId)!;
+                    if (queue.length) {
+                        interleaved.push(queue.shift()!);
+                        channel.cursor = (channel.cursor + checked + 1) % channel.order.length;
+                        remaining = true;
+                        break;
+                    }
+                }
+            }
+        }
+        return interleaved;
+    }
+    private next_task_child_to_admit(task: ExecutionTaskState, activeChildren: Set<string>): string | null {
+        const channelCounts = new Map<string, number>(),
+            routeCounts = new Map<string, number>();
+        for (const activeId of activeChildren) {
+            const target = this._runs.get(activeId)?.plan.targets[0] ?? this._run_index.get(activeId)?.summary.targets[0];
+            if (!target) continue;
+            const channelKey = this.target_channel_key(target);
+            channelCounts.set(channelKey, (channelCounts.get(channelKey) ?? 0) + 1);
+            routeCounts.set(target.route_id, (routeCounts.get(target.route_id) ?? 0) + 1);
+        }
+        const order = this.rotate(this.task_interleaved_children(task), this.task_last_admitted_run.get(task.id) ?? null);
+        let best: string | null = null,
+            bestChannelCount = Infinity,
+            bestRouteCount = Infinity;
+        for (const childId of order) {
+            if (activeChildren.has(childId)) continue;
+            const runtime = this._runtime.get(childId),
+                run = this._runs.get(childId);
+            if (!runtime || !run || runtime.cancel.value || runtime.budget.stop_reason) continue;
+            if (!run.samples.some(sample => sample.status === 'pending')) continue;
+            const target = run.plan.targets[0]!;
+            const channelCount = channelCounts.get(this.target_channel_key(target)) ?? 0;
+            const routeCount = routeCounts.get(target.route_id) ?? 0;
+            if (channelCount < bestChannelCount || (channelCount === bestChannelCount && routeCount < bestRouteCount)) {
+                best = childId;
+                bestChannelCount = channelCount;
+                bestRouteCount = routeCount;
+                if (bestChannelCount === 0 && bestRouteCount === 0) break;
+            }
+        }
+        return best;
     }
     private dispatch(): void {
         let dispatched: boolean;
@@ -1037,24 +1636,33 @@ export class BenchExecutionService {
                             ? 'failed'
                             : cancelled
                               ? 'cancelled'
-                              : run.samples.every(sample => sample.status === 'completed')
+                              : run.samples.every(sample => sample.status === 'completed' || is_timeout_sample(sample))
                                 ? 'completed'
-                                : run.samples.some(sample => ['api_failure', 'worker_error', 'storage_error'].includes(sample.status))
+                                : run.samples.some(
+                                        sample =>
+                                            ['api_failure', 'worker_error', 'storage_error'].includes(sample.status) &&
+                                            !is_timeout_sample(sample)
+                                    )
                                   ? 'failed'
                                   : 'incomplete';
                     if (run.stop_reason !== 'storage_error')
                         run.stop_reason = cancelled
                             ? 'cancelled'
-                            : stop ||
-                              (run.status === 'failed' ? 'api_failure' : run.status === 'incomplete' ? 'capability_or_limit' : null);
-                    this.persist_safe(run);
+                            : run.status === 'completed'
+                              ? null
+                              : stop ||
+                                (run.status === 'failed' ? 'api_failure' : run.status === 'incomplete' ? 'capability_or_limit' : null);
+                    let persisted = this.persist_safe(run);
                     try {
                         runtime.journal.close();
                     } catch {
                         this.fail_storage();
-                        this.persist_safe(run);
+                        persisted = this.persist_safe(run);
                     }
                     this._runtime.delete(id);
+                    this.finalize_indexed_run(run, persisted);
+                    if (persisted && run.stop_reason !== 'storage_error') this._runs.delete(id);
+                    this._revision++;
                     dispatched = true; // Reconsider queued siblings after this child releases a task slot.
                     if (typeof run.task_id === 'string') {
                         this.task_active_runs.get(run.task_id)?.delete(id);
@@ -1068,15 +1676,19 @@ export class BenchExecutionService {
                 const parent = taskId ? this._tasks.get(taskId) : null;
                 const activeChildren = taskId ? this.task_active_runs.get(taskId) : null;
                 const taskChild = run.execution_kind === 'task-child-v1' && !!parent && !!activeChildren;
-                if (taskChild && !activeChildren.has(id) && activeChildren.size >= parent.plan.run_concurrency) continue;
+                if (taskChild && !activeChildren.has(id)) {
+                    if (activeChildren.size >= parent.plan.run_concurrency || this.next_task_child_to_admit(parent, activeChildren) !== id)
+                        continue;
+                }
                 const targetOrder = this.rotate([...runtime.targets.keys()], runtime.last_target_id);
                 pending.sort((a, b) => targetOrder.indexOf(a.target_id) - targetOrder.indexOf(b.target_id));
                 for (const sample of pending) {
-                    if (this._active >= this.concurrency || runtime.active >= run.plan.concurrency) break;
+                    if ((!taskChild && this._active >= this.concurrency) || runtime.active >= run.plan.concurrency) break;
                     const account = runtime.bindings.get(sample.target_id)!.account_ref;
                     if (
-                        (!taskChild && runtime.target_active.has(sample.target_id)) ||
-                        (this._account_active.get(account) ?? 0) >= this._account_limits.get(account)!
+                        !taskChild &&
+                        (runtime.target_active.has(sample.target_id) ||
+                            (this._account_active.get(account) ?? 0) >= this._account_limits.get(account)!)
                     )
                         continue;
                     sample.status = 'running';
@@ -1087,6 +1699,7 @@ export class BenchExecutionService {
                         break;
                     }
                     if (taskChild) {
+                        if (!activeChildren.has(id)) this.task_last_admitted_run.set(taskId!, id);
                         activeChildren.add(id);
                         this.update_task(taskId!);
                         if (this._closing) {
@@ -1144,28 +1757,17 @@ export class BenchExecutionService {
         try {
             if (error) throw error;
             if (!observation) throw new TypeError('Missing sample observation');
+            if (is_timeout_sample(observation) && !object(observation.usage)) {
+                observation = {
+                    ...observation,
+                    usage: { input_tokens: 0, output_tokens: 0 },
+                    estimated_uncached_cost_usd: 0
+                };
+            }
             Object.assign(sample, observation, {
                 latest_attempt_usage: observation.usage,
                 latest_attempt_cost_usd: observation.estimated_uncached_cost_usd
             });
-            const attempts = Array.isArray(sample.attempts) ? (sample.attempts as RecordValue[]) : [];
-            if (attempts.length) {
-                // Attempts that sent no request (empty calls) consumed nothing: a known zero, not unknown.
-                const all = [...attempts, observation].filter(item => !(Array.isArray(item.calls) && item.calls.length === 0));
-                const costs = all.map(item =>
-                    Object.hasOwn(item, 'latest_attempt_cost_usd') ? item.latest_attempt_cost_usd : item.estimated_uncached_cost_usd
-                );
-                const usages = all.map(item => (Object.hasOwn(item, 'latest_attempt_usage') ? item.latest_attempt_usage : item.usage));
-                sample.estimated_uncached_cost_usd = costs.every(value => typeof value === 'number')
-                    ? costs.reduce<number>((sum, value) => sum + Number(value), 0)
-                    : null;
-                sample.usage = usages.every(object)
-                    ? {
-                          input_tokens: usages.reduce((sum, usage) => sum + Number(usage.input_tokens), 0),
-                          output_tokens: usages.reduce((sum, usage) => sum + Number(usage.output_tokens), 0)
-                      }
-                    : null;
-            }
         } catch (error) {
             Object.assign(sample, {
                 status: 'worker_error',

@@ -16,18 +16,11 @@ function projectFiles(directory: string): string[] {
 describe('TypeScript-only project layout', () => {
     test('keeps English default and Chinese document pairs with valid local links', () => {
         const documents = projectFiles(root).filter(path => path.endsWith('.md'));
-        const proofFixtures = ['code-proofs', 'inference-proofs', 'information-proof', 'investigation-proofs'].map(name =>
-            join(root, 'benchmark/tests/fixtures', `assessment-2.2-${name}.md`)
-        );
-        expect(documents.filter(path => !proofFixtures.includes(path))).toHaveLength(18);
-        expect(documents.filter(path => proofFixtures.includes(path)).sort()).toEqual([...proofFixtures].sort());
+        expect(documents).toHaveLength(18);
         for (const path of documents) {
             const content = readFileSync(path, 'utf8');
-            // Fixed mathematical certificates are test fixtures, not bilingual usage guides.
-            if (!proofFixtures.includes(path)) {
-                const counterpart = path.endsWith('.zh.md') ? path.replace(/\.zh\.md$/, '.md') : path.replace(/\.md$/, '.zh.md');
-                expect(existsSync(counterpart)).toBe(true);
-            }
+            const counterpart = path.endsWith('.zh.md') ? path.replace(/\.zh\.md$/, '.md') : path.replace(/\.md$/, '.zh.md');
+            expect(existsSync(counterpart)).toBe(true);
             expect(path.includes('.zh-CN.')).toBe(false);
             if (!path.endsWith('.zh.md')) expect(content.split('\n')[0]).not.toMatch(/[\u4e00-\u9fff]/);
             for (const [, target] of content.matchAll(/\]\(([^)]+)\)/g)) {
@@ -37,7 +30,7 @@ describe('TypeScript-only project layout', () => {
         }
     });
 
-    test('keeps 1.0 as the production default and separates experimental bank data', () => {
+    test('keeps 1.0 as the sole production bank', () => {
         const pkg = JSON.parse(readFileSync(join(root, 'package.json'), 'utf8'));
         expect(pkg.name).toBe('llm-mini-bench');
         expect(pkg.main).toBe('./magpie/index.ts');
@@ -46,7 +39,7 @@ describe('TypeScript-only project layout', () => {
             readdirSync(join(root, 'benchmark/banks'))
                 .filter(name => name.endsWith('.json') && !name.endsWith('.questions.json'))
                 .sort()
-        ).toEqual(['assessment-1.0.json', 'assessment-2.0.json', 'assessment-2.1.json', 'assessment-2.2.json', 'assessment-2.3.json']);
+        ).toEqual(['assessment-1.0.json']);
         for (const name of ['src', 'backend', 'web', 'banks', 'baselines', 'tools', 'tests', 'examples']) {
             expect(existsSync(join(root, 'benchmark', name))).toBe(true);
             expect(existsSync(join(root, name))).toBe(false);
@@ -108,8 +101,7 @@ describe('TypeScript-only project layout', () => {
             'benchmark/calibrate_assessment.ts',
             'benchmark/backend/mini_bench.ts',
             'benchmark/tools/analyze_assessment.ts',
-            'benchmark/tools/import_assessment_baseline.ts',
-            'benchmark/tools/replay_assessment_evidence.ts'
+            'benchmark/tools/import_assessment_baseline.ts'
         ]) {
             const child = Bun.spawn([process.execPath, join(root, entry), '--help'], {
                 cwd: tmpdir(),
@@ -158,7 +150,7 @@ describe('TypeScript-only project layout', () => {
                 child.exited
             ]);
             expect({ status, error }).toEqual({ status: 0, error: '' });
-            expect(JSON.parse(output)).toEqual({ tasks: 14, baselines: 0, page: 200, denied: 403, external: 403 });
+            expect(JSON.parse(output)).toEqual({ tasks: 12, baselines: 0, page: 200, denied: 403, external: 403 });
         } finally {
             rmSync(directory, { recursive: true, force: true });
         }

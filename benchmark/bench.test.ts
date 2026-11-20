@@ -54,7 +54,7 @@ test('CLI sends plan/start/show/cancel with stable API shapes', async () => {
     const directory = mkdtempSync(join(tmpdir(), 'mini-bench-cli-'));
     stops.push(() => rmSync(directory, { recursive: true, force: true }));
     const file = join(directory, 'plan.json');
-    writeFileSync(file, '{"targets":[{"route_id":"a"}]}');
+    writeFileSync(file, '{"targets":[{"route_id":"a","thinking":"high"}]}');
     const token = process.env.MAGPIE_BENCH_TOKEN;
     process.env.MAGPIE_BENCH_TOKEN = 'private-token';
     const output = spyOn(console, 'log').mockImplementation(() => {});
@@ -88,7 +88,7 @@ test('CLI sends plan/start/show/cancel with stable API shapes', async () => {
             ['GET', '/api/bench/tasks/' + 'b'.repeat(32)],
             ['POST', '/api/bench/tasks/' + 'b'.repeat(32) + '/cancel']
         ]);
-        expect(requests[3]!.body).toEqual({ targets: [{ route_id: 'a' }] });
+        expect(requests[3]!.body).toEqual({ targets: [{ route_id: 'a', thinking: 'high' }] });
     } finally {
         output.mockRestore();
         if (token === undefined) delete process.env.MAGPIE_BENCH_TOKEN;

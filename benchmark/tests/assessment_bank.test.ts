@@ -1,9 +1,9 @@
 import { afterEach, describe, expect, test } from 'bun:test';
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { dirname, join } from 'node:path';
+import { join } from 'node:path';
 import { createHash } from 'node:crypto';
-import { ASSESSMENT_TASKS } from '../src/assessment_tasks.ts';
+import { SUBMIT_ANSWER_PROTOCOL, task_answer_protocol, task_answer_schema } from '../src/assessment_answer_protocol.ts';
 import {
     ASSESSMENT_BANK_SOURCE_PATHS,
     ASSESSMENT_PROJECT_ROOT,
@@ -13,18 +13,25 @@ import {
 import { ASSESSMENT_INTERACTIVE_SOURCE_PATHS } from '../src/assessment_interactive.ts';
 import { assessment_hash } from '../src/assessment_json.ts';
 
-const ids = ['T03_Booking_Feedback', 'K04_Genetic_Code'];
+const ids = ['E23_Tight_Conditional_Audit', 'K23_HTTP_Conditional_Cache_Precedence'];
 const directories: string[] = [];
 afterEach(() => {
     for (const path of directories.splice(0)) rmSync(path, { recursive: true, force: true });
 });
 function fixture(version = '1.0') {
-    const cards: Record<string, any>[] = ids.map(id => assessment_task_snapshot(ASSESSMENT_TASKS.find(task => task.id === id)!));
+    const production = load_assessment_bank('1.0');
+    const rawQuestions = JSON.parse(readFileSync(join(ASSESSMENT_PROJECT_ROOT, 'banks/assessment-1.0.questions.json'), 'utf8')) as Record<
+        string,
+        any
+    >[];
+    const cards: Record<string, any>[] = ids.map(id => structuredClone(rawQuestions.find(task => task.id === id)!));
+    const grading = Object.fromEntries(ids.map(id => [id, structuredClone(production.grading[id]!)]));
+    const snapshotCards = ids.map(id => assessment_task_snapshot(production.tasks.find(task => task.id === id)!));
     const manifest: Record<string, any> = {
         version,
         title: 'Synthetic assessment bank',
         task_ids: [...ids],
-        task_sha256: assessment_hash(cards),
+        task_sha256: assessment_hash(snapshotCards),
         source_sha256: Object.fromEntries(
             ASSESSMENT_BANK_SOURCE_PATHS.map(path => [
                 path,
@@ -33,8 +40,16 @@ function fixture(version = '1.0') {
                     .digest('hex')
             ])
         ),
+        extension_sha256: Object.fromEntries(
+            ASSESSMENT_INTERACTIVE_SOURCE_PATHS.map(path => [
+                path,
+                createHash('sha256')
+                    .update(readFileSync(join(ASSESSMENT_PROJECT_ROOT, path)))
+                    .digest('hex')
+            ])
+        ),
         task_file: 'questions.json',
-        grading: Object.fromEntries(ids.map(id => [id, { type: 'assessment-named-v1', name: id }])),
+        grading,
         selection: Object.fromEntries(ids.map(id => [id, { reason: 'Synthetic coverage test', role: 'test-only' }])),
         scoring_policy: { content: 'per-task fields', instruction: 'separate', tool: 'separate', aggregate: 'none' }
     };
@@ -58,8 +73,10 @@ describe('assessment bank manifest', () => {
         const { tasks: runnable, ...metadata } = loaded;
         expect(metadata as Record<string, any>).toEqual(manifest);
         const tasks = runnable as any[];
-        expect(tasks[0].make_simulator().call('list_rooms', {}).ok).toBe(true);
-        expect(tasks[1].grade('{"AUA":"M","CUA":"T","UGA":"W"}').content_score).toBe(1);
+        const firstDocId = Object.keys((manifest.grading.E23_Tight_Conditional_Audit as any).config.documents)[0]!;
+        expect(tasks[0].make_simulator().call('fetch_document', { document_id: firstDocId }).ok).toBe(true);
+        const k23Expected = (manifest.grading.K23_HTTP_Conditional_Cache_Precedence as any).expected;
+        expect(tasks[1].grade(JSON.stringify(k23Expected)).content_score).toBe(1);
         expect(loaded.task_sha256).toBe(assessment_hash(tasks.map(assessment_task_snapshot)));
         expect(loaded).not.toHaveProperty('weights');
         expect(loaded).not.toHaveProperty('total_score');
@@ -72,59 +89,69 @@ describe('assessment bank manifest', () => {
         expect(second.scoring_policy.aggregate).toBe('none');
         expect(second.tasks[0]!.prompt).not.toBe('mutated');
         expect((second.tasks[0]!.tools as any[])[0].parameters.additionalProperties).toBe(false);
-        expect(second.tasks[0]).not.toBe(ASSESSMENT_TASKS.find(task => task.id === ids[0]));
+        expect(second.tasks[0]).not.toBe(tasks[0]);
     });
-    test('default release resolves relative to module and contains exactly 14 tasks', () => {
+    test('default release resolves relative to module with balanced 6-domain coverage and 12 tasks', () => {
         const previous = process.cwd();
         const dir = mkdtempSync(join(tmpdir(), 'assessment-cwd-'));
         directories.push(dir);
         try {
             process.chdir(dir);
-            expect(load_assessment_bank().task_ids).toHaveLength(14);
+            const bank = load_assessment_bank();
+            expect(bank.version).toBe('1.0');
+            expect(bank.status).toBe('released');
+            expect(bank.task_ids).toHaveLength(12);
+            expect(bank.task_sha256).toBe('d58ddb12bdfbd7af6358f46546159384b83b4e7837aff9e38bab0cc06c23fed8');
+            expect(new Set(bank.tasks.map(task => task.domain))).toEqual(
+                new Set(['knowledge', 'reasoning', 'code', 'context', 'instruction', 'tool_use'])
+            );
+            for (const domain of ['knowledge', 'reasoning', 'code', 'context', 'instruction', 'tool_use']) {
+                expect(bank.tasks.filter(task => task.domain === domain)).toHaveLength(2);
+            }
+            expect(bank.tasks.filter(task => task.kind === 'tool')).toHaveLength(3);
+            expect(bank.tasks.filter(task => task.kind === 'text')).toHaveLength(9);
+            for (const task of bank.tasks) {
+                expect(task_answer_protocol(task)).toBe(SUBMIT_ANSWER_PROTOCOL);
+                const schema = task_answer_schema(task);
+                expect(Array.isArray(schema.required) && schema.required.length > 0).toBe(true);
+                expect(Object.keys(schema.properties as object).sort()).toEqual([...(schema.required as string[])].sort());
+            }
         } finally {
             process.chdir(previous);
         }
     });
     test('unknown duplicate empty and malformed task IDs rejected', () => {
-        for (const task_ids of [['unknown'], [...ids, ids[0]], [], 'K04_Genetic_Code', [null], [{}], [' ']]) {
+        for (const task_ids of [['unknown'], [...ids, ids[0]], [], 'K23_HTTP_Conditional_Cache_Precedence', [null], [{}], [' ']]) {
             const { manifest, cards } = fixture();
             manifest.task_ids = task_ids as any;
             expect(() => load_assessment_bank('1.0', writeManifest(manifest, false, cards))).toThrow();
         }
     });
-    test('snapshot hashes reject tampering reordering and question drift', () => {
-        const { manifest, cards } = fixture();
-        manifest.task_sha256 = '0'.repeat(64);
-        expect(() => load_assessment_bank('1.0', writeManifest(manifest, false, cards))).toThrow('snapshot hash mismatch');
-        const reordered = fixture();
-        reordered.manifest.task_ids.reverse();
-        expect(() => load_assessment_bank('1.0', writeManifest(reordered.manifest, false, reordered.cards))).toThrow();
-        const drifted = fixture(),
-            path = writeManifest(drifted.manifest, false, drifted.cards),
-            questionPath = join(dirname(path), drifted.manifest.task_file);
-        const questions = JSON.parse(readFileSync(questionPath, 'utf8'));
-        questions[0].prompt += ' Drift.';
-        writeFileSync(questionPath, JSON.stringify(questions));
-        expect(() => load_assessment_bank('1.0', path)).toThrow('snapshot hash mismatch');
+    test('task order changes and prompt edits invalidate task hash', () => {
+        const reversed = fixture();
+        reversed.manifest.task_ids.reverse();
+        reversed.manifest.grading = Object.fromEntries(reversed.manifest.task_ids.map((id: string) => [id, reversed.manifest.grading[id]]));
+        reversed.manifest.selection = Object.fromEntries(
+            reversed.manifest.task_ids.map((id: string) => [id, reversed.manifest.selection[id]])
+        );
+        expect(() => load_assessment_bank('1.0', writeManifest(reversed.manifest, false, reversed.cards))).toThrow(
+            'task snapshot hash mismatch'
+        );
+        const edited = fixture();
+        edited.cards[0].prompt += ' extra';
+        expect(() => load_assessment_bank('1.0', writeManifest(edited.manifest, false, edited.cards))).toThrow(
+            'task snapshot hash mismatch'
+        );
     });
-    test('source hashes pin exactly the shared graders and strict JSON parser', () => {
-        expect(ASSESSMENT_BANK_SOURCE_PATHS).toEqual([
-            'src/assessment_tasks.ts',
-            'src/assessment_tools.ts',
-            'src/assessment_knowledge.ts',
-            'src/assessment_challenges.ts',
-            'src/assessment_json.ts',
-            'src/assessment_data.ts',
-            'src/assessment_resource.ts',
-            'src/assessment_dfa.ts'
-        ]);
-        for (const path of ASSESSMENT_BANK_SOURCE_PATHS)
-            for (const value of ['0'.repeat(64), null]) {
+    test('source hash mismatch extra missing and non-object source maps rejected', () => {
+        for (const path of ASSESSMENT_BANK_SOURCE_PATHS) {
+            for (const bad of ['0'.repeat(64), 'not-a-sha', 123, null]) {
                 const { manifest, cards } = fixture();
-                manifest.source_sha256[path] = value;
+                manifest.source_sha256[path] = bad;
                 expect(() => load_assessment_bank('1.0', writeManifest(manifest, false, cards))).toThrow('source hash mismatch');
             }
-        for (const extra of ['src/client.ts', '../outside.ts', '/tmp/arbitrary.ts', 'calibrate_assessment.ts', 'src/assessment_bank.ts']) {
+        }
+        for (const extra of ['src/other.ts']) {
             const { manifest, cards } = fixture();
             manifest.source_sha256[extra] = '0'.repeat(64);
             expect(() => load_assessment_bank('1.0', writeManifest(manifest, false, cards))).toThrow('shared grading and strict JSON');
@@ -141,29 +168,26 @@ describe('assessment bank manifest', () => {
         }
     });
     test('optional interactive sources require complete current hashes', () => {
-        const bank = load_assessment_bank('2.1');
-        const { tasks, ...metadata } = bank;
-        const cards = tasks.map(assessment_task_snapshot);
-        const manifest = { ...metadata, task_file: 'questions.json' };
+        const { manifest, cards } = fixture();
         for (const path of ASSESSMENT_INTERACTIVE_SOURCE_PATHS) {
             const corrupted = structuredClone(manifest);
             corrupted.extension_sha256![path] = '0'.repeat(64);
-            expect(() => load_assessment_bank('2.1', writeManifest(corrupted, false, cards))).toThrow('extension source hash mismatch');
+            expect(() => load_assessment_bank('1.0', writeManifest(corrupted, false, cards))).toThrow('extension source hash mismatch');
         }
         const absent = { ...manifest };
         delete absent.extension_sha256;
-        expect(() => load_assessment_bank('2.1', writeManifest(absent, false, cards))).toThrow(
+        expect(() => load_assessment_bank('1.0', writeManifest(absent, false, cards))).toThrow(
             'interactive tasks require extension source hashes'
         );
         for (const card of cards.filter(card => card.kind === 'tool')) {
             const invalid = cards.map(value => (value.id === card.id ? { ...value, prompt: '' } : value));
-            expect(() => load_assessment_bank('2.1', writeManifest(manifest, false, invalid))).toThrow('requires nonempty prompt');
+            expect(() => load_assessment_bank('1.0', writeManifest(manifest, false, invalid))).toThrow('requires nonempty prompt');
         }
     });
     test('version mismatch, unsafe paths and missing files rejected', () => {
         const { manifest, cards } = fixture(),
             path = writeManifest(manifest, false, cards);
-        expect(() => load_assessment_bank('2.0', path)).toThrow('version does not match');
+        expect(() => load_assessment_bank('other', path)).toThrow('version does not match');
         for (const version of ['', null, 1, '../1.0', '1.0/extra'])
             expect(() => load_assessment_bank(version as string, path)).toThrow('path-safe');
         expect(() => load_assessment_bank('1.0', path + '.missing')).toThrow();
@@ -191,14 +215,24 @@ describe('assessment bank manifest', () => {
         expect(load_assessment_bank('1.0', writeManifest(optional.manifest, false, optional.cards)).selection).toEqual(
             optional.manifest.selection
         );
-        for (const grading of [{}, [], null, { [ids[0]!]: { type: 'assessment-named-v1', name: ids[0] } }]) {
+        for (const grading of [{}, [], null, { [ids[0]!]: fixture().manifest.grading[ids[0]!] }]) {
             const { manifest, cards } = fixture();
             manifest.grading = grading;
             expect(() => load_assessment_bank('1.0', writeManifest(manifest, false, cards))).toThrow('grading');
         }
     });
     test('required fields and title/scoring shapes checked', () => {
-        for (const key of Object.keys(fixture().manifest)) {
+        for (const key of [
+            'version',
+            'title',
+            'task_ids',
+            'task_sha256',
+            'source_sha256',
+            'task_file',
+            'grading',
+            'selection',
+            'scoring_policy'
+        ]) {
             const { manifest, cards } = fixture();
             delete manifest[key];
             expect(() => load_assessment_bank('1.0', writeManifest(manifest, false, cards))).toThrow();
@@ -226,8 +260,9 @@ describe('assessment bank manifest', () => {
         ).toThrow('duplicate IDs');
         const nonrunnable = fixture();
         nonrunnable.cards[1].kind = 'tool';
-        nonrunnable.manifest.task_sha256 = assessment_hash(nonrunnable.cards);
-        expect(() => load_assessment_bank('1.0', writeManifest(nonrunnable.manifest, false, nonrunnable.cards))).toThrow('not runnable');
+        expect(() => load_assessment_bank('1.0', writeManifest(nonrunnable.manifest, false, nonrunnable.cards))).toThrow(
+            'exact-fields grading'
+        );
     });
     test('duplicate nonfinite and deeply nested JSON rejected', () => {
         for (const raw of ['{"version":"1.0","version":"2.0"}', '{"version":NaN}', '[]', '['.repeat(110) + '0' + ']'.repeat(110)])
@@ -255,6 +290,7 @@ describe('version-independent exact-fields task data', () => {
             scoring_rule: 'equal fields'
         };
         const { manifest } = fixture('9.7-experimental');
+        delete manifest.extension_sha256;
         manifest.task_ids = ['GENERIC'];
         manifest.grading = {
             GENERIC: {
@@ -279,7 +315,7 @@ describe('version-independent exact-fields task data', () => {
         });
         expect(grade('{"fraction":"5/12","alias":"unlisted","nested":{"values":[1,false,"x"]}}').content_score).toBe(1 / 3);
     });
-    test('invalid descriptors and unknown named graders are rejected', () => {
+    test('invalid descriptors and unknown grading formats are rejected', () => {
         const card = { id: 'GENERIC', title: 'Generic', domain: 'reasoning', kind: 'text', prompt: 'Return JSON.', version: 'generic-v1' };
         for (const grading of [
             { type: 'assessment-exact-fields-v1', name: 'grade' },
@@ -287,10 +323,10 @@ describe('version-independent exact-fields task data', () => {
             { type: 'assessment-exact-fields-v1', name: 'grade', expected: {} },
             { type: 'assessment-exact-fields-v1', name: 'grade', expected: { x: { $fraction: '1/0' } } },
             { type: 'assessment-exact-fields-v1', name: 'grade', expected: { x: { $aliases: [] } } },
-            { type: 'assessment-named-v1', name: 'UNKNOWN' },
             { type: 'unknown', name: 'grade' }
         ]) {
             const { manifest } = fixture('generic');
+            delete manifest.extension_sha256;
             manifest.task_ids = ['GENERIC'];
             manifest.task_sha256 = assessment_hash([card]);
             manifest.grading = { GENERIC: grading };

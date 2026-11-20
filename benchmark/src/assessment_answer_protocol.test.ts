@@ -174,12 +174,12 @@ test('the protocol is opt-in, fails closed on unknown identifiers and changes th
         true
     ).assessment_protocol_sha256;
     expect(submitted).not.toBe(legacy);
-    // Production 1.0 tasks never opt in.
-    expect(load_assessment_bank('1.0').tasks.every(task => task_answer_protocol(task) === null)).toBe(true);
+    // All production 1.0 tasks opt in.
+    expect(load_assessment_bank('1.0').tasks.every(task => task_answer_protocol(task) === SUBMIT_ANSWER_PROTOCOL)).toBe(true);
 });
 
 test('real data-defined graders score a submitted object exactly as a pure JSON answer', async () => {
-    const bank = load_assessment_bank('2.3');
+    const bank = load_assessment_bank('1.0');
     const task = bank.tasks.find(
         task => task.kind === 'text' && (task.grading as Record<string, unknown>)?.type === 'assessment-exact-fields-v1'
     );

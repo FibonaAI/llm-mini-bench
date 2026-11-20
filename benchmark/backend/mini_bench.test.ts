@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { BenchService, make_handler, MAX_BODY, startMiniBenchService } from './mini_bench.ts';
 import { BenchExecutionService, type ExecutionRoute } from '../src/bench_execution.ts';
-import { target_execution_protocol, execution_protocol_hash } from '../src/run_protocol.ts';
+import { assessment_sample_protocol, execution_protocol_hash } from '../src/run_protocol.ts';
 import { assessment_hash } from '../src/assessment_json.ts';
 import type { AssessmentBaseline } from '../src/assessment_baselines.ts';
 import { MagpieBenchAdapter } from '../../magpie/magpie_adapter.ts';
@@ -44,11 +44,11 @@ test('a new workspace never loads bundled test baselines or produces placeholder
 test('analysis reads independent evidence snapshots without building discarded history summaries', async () => {
     const { service } = fixture(),
         execution = service.bench_execution();
-    const id = await execution.start_run({ targets: [{ route_id: 'route-a' }], rounds: 1 });
+    const id = await execution.start_run({ targets: [{ route_id: 'route-a', thinking: 'high' }], rounds: 1 });
     expect(await execution.wait_for_run(id, 5)).toBe(true);
     const snapshots = execution.list_run_snapshots();
     expect(snapshots).toHaveLength(1);
-    expect(snapshots[0]!.samples).toHaveLength(14);
+    expect(snapshots[0]!.samples).toHaveLength(12);
     snapshots[0]!.samples[0]!.status = 'tampered';
     expect(execution.get_run(id)!.samples[0]!.status).not.toBe('tampered');
     execution.list_runs = () => {
@@ -122,7 +122,7 @@ function fixture() {
         model: 'test-model',
         api_key: 'private-test-key',
         base_url: 'https://example.invalid/v1',
-        thinking_levels: ['high'],
+        thinking_levels: ['low', 'high'],
         account_concurrency: 1,
         pricing: { prompt: 0, completion: 0 }
     };
@@ -244,7 +244,7 @@ test('strict JSON rejects duplicates, nonfinite, arrays, invalid UTF8, absent or
 });
 test('integer request fields retain JSON lexical type and explicit null is not a default', async () => {
     const { request, execution } = fixture();
-    const target = '"targets":[{"route_id":"route-a"}],"task_ids":["R01_Stopping_Urn"]';
+    const target = '"targets":[{"route_id":"route-a","thinking":"high"}],"task_ids":["K23_HTTP_Conditional_Cache_Precedence"]';
     for (const field of [
         '"rounds":1.0',
         '"rounds":1e0',
@@ -263,7 +263,7 @@ test('integer request fields retain JSON lexical type and explicit null is not a
     for (const value of [
         '{"targets":[{"route_id":"route-a","thinking":null}]}',
         '{"targets":[{"route_id":"route-a","id":null}]}',
-        '{"targets":[{"route_id":"route-a"}],"task_ids":null}'
+        '{"targets":[{"route_id":"route-a","thinking":"high"}],"task_ids":null}'
     ]) {
         expect((await request('/api/bench/plans', 'POST', value)).status).toBe(400);
     }
@@ -291,12 +291,12 @@ test('banks, routes, plan, durable run and cancel API shapes', async () => {
     const banks = (await (await request('/api/bench/banks')).json()) as {
         banks: Array<{ title: string; tasks: unknown[] }>;
     };
-    expect(banks.banks[0]!.tasks).toHaveLength(14);
+    expect(banks.banks[0]!.tasks).toHaveLength(12);
     expect(banks.banks[0]!.title).toBe('Mini Bench');
     expect(await (await request('/api/bench/routes')).json()).toEqual({
         routes: [{ id: 'route-a', model: 'test-model' }]
     });
-    const plan = { targets: [{ route_id: 'route-a' }], task_ids: ['R01_Stopping_Urn'] };
+    const plan = { targets: [{ route_id: 'route-a', thinking: 'high' }], task_ids: ['K23_HTTP_Conditional_Cache_Precedence'] };
     expect((await request('/api/bench/plans', 'POST', plan)).status).toBe(200);
     const started = await request('/api/bench/runs', 'POST', plan);
     expect(started.status).toBe(202);
@@ -323,7 +323,7 @@ test('complete target baseline roundtrip and per-task observation API', async ()
         targets: [{ id: 'target-a', route_id: 'route-a', thinking: 'high' }]
     });
     await execution.wait_run(id, 4);
-    const run = execution._runs.get(id)!;
+    const run = execution.get_run(id)!;
     for (const sample of run.samples) {
         const task = run.plan.task_snapshots.find(task => task.id === sample.task)!;
         const { max_output_tokens, max_turns, max_tool_calls, timeout, max_api_retries, timeout_scope } = run.plan.limits;
@@ -335,25 +335,28 @@ test('complete target baseline roundtrip and per-task observation API', async ()
             max_api_retries,
             ...(timeout_scope ? { timeout_scope } : {})
         };
-        const protocol = target_execution_protocol(
-            [{ id: sample.task, ...(max_output_tokens === null ? {} : { max_output_tokens }) }],
-            sample.thinking
+        const { execution_protocol: protocol, assessment_protocol_sha256 } = assessment_sample_protocol(
+            task as { id: string; [key: string]: unknown },
+            sample.thinking,
+            config,
+            false
         );
         Object.assign(sample, {
             status: 'completed',
             ok: true,
             execution_protocol: protocol,
             execution_protocol_sha256: execution_protocol_hash(protocol),
-            assessment_protocol_sha256: assessment_hash({ task, config, request_protocol: protocol }),
+            assessment_protocol_sha256,
             grade: { content_score: 1, instruction_checks: { format: true }, outcome: 'correct' }
         });
     }
     run.status = 'completed';
+    execution._persist(run);
     const response = await request('/api/bench/runs/' + id + '/baseline', 'POST', { target_id: 'target-a' });
     expect(response.status).toBe(201);
     const { baseline } = (await response.json()) as { baseline: AssessmentBaseline };
     expect(baseline.schema).toBe('assessment-baseline-v1');
-    expect(baseline.samples).toHaveLength(14);
+    expect(baseline.samples).toHaveLength(12);
     const files = readdirSync(join(directory, 'assessment-baselines'));
     expect(files).toHaveLength(1);
     expect(statSync(join(directory, 'assessment-baselines', files[0]!)).mode & 0o777).toBe(0o600);
@@ -363,7 +366,7 @@ test('complete target baseline roundtrip and per-task observation API', async ()
     };
     const personal = observations.observations.find(row => row.source === 'run' && row.run_id === id)!;
     expect(personal.baseline_eligible).toBe(true);
-    expect(personal.tasks).toHaveLength(14);
+    expect(personal.tasks).toHaveLength(12);
     const restored = new BenchService({ data_dir: directory, token: TOKEN });
     try {
         expect(restored.baselines()).toContainEqual(baseline);
@@ -468,7 +471,7 @@ test('failed initial persistence returns safe storage error then closes admissio
     execution._persist = () => {
         throw Object.assign(new Error('private-storage-details'), { code: 'EIO' });
     };
-    const body = { targets: [{ route_id: 'route-a' }], task_ids: ['R01_Stopping_Urn'] };
+    const body = { targets: [{ route_id: 'route-a', thinking: 'high' }], task_ids: ['K23_HTTP_Conditional_Cache_Precedence'] };
     const failed = await request('/api/bench/runs', 'POST', body);
     expect(failed.status).toBe(500);
     expect(await failed.json()).toEqual({ error: 'storage error' });
@@ -482,7 +485,7 @@ test('task API plans independent whole-bank runs, persists membership and cancel
     const { request, execution } = fixture();
     const body = {
         targets: [
-            { id: 'default', route_id: 'route-a', thinking: 'default' },
+            { id: 'low', route_id: 'route-a', thinking: 'low' },
             { id: 'high', route_id: 'route-a', thinking: 'high' }
         ]
     };
@@ -490,8 +493,8 @@ test('task API plans independent whole-bank runs, persists membership and cancel
     expect(planned.status).toBe(200);
     const plan = await planned.json();
     expect(plan.run_count).toBe(2);
-    expect(plan.samples_per_run).toBe(42);
-    expect(plan.sample_count).toBe(84);
+    expect(plan.samples_per_run).toBe(36);
+    expect(plan.sample_count).toBe(72);
     expect(plan.sample_concurrency).toBe(6);
     expect(plan.run_concurrency).toBe(3);
     expect(plan.total_max_cost_usd).toBeNull();
@@ -509,12 +512,12 @@ test('task API plans independent whole-bank runs, persists membership and cancel
     expect(listed[0].plan).not.toHaveProperty('task_snapshots');
     expect(listed[0].plan.provenance_omitted).toBe(true);
     expect(listed[0].plan.targets).toHaveLength(2);
-    expect(task.plan.task_snapshots).toHaveLength(14);
+    expect(task.plan.task_snapshots).toHaveLength(12);
     for (const child of task.children) {
         const run = await (await request('/api/bench/runs/' + child.run_id)).json();
         expect(run.task_id).toBe(id);
         expect(run.plan.targets).toHaveLength(1);
-        expect(run.samples).toHaveLength(42);
+        expect(run.samples).toHaveLength(36);
     }
     expect((await request('/api/bench/tasks/' + id + '/cancel', 'POST')).status).toBe(200);
     await Promise.all(task.children.map((child: { run_id: string }) => execution.wait_for_run(child.run_id)));
@@ -530,7 +533,9 @@ test('task API preserves authentication and strict JSON before admission', async
         expect((await request(path, 'POST', {}, { origin: 'https://evil.example' })).status).toBe(403);
         for (const body of ['[]', '{', '{"rounds":3,"rounds":2}', '{"sample_concurrency":NaN}'])
             expect((await request(path, 'POST', body)).status).toBe(400);
-        expect((await request(path, 'POST', { targets: [{ route_id: 'route-a' }], task_ids: ['bayes'] })).status).toBe(400);
+        expect((await request(path, 'POST', { targets: [{ route_id: 'route-a', thinking: 'high' }], task_ids: ['bayes'] })).status).toBe(
+            400
+        );
     }
     expect(execution.list_runs()).toEqual([]);
     expect(execution.list_tasks()).toEqual([]);
@@ -562,7 +567,7 @@ test('explicit missing routes never silently fall back to gateway models', async
     try {
         const execution = service.bench_execution();
         expect(await execution.routes.public_routes()).toEqual([]);
-        await expect(execution.plan({ targets: [{ route_id: 'missing' }] })).rejects.toThrow('not configured');
+        await expect(execution.plan({ targets: [{ route_id: 'missing', thinking: 'high' }] })).rejects.toThrow('not configured');
         expect(execution.list_runs()).toEqual([]);
         expect(catalogCalls).toBe(0);
         expect(readdirSync(directory)).not.toContain('absent.json');

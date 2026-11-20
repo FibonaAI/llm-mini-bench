@@ -74,7 +74,7 @@ async function runSample(
     const result = await run_assessment_sample(
         client,
         task,
-        { model: 'test', thinking: options.thinking ?? 'default' },
+        { model: 'test', thinking: options.thinking ?? 'high' },
         1,
         config,
         { prompt: 0.000001, completion: 0.000002 },
@@ -85,10 +85,10 @@ async function runSample(
     return { result, requests, simulator, budget, records };
 }
 describe('assessment sample runner', () => {
-    test('thinking comes from target and default omits reasoning', async () => {
+    test('thinking comes from target as an explicit reasoning effort', async () => {
         let run = await runSample([response([], '42')]);
         expect(run.result.ok).toBe(true);
-        expect(run.requests[0]).not.toHaveProperty('reasoning');
+        expect(run.requests[0]!.reasoning).toEqual({ effort: 'high' });
         run = await runSample([response([], '42')], {}, { thinking: 'none' });
         expect(run.requests[0]!.reasoning).toEqual({ effort: 'none' });
     });
@@ -268,7 +268,7 @@ describe('assessment sample runner', () => {
                         return {};
                     }
                 },
-                { model: 'm', thinking: 'default' },
+                { model: 'm', thinking: 'high' },
                 1,
                 { max_output_tokens: 100, max_turns: 1, max_tool_calls: 1, timeout: 10 },
                 { prompt: 0, completion: 0 },

@@ -35,8 +35,10 @@ function fixture() {
     return { task, client, rows, tools: () => tools, requests: () => requests };
 }
 
-test('released inventory task accepts two legal transfers in one response and grades the final impossibility report', async () => {
-    const task = load_assessment_bank().tasks.find(task => task.id === 'T02_Inventory_Impossible')!;
+test('released document audit task accepts two document reads in one response and grades the submitted answer', async () => {
+    const bank = load_assessment_bank('1.0');
+    const task = bank.tasks.find(task => task.id === 'E23_Tight_Conditional_Audit')!;
+    const expected = (bank.grading.E23_Tight_Conditional_Audit as any).config.expected;
     const bodies: any[] = [];
     let calls = 0;
     const client = {
@@ -45,25 +47,21 @@ test('released inventory task accepts two legal transfers in one response and gr
             calls++;
             const output =
                 calls === 1
-                    ? [{ ...tool('inspect'), name: 'inspect_inventory' }]
+                    ? [{ ...tool('read-idx'), name: 'read_document', arguments: '{"document_id":"index"}' }]
                     : calls === 2
                       ? [
-                            { ...tool('transfer-a'), name: 'transfer_stock', arguments: '{"source":"A","destination":"C","units":1}' },
-                            { ...tool('transfer-b'), name: 'transfer_stock', arguments: '{"source":"B","destination":"C","units":1}' }
+                            { ...tool('read-a'), name: 'read_document', arguments: '{"document_id":"r3"}' },
+                            { ...tool('read-b'), name: 'read_document', arguments: '{"document_id":"n4"}' },
+                            { ...tool('submit'), name: 'submit_answer', arguments: JSON.stringify(expected) }
                         ]
                       : [];
-            return [
-                200,
-                0,
-                {},
-                { ...payload, output, ...(calls === 3 ? { output_text: '{"status":"impossible","max_C":3}' } : {}) }
-            ] as GatewayResponse;
+            return [200, 0, {}, { ...payload, output }] as GatewayResponse;
         }
     };
     const result = await run_assessment_sample(
         client,
         task,
-        { model: 'fixture', thinking: 'default' },
+        { model: 'fixture', thinking: 'high' },
         1,
         config,
         pricing,
@@ -72,15 +70,14 @@ test('released inventory task accepts two legal transfers in one response and gr
     );
     expect(result.status).toBe('completed');
     expect(result.grade?.content_score).toBe(1);
-    expect(result.tool_trace).toHaveLength(3);
-    expect(result.tool_trace.slice(1).map(step => (step.result.stock as any).C)).toEqual([2, 3]);
+    expect(result.tool_trace).toHaveLength(4);
     expect(bodies.every(body => !Object.hasOwn(body, 'parallel_tool_calls'))).toBe(true);
-    expect(
-        bodies[2].input
-            .filter((row: any) => row.type === 'function_call_output')
-            .slice(-2)
-            .map((row: any) => row.call_id)
-    ).toEqual(['transfer-a', 'transfer-b']);
+    expect(bodies[2].input.filter((row: any) => row.type === 'function_call_output').map((row: any) => row.call_id)).toEqual([
+        'read-idx',
+        'read-a',
+        'read-b',
+        'submit'
+    ]);
 });
 
 test('a journal failure between batched tool results stops remaining tools and any continuation', async () => {
@@ -91,7 +88,7 @@ test('a journal failure between batched tool results stops remaining tools and a
             run_assessment_sample(
                 f.client,
                 f.task,
-                { model: 'fixture', thinking: 'default' },
+                { model: 'fixture', thinking: 'high' },
                 1,
                 config,
                 pricing,
@@ -115,7 +112,7 @@ test('cancellation after the first tool prevents the second tool and model conti
     const observation = await run_assessment_sample(
         f.client,
         f.task,
-        { model: 'fixture', thinking: 'default' },
+        { model: 'fixture', thinking: 'high' },
         1,
         config,
         pricing,
@@ -143,7 +140,7 @@ test('the sample deadline is checked between tools in the same response', async 
     const observation = await run_assessment_sample(
         f.client,
         f.task,
-        { model: 'fixture', thinking: 'default' },
+        { model: 'fixture', thinking: 'high' },
         1,
         { ...config, timeout: 0.01 },
         pricing,
@@ -161,7 +158,7 @@ test('recorded legacy tool caps reject an oversized batch before partial simulat
     const observation = await run_assessment_sample(
         f.client,
         f.task,
-        { model: 'fixture', thinking: 'default' },
+        { model: 'fixture', thinking: 'high' },
         1,
         { ...config, max_tool_calls: 1 },
         pricing,
@@ -192,7 +189,7 @@ test('a transient continuation retry replays both tool outputs without executing
     const observation = await run_assessment_sample(
         client,
         f.task,
-        { model: 'fixture', thinking: 'default' },
+        { model: 'fixture', thinking: 'high' },
         1,
         { ...config, max_api_retries: 3 },
         pricing,

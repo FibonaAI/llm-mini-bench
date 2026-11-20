@@ -12,16 +12,7 @@ export const ASSESSMENT_PROJECT_ROOT = dirname(dirname(fileURLToPath(import.meta
 /** Bank manifests and question files live together in this directory. */
 export const ASSESSMENT_BANK_DIRECTORY = join(ASSESSMENT_PROJECT_ROOT, 'banks');
 /** Shared grading, simulator and strict JSON sources pinned by every bank manifest. */
-export const ASSESSMENT_BANK_SOURCE_PATHS = [
-    'src/assessment_tasks.ts',
-    'src/assessment_tools.ts',
-    'src/assessment_knowledge.ts',
-    'src/assessment_challenges.ts',
-    'src/assessment_json.ts',
-    'src/assessment_data.ts',
-    'src/assessment_resource.ts',
-    'src/assessment_dfa.ts'
-] as const;
+export const ASSESSMENT_BANK_SOURCE_PATHS = ['src/assessment_tasks.ts', 'src/assessment_json.ts', 'src/assessment_data.ts'] as const;
 type BankObject = Record<string, unknown>;
 /** Serializable task fields retain their identifiers when runtime functions are removed. */
 export interface AssessmentTaskSnapshot extends BankObject {

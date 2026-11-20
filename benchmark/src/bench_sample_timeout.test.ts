@@ -26,7 +26,7 @@ const task: RunnerTask = {
     prompt: 'fixed fixture',
     grade: () => ({ content_score: 1 })
 };
-const target = { model: 'fixture', thinking: 'default' };
+const target = { model: 'fixture', thinking: 'high' };
 
 test('production plans default to only a whole-sample deadline, with no hidden execution caps', async () => {
     const directory = mkdtempSync(join(tmpdir(), 'mini-bench-deadline-plan-'));
@@ -36,14 +36,14 @@ test('production plans default to only a whole-sample deadline, with no hidden e
             base_url: 'http://127.0.0.1:1/v1',
             api_key: 'fixture',
             account_ref: 'fixture',
-            thinking_levels: [],
+            thinking_levels: ['high'],
             account_concurrency: 1,
             pricing
         }),
         public_routes: () => []
     });
     try {
-        const plan = await service.plan_task({ targets: [{ route_id: 'fixture' }] });
+        const plan = await service.plan_task({ targets: [{ route_id: 'fixture', thinking: 'high' }] });
         expect(plan.limits).toEqual({
             max_requests: null,
             max_cost_usd: null,

@@ -382,8 +382,8 @@ describe('Responses SSE HTTP and runner integration', () => {
             expect(calls[0].stream.termination).toBe('protocol_error');
             expect(journal_raw_response_text(calls[0], records)).toContain('partial');
             expect(calls[1].stream.terminal_event).toBe('response.completed');
-            expect(result.usage).toBeNull();
-            expect(result.estimated_uncached_cost_usd).toBeNull();
+            expect(result.usage).toEqual(answer.usage);
+            expect(result.estimated_uncached_cost_usd).toBe(0);
         } finally {
             server.stop(true);
         }

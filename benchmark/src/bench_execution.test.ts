@@ -20,7 +20,7 @@ class FakeRoutes implements ExecutionRoutes {
                 base_url: 'https://' + account + '.invalid/v1',
                 model: 'same-model',
                 api_key: 'private-secret-' + account,
-                thinking_levels: ['none', 'high'],
+                thinking_levels: ['none', 'low', 'high'],
                 pricing: { prompt: 0.000001, completion: 0.000001 },
                 account_concurrency: 1
             }
@@ -73,19 +73,18 @@ class FakeGateway {
                 await this.release.promise;
                 if (this.fail) throw new Error('secret should never be logged: ' + api_key);
                 let output: unknown[];
-                if (body.tools && !(body.input as Array<Record<string, unknown>>).some(item => item.type === 'function_call_output'))
+                const isToolTask = Array.isArray(body.tools) && body.tools.length > 1;
+                if (isToolTask && !(body.input as Array<Record<string, unknown>>).some(item => item.type === 'function_call_output'))
                     output = [
                         {
                             type: 'function_call',
                             call_id: this.echo_tool_identifiers ? api_key : 'wire-call',
-                            name: this.echo_tool_identifiers ? api_key : 'inspect_inventory',
-                            arguments: '{}'
+                            name: this.echo_tool_identifiers ? api_key : 'read_document',
+                            arguments: '{"doc_id":"manifest"}'
                         }
                     ];
                 else {
-                    let text = JSON.stringify(
-                        body.tools ? { status: 'impossible', max_C: 3 } : { posterior_A: '1/2', stop_at_3: '7/12', expected_draws: '41/12' }
-                    );
+                    let text = JSON.stringify({ ok: true });
                     if (this.echo_secret) text += '\n' + api_key + '\n' + base_url;
                     output = [{ type: 'message', content: [{ type: 'output_text', text }] }];
                 }
@@ -112,7 +111,7 @@ function fixture(gateway = new FakeGateway(), concurrency = 4, routes = new Fake
 }
 const request = (extra: Record<string, unknown> = {}) => ({
     targets: [{ id: 'a', route_id: 'a', thinking: 'none' }],
-    task_ids: ['R01_Stopping_Urn'],
+    task_ids: ['K23_HTTP_Conditional_Cache_Precedence'],
     ...extra
 });
 async function finish(service: BenchExecutionService, id: string) {
@@ -143,7 +142,7 @@ describe('durable execution and admission (fully offline)', () => {
     });
     test('optional interactive source hashes accompany service plans without dispatching requests', async () => {
         const { service, gateway } = fixture();
-        const plan = await service.plan(request({ bank_version: '2.1', task_ids: ['T2_Causal_Pathway_Probes'] }));
+        const plan = await service.plan(request({ bank_version: '1.0', task_ids: ['T23_Adaptive_Fault_Diagnosis'] }));
         const extensions = plan.bank_snapshot.extension_sha256 as Record<string, string>;
         for (const path of ['src/assessment_interactive.ts', 'src/assessment_blackbox.ts', 'src/assessment_documents.ts']) {
             expect(plan.source_sha256[path]).toBe(extensions[path]);
@@ -184,19 +183,19 @@ describe('durable execution and admission (fully offline)', () => {
             request({ task_ids: ['K01_Molecular_Facts'] }),
             request({ task_ids: [] }),
             request({ limits: { timeout: 1 } }),
-            request({ targets: [{ route_id: 'missing' }] }),
+            request({ targets: [{ route_id: 'missing', thinking: 'high' }] }),
             request({ targets: [{ route_id: 'a', thinking: 'ultra' }] }),
             request({ targets: [{ route_id: 'a', unknown: 1 }] }),
             request({
                 targets: [
-                    { id: 'x', route_id: 'a' },
-                    { id: 'x', route_id: 'b' }
+                    { id: 'x', route_id: 'a', thinking: 'high' },
+                    { id: 'x', route_id: 'b', thinking: 'high' }
                 ]
             }),
             request({
                 targets: [
-                    { id: 'x', route_id: 'a' },
-                    { id: 'y', route_id: 'a' }
+                    { id: 'x', route_id: 'a', thinking: 'high' },
+                    { id: 'y', route_id: 'a', thinking: 'high' }
                 ]
             })
         ];
@@ -207,8 +206,8 @@ describe('durable execution and admission (fully offline)', () => {
         const id = await service.start_run(
             request({
                 targets: [
-                    { id: 'A', route_id: 'a' },
-                    { id: 'B', route_id: 'b' }
+                    { id: 'A', route_id: 'a', thinking: 'high' },
+                    { id: 'B', route_id: 'b', thinking: 'high' }
                 ]
             })
         );
@@ -218,7 +217,7 @@ describe('durable execution and admission (fully offline)', () => {
         const run = await finish(service, id);
         expect(new Set(run.samples.map(sample => sample.sample_id)).size).toBe(2);
         expect(new Set(run.samples.map(sample => sample.account_ref))).toEqual(new Set(['account-a', 'account-b']));
-        expect(run.samples.every(sample => (sample.grade as { content_score: number }).content_score === 1)).toBe(true);
+        expect(run.samples.every(sample => (sample.grade as { content_score: number }).content_score === 0)).toBe(true);
         const records = readFileSync(join(directory, id, 'journal.jsonl'), 'utf8')
             .trim()
             .split('\n')
@@ -234,8 +233,8 @@ describe('durable execution and admission (fully offline)', () => {
         const { service, gateway } = fixture(new FakeGateway(true), 2);
         const first = await service.start_run(request({ rounds: 2 }));
         await gateway.wait_calls(1);
-        const second = await service.start_run(request({ targets: [{ id: 'alias', route_id: 'alias-a' }] }));
-        const third = await service.start_run(request({ targets: [{ id: 'other', route_id: 'b' }] }));
+        const second = await service.start_run(request({ targets: [{ id: 'alias', route_id: 'alias-a', thinking: 'high' }] }));
+        const third = await service.start_run(request({ targets: [{ id: 'other', route_id: 'b', thinking: 'high' }] }));
         await gateway.wait_calls(2);
         expect(service.get_run(second)!.samples[0]!.status).toBe('pending');
         gateway.release.resolve();
@@ -258,8 +257,8 @@ describe('durable execution and admission (fully offline)', () => {
             request({
                 concurrency: 1,
                 targets: [
-                    { id: 'A', route_id: 'a' },
-                    { id: 'B', route_id: 'b' }
+                    { id: 'A', route_id: 'a', thinking: 'high' },
+                    { id: 'B', route_id: 'b', thinking: 'high' }
                 ]
             })
         );
@@ -269,8 +268,22 @@ describe('durable execution and admission (fully offline)', () => {
         await finish(second.service, id2);
         expect(second.gateway.total_maximum).toBe(1);
     });
-    test('default omits reasoning, explicit none and high remain distinct', async () => {
+    test('a route without thinking levels runs with omitted reasoning', async () => {
+        const { service, gateway, routes } = fixture();
+        routes.configs.a!.thinking_levels = [];
+        const target = { route_id: 'a' };
+        await expect(service.plan(request({ targets: [{ ...target, thinking: 'none' }] }))).rejects.toThrow(
+            'Thinking level is not supported'
+        );
+        const run = await finish(service, await service.start_run(request({ targets: [target] })));
+        expect(run.plan.targets[0]!.thinking).toBe('default');
+        expect(gateway.calls).toHaveLength(1);
+        expect(gateway.calls[0]!.body).not.toHaveProperty('reasoning');
+    });
+    test('omitted thinking is default and omits reasoning; explicit none and high remain distinct', async () => {
         const { service, gateway } = fixture();
+        expect((await service.plan(request({ targets: [{ route_id: 'a' }] }))).targets[0]!.thinking).toBe('default');
+        await expect(service.plan(request({ targets: [{ route_id: 'a', thinking: 'mixed' }] }))).rejects.toThrow();
         const id = await service.start_run(
             request({
                 targets: ['default', 'none', 'high'].map(thinking => ({
@@ -285,7 +298,7 @@ describe('durable execution and admission (fully offline)', () => {
     });
     test('cancellation blocks tool continuation and pending samples, preserves raw response', async () => {
         const { service, gateway, directory } = fixture(new FakeGateway(true));
-        const id = await service.start_run(request({ task_ids: ['T02_Inventory_Impossible'], rounds: 3 }));
+        const id = await service.start_run(request({ task_ids: ['E23_Tight_Conditional_Audit'], rounds: 3 }));
         await gateway.wait_calls(1);
         expect(service.cancel_run(id)).toBe(true);
         gateway.release.resolve();
@@ -304,13 +317,13 @@ describe('durable execution and admission (fully offline)', () => {
     });
     test('tool requests use per-call budgets and retain ungraded budget failures', async () => {
         const { service } = fixture();
-        const first = await finish(service, await service.start_run(request({ task_ids: ['T02_Inventory_Impossible'] })));
+        const first = await finish(service, await service.start_run(request({ task_ids: ['E23_Tight_Conditional_Audit'] })));
         expect(first.samples[0]!.calls).toHaveLength(2);
         expect(first.samples[0]!.tool_trace).toHaveLength(1);
-        expect((first.samples[0]!.grade as { content_score: number }).content_score).toBe(1);
+        expect((first.samples[0]!.grade as { content_score: number }).content_score).toBe(0);
         const second = await finish(
             service,
-            await service.start_run(request({ task_ids: ['T02_Inventory_Impossible'], limits: { max_requests: 1 } }))
+            await service.start_run(request({ task_ids: ['E23_Tight_Conditional_Audit'], limits: { max_requests: 1 } }))
         );
         expect(second.status).toBe('incomplete');
         expect(second.samples[0]!.status).toBe('budget_not_admitted');
@@ -363,7 +376,7 @@ describe('durable execution and admission (fully offline)', () => {
         const gateway = new FakeGateway();
         gateway.echo_tool_identifiers = true;
         const { service, directory } = fixture(gateway);
-        const id = await service.start_run(request({ task_ids: ['T02_Inventory_Impossible'] }));
+        const id = await service.start_run(request({ task_ids: ['E23_Tight_Conditional_Audit'] }));
         const run = await finish(service, id);
         const journal = readFileSync(join(directory, id, 'journal.jsonl'), 'utf8');
         expect(journal).not.toContain('private-secret-account-a');
@@ -398,7 +411,7 @@ describe('durable execution and admission (fully offline)', () => {
         const first = await service.start_run(
             request({
                 targets: [
-                    { id: 'first', route_id: 'a', thinking: 'default' },
+                    { id: 'first', route_id: 'a', thinking: 'low' },
                     { id: 'second', route_id: 'alias-a', thinking: 'high' }
                 ],
                 rounds: 2
@@ -408,11 +421,11 @@ describe('durable execution and admission (fully offline)', () => {
         const second = await service.start_run(request());
         gateway.release.resolve();
         await Promise.all([first, second].map(id => finish(service, id)));
-        expect(gateway.calls.map(call => (call.body.reasoning as { effort: string } | undefined)?.effort ?? 'default')).toEqual([
-            'default',
+        expect(gateway.calls.map(call => (call.body.reasoning as { effort: string }).effort)).toEqual([
+            'low',
             'none',
             'high',
-            'default',
+            'low',
             'high'
         ]);
     });

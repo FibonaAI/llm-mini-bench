@@ -1,6 +1,7 @@
-import { readFileSync } from 'node:fs';
+import { readFileSync, statSync } from 'node:fs';
 import { createHash } from 'node:crypto';
 import { join } from 'node:path';
+import { PRODUCTION_BANK_VERSION } from './production_bank.ts';
 import {
     ASSESSMENT_BANK_SOURCE_PATHS,
     ASSESSMENT_PROJECT_ROOT,
@@ -82,4 +83,36 @@ export function create_assessment_source_context(load_bank: () => AssessmentBank
         return result.bank;
     };
     return { production_bank, production_cards: () => (cards ??= production_bank().tasks.map(assessment_task_snapshot)) };
+}
+
+/** Fast stat-only signature of tracked source and bank files; detects on-disk edits without reading bytes. */
+export function assessment_source_signature(root = ASSESSMENT_PROJECT_ROOT): string {
+    const tracked = [
+        `banks/assessment-${PRODUCTION_BANK_VERSION}.json`,
+        `banks/assessment-${PRODUCTION_BANK_VERSION}.questions.json`,
+        ...EXECUTION_SOURCE_PATHS
+    ];
+    return tracked
+        .map(path => {
+            try {
+                const stat = statSync(join(root, path));
+                return `${path}:${stat.size}:${stat.mtimeMs}`;
+            } catch {
+                return `${path}:missing`;
+            }
+        })
+        .join('|');
+}
+
+/** Cryptographic digest of the current production bank and execution sources for persistent cache validation. */
+export function assessment_source_digest(context = create_assessment_source_context()): string {
+    try {
+        const bank = context.production_bank();
+        const { hashes } = capture_assessment_sources(bank);
+        return createHash('sha256')
+            .update(JSON.stringify({ version: bank.version, task_sha256: bank.task_sha256, hashes }))
+            .digest('hex');
+    } catch {
+        return 'invalid:' + assessment_source_signature();
+    }
 }

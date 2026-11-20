@@ -39,7 +39,7 @@ test('generic adapter owns execution transport and snapshots while the engine fr
         model: 'same-model',
         base_url: 'https://never-contact.invalid',
         api_key: 'offline-only',
-        thinking_levels: [],
+        thinking_levels: ['high'],
         pricing: { prompt: 0, completion: 0 },
         account_concurrency: 1
     };
@@ -61,7 +61,11 @@ test('generic adapter owns execution transport and snapshots while the engine fr
         throw new Error('default transport must not execute');
     });
     try {
-        const id = await service.start_run({ targets: [{ route_id: 'route' }], task_ids: ['R01_Stopping_Urn'], rounds: 1 });
+        const id = await service.start_run({
+            targets: [{ route_id: 'route', thinking: 'high' }],
+            task_ids: ['K23_HTTP_Conditional_Cache_Precedence'],
+            rounds: 1
+        });
         route.binding_ref = 'adapter-binding-v2';
         await service.wait_for_run(id);
         const run = service.get_run(id)!;
@@ -85,7 +89,7 @@ test('adapter source paths cannot escape evidence storage or replace grading sou
                 base_url: 'https://never.invalid',
                 model: 'm',
                 api_key: 'k',
-                thinking_levels: [],
+                thinking_levels: ['high'],
                 account_concurrency: 1,
                 pricing: { prompt: 0, completion: 0 }
             }),
@@ -94,7 +98,7 @@ test('adapter source paths cannot escape evidence storage or replace grading sou
         };
         const service = new BenchExecutionService(directory(), routes);
         try {
-            await expect(service.plan({ targets: [{ route_id: 'route' }] })).rejects.toThrow('adapter execution source');
+            await expect(service.plan({ targets: [{ route_id: 'route', thinking: 'high' }] })).rejects.toThrow('adapter execution source');
             expect(service.list_runs()).toEqual([]);
         } finally {
             await service.close();

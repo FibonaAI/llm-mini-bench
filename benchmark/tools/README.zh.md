@@ -48,17 +48,9 @@ bun benchmark/tools/import_assessment_baseline.ts /path/to/assessment/RUN_ID/run
   --target-id TARGET_ID --output-dir benchmark/baselines
 ```
 
-输入必须是执行服务保存的完整 `run.json`，不是校准器的 JSONL，也不是旧基线摘要。工具校验 1.0 完整 14 题、全部预定轮次、题库哈希、源码和逐样本执行协议，只接受完成且可评分的结果。
+输入必须是执行服务保存的完整 `run.json`，不是校准器的 JSONL。工具校验 Assessment 1.0 完整 12 题、全部预定轮次、题库哈希、源码和逐样本执行协议，只接受完成且可评分的结果。
 
-输出文件名由完整快照的内容哈希生成。相同证据再次导入不会覆盖不同内容。随附基线目录属于项目资料；个人基线推荐通过插件页面保存，避免把个人数据写入项目。
-
-## 重放随附历史证据
-
-```sh
-bun benchmark/tools/replay_assessment_evidence.ts
-```
-
-命令先校验已登记的快照和原始文件摘要，再通过当前 TypeScript 实现重放 19 份已保存响应、5 次模拟器调用和 14 份评分。它直接输出报告，不发网络请求，也不修改历史证据。使用 `--output NEW_FILE` 可将报告保存到新文件。报告区分历史 Python 源码哈希与当前 TypeScript 源码哈希，结果一致不表示源码相同。
+输出文件名由完整快照的内容哈希生成。相同证据再次导入不会覆盖不同内容。个人基线推荐通过插件页面保存，避免把个人数据写入项目。
 
 ## 真实评测入口
 

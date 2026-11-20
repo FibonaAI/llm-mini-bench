@@ -36,7 +36,7 @@ function fixtureRun(): ExecutionRun {
                     account_ref: 'offline',
                     account_evidence: 'configured_binding',
                     model: 'model',
-                    thinking: 'default',
+                    thinking: 'high',
                     account_concurrency: 1,
                     pricing: { prompt: 0, completion: 0 },
                     remote_route: { namespace: 'remote', evidence: 'magpie_via_catalog' }
@@ -53,7 +53,7 @@ function fixtureRun(): ExecutionRun {
             account_evidence: 'configured_binding',
             task: 'fixture',
             model: 'model',
-            thinking: 'default',
+            thinking: 'high',
             round: 1,
             status,
             grade: null,
@@ -79,6 +79,8 @@ test('run query summaries preserve retry predicates and isolate targets and live
     expect(execution_retryable_samples(run)).toBe(1);
     run.stop_reason = 'transport_failure';
     expect(execution_retryable_samples(run)).toBe(2);
+    run.samples[3]!.status = 'interrupted';
+    expect(execution_retryable_samples(run)).toBe(3);
 });
 
 test('task query summaries count committed children without leaking full child evidence', () => {

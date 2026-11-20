@@ -41,7 +41,7 @@ test('opaque sandbox may load module and SVG assets without weakening Host, Orig
         const authenticated = await request('/api/bench/banks', { Origin: 'null', 'X-Mini-Bench-Token': token });
         expect(authenticated.status).toBe(200);
         expect(authenticated.headers.get('access-control-allow-origin')).toBe('null');
-        expect((await authenticated.json()).banks[0].tasks).toHaveLength(14);
+        expect((await authenticated.json()).banks[0].tasks).toHaveLength(12);
         expect((await request('/api/bench/banks', { Origin: 'https://foreign.invalid', 'X-Mini-Bench-Token': token })).status).toBe(403);
         const preflight = await request(
             '/api/bench/banks',

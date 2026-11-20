@@ -128,7 +128,7 @@ export function target_execution_protocol(
     thinking: unknown,
     stream = false
 ): ExecutionProtocol {
-    if (typeof thinking !== 'string' || !thinking || thinking === 'mixed' || thinking === 'unknown')
+    if (typeof thinking !== 'string' || !thinking || (thinking !== 'default' && RESERVED_THINKING.has(thinking)))
         throw new TypeError('Target thinking must be default or an advertised effort');
     const requests: Record<string, AssessmentRequestConfig> = Object.create(null);
     for (const question of questions) {

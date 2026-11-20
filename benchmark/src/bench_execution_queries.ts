@@ -3,6 +3,14 @@ import type { ExecutionRun, ExecutionTaskState } from './bench_execution.ts';
 type RecordValue = Record<string, unknown>;
 const clone = <T>(value: T): T => structuredClone(value);
 
+/** Distinguish whole-sample timeouts (scored 0, completed task, still retryable) from API failures. */
+export function is_timeout_sample(sample: RecordValue): boolean {
+    if (sample.status === 'timeout') return true;
+    const grade = sample.grade as RecordValue | null | undefined;
+    if (grade && typeof grade === 'object' && grade.outcome === 'timeout') return true;
+    return sample.status === 'api_failure' && sample.runner_error === 'SampleTimeout';
+}
+
 /** Retry eligibility is a projection only; coordinator admission still rechecks every condition. */
 export function execution_retryable_samples(run: ExecutionRun): number {
     // Imported calibration journals have no route identity and are never retried.
@@ -10,7 +18,11 @@ export function execution_retryable_samples(run: ExecutionRun): number {
     return run.samples.filter(
         sample =>
             sample.status === 'api_failure' ||
-            (sample.status === 'budget_not_admitted' && ['transport_failure', 'missing_usage_cost'].includes(run.stop_reason ?? ''))
+            is_timeout_sample(sample) ||
+            sample.status === 'interrupted' ||
+            sample.status === 'cancelled' ||
+            (sample.status === 'budget_not_admitted' &&
+                ['transport_failure', 'missing_usage_cost', 'cancelled'].includes(run.stop_reason ?? ''))
     ).length;
 }
 
@@ -64,7 +76,10 @@ export function execution_result_quality(run: ExecutionRun) {
 /** Run summaries exclude raw evidence and use the caller's current budget snapshot. */
 export function execution_run_summary(run: ExecutionRun, budget: RecordValue = run.budget) {
     const counts: Record<string, number> = {};
-    for (const sample of run.samples) counts[sample.status] = (counts[sample.status] ?? 0) + 1;
+    for (const sample of run.samples) {
+        const status = is_timeout_sample(sample) ? 'timeout' : sample.status;
+        counts[status] = (counts[status] ?? 0) + 1;
+    }
     return {
         id: run.id,
         status: run.status,

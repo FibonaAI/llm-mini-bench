@@ -8,9 +8,8 @@ import { assessment_observations, build_assessment_baseline, load_assessment_bas
 import { create_assessment_source_context } from '../src/assessment_provenance.ts';
 import { project_assessment_observation } from '../src/assessment_observations.ts';
 import { assessment_hash } from '../src/assessment_json.ts';
-import { execution_protocol_hash, target_execution_protocol } from '../src/run_protocol.ts';
+import { assessment_sample_protocol, execution_protocol_hash } from '../src/run_protocol.ts';
 import { main as importBaseline } from '../tools/import_assessment_baseline.ts';
-import { replay_assessment_evidence } from '../tools/replay_assessment_evidence.ts';
 
 type Evidence = Record<string, any>;
 const dirs: string[] = [];
@@ -59,7 +58,7 @@ function completeRun(rounds = 2): Evidence {
     };
     for (let round = 1; round <= rounds; round++)
         for (const card of cards) {
-            const protocol = target_execution_protocol([{ id: card.id, max_output_tokens: 8192 }], 'high');
+            const { execution_protocol: protocol, assessment_protocol_sha256 } = assessment_sample_protocol(card, 'high', config, false);
             run.samples.push({
                 sample_id: `${card.id}-${round}`,
                 run_id: run.id,
@@ -74,17 +73,12 @@ function completeRun(rounds = 2): Evidence {
                 ok: true,
                 execution_protocol: protocol,
                 execution_protocol_sha256: execution_protocol_hash(protocol),
-                assessment_protocol_sha256: assessment_hash({ task: card, config, request_protocol: protocol }),
+                assessment_protocol_sha256,
                 grade: { content_score: 0.5, instruction_checks: { json_only: false }, outcome: 'partial' }
             });
         }
     return run;
 }
-const baselinePaths = () =>
-    readdirSync(join(ASSESSMENT_PROJECT_ROOT, 'baselines'))
-        .filter(path => path.endsWith('.json'))
-        .map(path => join(ASSESSMENT_PROJECT_ROOT, 'baselines', path));
-
 describe('observation query verification', () => {
     test('empty queries do not load sources, and multiple targets and baselines share one load', () => {
         let loads = 0;
@@ -181,7 +175,7 @@ describe('assessment baseline validation', () => {
         const run = completeRun(),
             baseline = build_assessment_baseline(run, 'target-1');
         expect(baseline.schema).toBe('assessment-baseline-v1');
-        expect(baseline.samples).toHaveLength(28);
+        expect(baseline.samples).toHaveLength(24);
         expect(baseline.samples[0].grade.content_score).toBe(0.5);
         expect(baseline.samples[0].grade.instruction_checks.json_only).toBe(false);
         expect(baseline).not.toHaveProperty('score');
@@ -248,7 +242,7 @@ describe('assessment baseline validation', () => {
         expect(record.usage).toBeNull();
         expect(record.estimated_cost_usd).toBeNull();
         expect(record.account_ref).toBe('account-a');
-        expect(record.tasks).toHaveLength(14);
+        expect(record.tasks).toHaveLength(12);
         expect(record.tasks[0].samples).toHaveLength(2);
     });
     test('recorded catalog identity survives baseline snapshots while absent metadata stays unknown', () => {
@@ -317,8 +311,8 @@ describe('assessment baseline validation', () => {
             sample.estimated_uncached_cost_usd = 0.01;
         }
         const record = assessment_observations([], [run])[0]!;
-        expect(record.usage).toEqual({ input_tokens: 280, output_tokens: 140 });
-        expect(record.estimated_cost_usd).toBeCloseTo(0.28);
+        expect(record.usage).toEqual({ input_tokens: 240, output_tokens: 120 });
+        expect(record.estimated_cost_usd).toBeCloseTo(0.24);
         delete run.samples[0].usage;
         delete run.samples[0].estimated_uncached_cost_usd;
         const missing = assessment_observations([], [run])[0]!;
@@ -329,9 +323,31 @@ describe('assessment baseline validation', () => {
         const run = completeRun();
         run.samples.push({ ...run.samples[0], task: 'unexpected-task', sample_id: 'extra-sample' });
         const observation = assessment_observations([], [run])[0]!;
-        expect(observation.sample_count).toBe(29);
-        expect(observation.tasks.flatMap(task => task.samples)).toHaveLength(28);
+        expect(observation.sample_count).toBe(25);
+        expect(observation.tasks.flatMap(task => task.samples)).toHaveLength(24);
         expect(observation.baseline_eligible).toBe(false);
+    });
+    test('observation projection preserves ended_after_submission from answer_submission', () => {
+        const run = completeRun();
+        run.samples[0].answer_submission = {
+            protocol: 'submit-answer-tool-v1',
+            call_id: 'call-1',
+            answer: { answer: 'ok' },
+            submissions: 1,
+            ended_after_submission: 'api_failure'
+        };
+        run.samples[1].answer_submission = {
+            protocol: 'submit-answer-tool-v1',
+            call_id: 'call-2',
+            answer: { answer: 'ok' },
+            submissions: 1,
+            ended_after_submission: null
+        };
+        const observation = assessment_observations([], [run])[0]!;
+        const firstTaskSamples = observation.tasks[0]!.samples;
+        expect(firstTaskSamples[0]!.ended_after_submission).toBe('api_failure');
+        expect(firstTaskSamples[1]!.ended_after_submission).toBeNull();
+        expect(observation.tasks[1]!.samples[0]!.ended_after_submission).toBeNull();
     });
     test('loader skips obsolete invalid tampered files and deduplicates', () => {
         const run = completeRun(),
@@ -368,40 +384,5 @@ describe('assessment baseline validation', () => {
         expect(readFileSync(join(ASSESSMENT_PROJECT_ROOT, 'tools/import_assessment_baseline.ts'), 'utf8')).toContain(
             "join(ASSESSMENT_PROJECT_ROOT, 'baselines')"
         );
-    });
-    test('retained baseline remains byte-pinned historical evidence, not current provenance', () => {
-        const loaded = load_assessment_baselines(baselinePaths());
-        expect(loaded).toHaveLength(1);
-        const baseline = loaded[0]!,
-            record = assessment_observations(loaded, [])[0]!;
-        expect(record.implementation).toBe('python-historical');
-        expect(record.baseline_eligible).toBe(true);
-        expect(record.source_sha256).toEqual(baseline.bank_snapshot.source_sha256);
-        expect(Object.keys(record.source_sha256).every(path => path.endsWith('.py'))).toBe(true);
-        expect(baseline.target.account_ref).toBeNull();
-        expect(baseline.target.account_evidence).toBe('unrecorded');
-        for (const key of ['provider_id', 'provider_evidence', 'model_display_name', 'remote_route']) {
-            expect(baseline.target).not.toHaveProperty(key);
-            expect(record[key]).toBeNull();
-        }
-        const forged = structuredClone(baseline);
-        forged.samples[0].grade.content_score = 0.125;
-        const root = temporary();
-        writeFileSync(join(root, 'forged.json'), JSON.stringify(forged));
-        expect(load_assessment_baselines([join(root, 'forged.json')])).toEqual([]);
-        const run = completeRun();
-        run.plan.bank_snapshot = baseline.bank_snapshot;
-        run.plan.source_sha256 = baseline.source_sha256;
-        expect(() => build_assessment_baseline(run, 'target-1')).toThrow('provenance mismatch');
-    });
-    test('all historical calls simulator transitions grades and protocols independently replay in Bun', () => {
-        const report = replay_assessment_evidence();
-        expect(report.verification.recorded_response_calls).toBe(19);
-        expect(report.verification.replayed_simulator_calls).toBe(5);
-        expect(report.verification.completed_gradable_samples).toBe(14);
-        expect(report.verification.paid_model_calls).toBe(0);
-        expect(report.verification.four_task_source_hashes_match_current).toBe(false);
-        expect(report.verification.historical_snapshot_id_verified).toBe(true);
-        expect(report.recorded_usage).toEqual({ input_tokens: 6125, output_tokens: 7860 });
     });
 });

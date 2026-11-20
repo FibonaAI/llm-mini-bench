@@ -63,9 +63,17 @@ class TaskGateway {
             this.perModel.set(model, this.perModel.get(model)! - 1);
             const output =
                 this.toolCalls &&
-                body.tools &&
+                Array.isArray(body.tools) &&
+                body.tools.length > 1 &&
                 !(body.input as Array<Record<string, unknown>>).some(item => item.type === 'function_call_output')
-                    ? [{ type: 'function_call', call_id: 'tool-step', name: 'inspect_inventory', arguments: '{}' }]
+                    ? [
+                          {
+                              type: 'function_call',
+                              call_id: 'tool-step',
+                              name: (body.tools as Array<{ name: string }>)[0]!.name,
+                              arguments: '{}'
+                          }
+                      ]
                     : [{ type: 'message', content: [{ type: 'output_text', text: '{}' }] }];
             return [200, 0.001, {}, { status: 'completed', output, usage: { input_tokens: 1, output_tokens: 1 } }];
         }
@@ -164,7 +172,7 @@ test('remote namespace metadata rejects malformed or unproven values from arbitr
     expect(gateway.calls).toHaveLength(0);
 });
 
-test('task defaults are 7 independent whole-bank runs, 42 samples each, per-run budgets', async () => {
+test('task defaults are 7 independent whole-bank runs, 36 samples each, per-run budgets', async () => {
     const { service, gateway } = fixture();
     const plan = await service.plan_task(request());
     expect(plan).toMatchObject({
@@ -172,12 +180,12 @@ test('task defaults are 7 independent whole-bank runs, 42 samples each, per-run 
         sample_concurrency: 6,
         run_concurrency: 3,
         run_count: 7,
-        samples_per_run: 42,
-        sample_count: 294,
+        samples_per_run: 36,
+        sample_count: 252,
         bank_scope: 'whole',
         total_max_cost_usd: null
     });
-    expect(plan.task_ids).toHaveLength(14);
+    expect(plan.task_ids).toHaveLength(12);
     expect(gateway.calls).toHaveLength(0);
     expect(JSON.stringify(plan)).not.toMatch(/never-real|offline.invalid|api_key/);
     for (const invalid of [
@@ -185,36 +193,42 @@ test('task defaults are 7 independent whole-bank runs, 42 samples each, per-run 
         { ...request(), rounds: 4 },
         { ...request(), sample_concurrency: 65 },
         { ...request(), run_concurrency: 11 },
-        { ...request(), targets: [{ route_id: 'route-0' }, { route_id: 'route-0' }] }
+        {
+            ...request(),
+            targets: [
+                { route_id: 'route-0', thinking: 'high' },
+                { route_id: 'route-0', thinking: 'high' }
+            ]
+        }
     ])
         await expect(service.plan_task(invalid)).rejects.toBeInstanceOf(TypeError);
-    await expect(service.plan_task(parseAssessmentJson('{"targets":[{"route_id":"route-0"}],"rounds":3.0}'))).rejects.toBeInstanceOf(
-        TypeError
-    );
+    await expect(
+        service.plan_task(parseAssessmentJson('{"targets":[{"route_id":"route-0","thinking":"high"}],"rounds":3.0}'))
+    ).rejects.toBeInstanceOf(TypeError);
 });
 
-test('966 samples queue as independent runs under existing concurrency and cancellation controls', async () => {
+test('828 samples queue as independent runs under per-task concurrency and cancellation controls', async () => {
     const { service, gateway } = fixture(5);
     const input = { ...request(23), sample_concurrency: 2, run_concurrency: 3 };
     const plan = await service.plan_task(input);
-    expect(plan).toMatchObject({ run_count: 23, samples_per_run: 42, sample_count: 966, total_max_cost_usd: null });
+    expect(plan).toMatchObject({ run_count: 23, samples_per_run: 36, sample_count: 828, total_max_cost_usd: null });
     expect(gateway.calls).toHaveLength(0);
     await expect(service.plan({ ...request(23), rounds: 3 })).rejects.toThrow('at most 500 samples');
     const id = await service.start_task(input);
-    await gateway.waitCalls(5);
+    await gateway.waitCalls(6);
     const rows = children(service, id);
     expect(rows).toHaveLength(23);
-    expect(rows.every(child => child.sample_count === 42)).toBe(true);
+    expect(rows.every(child => child.sample_count === 36)).toBe(true);
     expect(rows.filter(child => child.status === 'running')).toHaveLength(3);
     expect(rows.filter(child => child.status === 'queued')).toHaveLength(20);
-    expect(gateway.maximum).toBe(5);
+    expect(gateway.maximum).toBe(6);
     expect([...gateway.maxPerModel.values()].every(count => count <= 2)).toBe(true);
     expect(service.cancel_task(id)).toBe(true);
     gateway.release();
     await finish(service, id);
     expect(service.get_task(id)!.status).toBe('cancelled');
     expect(children(service, id).every(child => child.status === 'cancelled')).toBe(true);
-    expect(gateway.calls).toHaveLength(5);
+    expect(gateway.calls).toHaveLength(6);
 });
 
 test('three admitted child runs execute six simultaneous samples each; remaining runs wait', async () => {
@@ -230,7 +244,7 @@ test('three admitted child runs execute six simultaneous samples each; remaining
     for (const child of rows) {
         const run = service.get_run(child.run_id)!;
         expect(run).toMatchObject({ task_id: id, execution_kind: 'task-child-v1' });
-        expect(run.samples).toHaveLength(42);
+        expect(run.samples).toHaveLength(36);
         expect(run.plan.targets).toHaveLength(1);
         expect(run.plan.source_sha256['src/bench_execution.ts']).toMatch(/^[a-f0-9]{64}$/);
         expect(JSON.parse(readFileSync(join(directory, child.run_id, 'run.json'), 'utf8')).task_id).toBe(id);
@@ -244,27 +258,38 @@ test('three admitted child runs execute six simultaneous samples each; remaining
     expect(gateway.calls).toHaveLength(18);
 });
 
-test('global and shared-account limits remain stricter than requested sample/run defaults', async () => {
+test('task concurrency is controlled within the task and spreads concurrent runs across channels and models', async () => {
     const routes = new TaskRoutes();
     routes.sharedAccount = true;
     routes.accountLimit = 2;
     const { service, gateway } = fixture(4, routes);
-    const plan = await service.plan_task(request());
-    expect(plan.sample_concurrency).toBe(6);
-    const id = await service.start_task(request());
-    await gateway.waitCalls(2);
-    expect(gateway.calls).toHaveLength(2);
-    expect(gateway.maximum).toBe(2);
+    const targets = [0, 1, 2, 3].flatMap(channel =>
+        [0, 1].flatMap(model => {
+            const route_id = `route-${channel * 2 + model}`;
+            return ['low', 'high', 'none'].map(thinking => ({ route_id, thinking }));
+        })
+    );
+    const resolve = routes.resolve.bind(routes);
+    routes.resolve = (id: string) => {
+        const index = Number(id.split('-')[1]);
+        const channel = Math.floor(index / 2);
+        return {
+            ...resolve(id),
+            provider_id: 'homelab',
+            remote_route: { namespace: `channel-${channel}`, evidence: 'magpie_via_catalog' }
+        };
+    };
+    const id = await service.start_task({ targets, sample_concurrency: 2, run_concurrency: 3 });
+    await gateway.waitCalls(6);
+    const active = children(service, id).filter(child => child.status === 'running');
+    expect(active).toHaveLength(3);
+    // The 3 concurrent runs must spread across 3 distinct channels, not 3 thinking levels of channel-0/route-0.
+    expect(new Set(active.map(child => (child.target as { remote_route?: { namespace: string } }).remote_route?.namespace)).size).toBe(3);
+    expect(new Set(active.map(child => child.target.route_id)).size).toBe(3);
+    expect(gateway.calls).toHaveLength(6);
     service.cancel_task(id);
     gateway.release();
     await finish(service, id);
-    const other = fixture(2);
-    const otherId = await other.service.start_task(request());
-    await other.gateway.waitCalls(2);
-    expect(other.gateway.calls).toHaveLength(2);
-    other.service.cancel_task(otherId);
-    other.gateway.release();
-    await finish(other.service, otherId);
 });
 
 test('all seven children complete independently and each request budget is not shared', async () => {
@@ -279,42 +304,46 @@ test('all seven children complete independently and each request budget is not s
     await finish(service, successful);
     expect(children(service, successful).every(child => child.status === 'completed')).toBe(true);
     expect(service.get_task(successful)!.status).toBe('completed');
-    expect(gateway.calls).toHaveLength(7 + 84);
+    expect(gateway.calls).toHaveLength(7 + 72);
 });
 
 test('user example keeps three Thinking leaves plus two accounts with two leaves as seven runs', async () => {
     const { service } = fixture();
     const targets = [
-        ...['default', 'low', 'high'].map(thinking => ({ route_id: 'route-0', thinking })),
+        ...['none', 'low', 'high'].map(thinking => ({ route_id: 'route-0', thinking })),
         ...['route-1', 'route-2'].flatMap(route_id => ['low', 'high'].map(thinking => ({ route_id, thinking })))
     ];
     const plan = await service.plan_task({ targets });
     expect(plan.run_count).toBe(7);
-    expect(plan.sample_count).toBe(294);
+    expect(plan.sample_count).toBe(252);
     expect(plan.targets.map(target => [target.route_id, target.thinking])).toEqual(
         targets.map(target => [target.route_id, target.thinking])
     );
 });
 
-test('different tasks share global slots, and cancelling one task does not cancel the other', async () => {
+test('different tasks control concurrency independently without queueing behind each other, and cancelling one task does not cancel the other', async () => {
     const { service, gateway } = fixture(5);
     const first = await service.start_task({ ...request(3), sample_concurrency: 2, run_concurrency: 2 });
     await gateway.waitCalls(4);
     const second = await service.start_task({
-        targets: [{ route_id: 'route-10' }, { route_id: 'route-11' }],
+        targets: [
+            { route_id: 'route-10', thinking: 'high' },
+            { route_id: 'route-11', thinking: 'high' }
+        ],
         sample_concurrency: 2,
         run_concurrency: 2
     });
-    await gateway.waitCalls(5);
-    expect(gateway.maximum).toBe(5);
+    await gateway.waitCalls(8);
+    expect(gateway.maximum).toBe(8);
     expect(children(service, first).filter(child => child.status === 'running')).toHaveLength(2);
+    expect(children(service, second).filter(child => child.status === 'running')).toHaveLength(2);
     service.cancel_task(first);
     gateway.release();
     await finish(service, first);
     await finish(service, second);
     expect(service.get_task(first)!.status).toBe('cancelled');
     expect(service.get_task(second)!.status).toBe('completed');
-    expect(gateway.maximum).toBe(5);
+    expect(gateway.maximum).toBe(8);
     expect([...gateway.maxPerModel.values()].every(count => count <= 2)).toBe(true);
 });
 
@@ -326,7 +355,7 @@ test('single child cancellation preserves sibling completion and terminal task b
     gateway.release();
     await finish(service, id);
     expect(children(service, id).map(child => child.status)).toEqual(['cancelled', 'completed', 'completed']);
-    expect(gateway.calls).toHaveLength(86);
+    expect(gateway.calls).toHaveLength(74);
     const manifest = join(directory, 'tasks', id, 'task.json');
     const before = readFileSync(manifest, 'utf8');
     const restarted = new BenchExecutionService(directory, routes, 18, gateway.factory);
@@ -360,7 +389,14 @@ test('legacy single-target run stays serialized even with concurrency six', asyn
 
 test('late route validation and atomic publication failures send no requests', async () => {
     const { service, gateway, directory, routes } = fixture();
-    await expect(service.start_task({ targets: [{ route_id: 'route-0' }, { route_id: 'missing' }] })).rejects.toThrow();
+    await expect(
+        service.start_task({
+            targets: [
+                { route_id: 'route-0', thinking: 'high' },
+                { route_id: 'missing', thinking: 'high' }
+            ]
+        })
+    ).rejects.toThrow();
     expect(service.list_tasks()).toHaveLength(0);
     expect(gateway.calls).toHaveLength(0);
     const persist = service._persist.bind(service);
@@ -403,8 +439,8 @@ for (const failureType of ['call', 'tool_result', 'observation']) {
     test(`journal ${failureType} failure synchronously blocks concurrent tool continuation before promise rejection handlers`, async () => {
         const { service, gateway } = fixture();
         gateway.toolCalls = true;
-        const id = await service.start_task({ ...request(1), rounds: 1, sample_concurrency: 14, run_concurrency: 1 });
-        await gateway.waitCalls(14);
+        const id = await service.start_task({ ...request(1), rounds: 1, sample_concurrency: 12, run_concurrency: 1 });
+        await gateway.waitCalls(12);
         const journal = service._runtime.get(children(service, id)[0]!.run_id)!.journal;
         const write = journal.write.bind(journal);
         journal.write = record => {
@@ -418,7 +454,7 @@ for (const failureType of ['call', 'tool_result', 'observation']) {
         await finish(service, id);
         expect(gateway.journalFailed).toBe(true);
         expect(gateway.callsAfterJournalFailure).toBe(0);
-        expect(gateway.calls).toHaveLength(14);
+        expect(gateway.calls).toHaveLength(12);
         expect(service._closing).toBe(true);
         expect(service.get_task(id)!.status).toBe('failed');
         expect(service.get_task(id)!.stop_reason).toBe('storage_error');

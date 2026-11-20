@@ -161,7 +161,7 @@ test('empty settings reach an authenticated real service through the automatic p
     const response = await fetch(target.origin + '/api/bench/banks', { headers: { 'X-Mini-Bench-Token': token, Origin: 'null' } });
     expect(response.status).toBe(200);
     expect(response.headers.get('Access-Control-Allow-Origin')).toBe('null');
-    expect((await response.json()).banks[0].tasks).toHaveLength(14);
+    expect((await response.json()).banks[0].tasks).toHaveLength(12);
     expect((await fetch(target.origin + '/api/bench/banks')).status).toBe(403);
   } finally {
     await lifecycle.stop();
