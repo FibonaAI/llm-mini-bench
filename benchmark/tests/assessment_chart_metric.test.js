@@ -1,5 +1,10 @@
 import { test, expect } from 'bun:test';
-import { assessmentChartMetric } from '../web/assessment-chart-metric.js';
+import {
+    assessmentChartMetric,
+    buildObservationAnomalies,
+    observationQualitySummary,
+    observationSampleAnomalies
+} from '../web/assessment-chart-metric.js';
 const ids = Array.from({ length: 14 }, (_, i) => `official-${i}`);
 function observation(rounds = 1) {
     return {
@@ -148,4 +153,71 @@ test('task count and version come from the production bank, not hardcoded 1.0 / 
     expect(assessmentChartMetric(record, twelve, 'cost', '3.0')).toMatchObject({ score: 50, exclusionReason: null });
     expect(assessmentChartMetric(record, twelve, 'cost', '1.0').exclusionReason).toBe('题库版本不兼容');
     expect(assessmentChartMetric(record, twelve).exclusionReason).toBe('正式题库尚未加载或无效');
+});
+
+test('duration axis computes per-round elapsed seconds and timeout samples score zero without excluding the run', () => {
+    const record = observation(2);
+    record.elapsed_seconds = 360;
+    expect(assessmentChartMetric(record, ids, 'duration', '1.0')).toMatchObject({ score: 50, cost: 180, exclusionReason: null });
+    // Falls back to summing sample elapsed_seconds when top-level elapsed_seconds is absent
+    const fromSamples = observation(2);
+    for (const task of fromSamples.tasks) for (const sample of task.samples) sample.elapsed_seconds = 10;
+    expect(assessmentChartMetric(fromSamples, ids, 'duration', '1.0')).toMatchObject({
+        score: 50,
+        cost: (ids.length * 2 * 10) / 2,
+        exclusionReason: null
+    });
+    // Missing duration excludes cleanly without inventing zero
+    expect(assessmentChartMetric(observation(2), ids, 'duration', '1.0').exclusionReason).toBe('未记录完整执行耗时');
+
+    // Timeout sample counts as 0 and keeps the run plottable; api_failure still excludes
+    const withTimeout = observation(1);
+    withTimeout.tasks[0].samples[0] = { round: 1, status: 'timeout', content_score: 0, elapsed_seconds: 600 };
+    const timeoutMetric = assessmentChartMetric(withTimeout, ids, 'cost', '1.0');
+    expect(timeoutMetric.exclusionReason).toBeNull();
+    expect(timeoutMetric.score).toBeCloseTo((((ids.length - 1) * 0.5) / ids.length) * 100, 6);
+    const quality = observationQualitySummary(withTimeout);
+    expect(quality.timedOut).toBe(1);
+    expect(quality.failed).toBe(0);
+    expect(quality.retryable).toBe(1);
+    expect(quality.text).toContain('超时');
+});
+
+test('unified anomaly helpers detect timeout, ended_after_submission, no_submission, and usageIncomplete', () => {
+    const clean = observation(1);
+    expect(buildObservationAnomalies(observationSampleAnomalies(clean), null)).toEqual({
+        timedOut: 0,
+        endedAfterSubmission: 0,
+        noSubmission: 0,
+        usageIncomplete: null,
+        items: [],
+        hasAny: false,
+        summary: ''
+    });
+
+    const mixed = observation(1);
+    mixed.tasks[0].samples[0] = { round: 1, status: 'timeout', content_score: 0, outcome: 'timeout', ended_after_submission: null };
+    mixed.tasks[1].samples[0] = {
+        round: 1,
+        status: 'completed',
+        content_score: 1,
+        outcome: 'exact_match',
+        ended_after_submission: 'api_failure'
+    };
+    mixed.tasks[2].samples[0] = {
+        round: 1,
+        status: 'completed',
+        content_score: 0,
+        outcome: 'no_submission',
+        ended_after_submission: null
+    };
+    const sampleAnomalies = observationSampleAnomalies(mixed);
+    expect(sampleAnomalies).toEqual({ timedOut: 1, endedAfterSubmission: 1, noSubmission: 1 });
+    const combined = buildObservationAnomalies(sampleAnomalies, { cost: 0.1, unknownAttempts: 2, attempts: 14 });
+    expect(combined.hasAny).toBe(true);
+    expect(combined.items).toHaveLength(4);
+    expect(combined.summary).toContain('1 个样本超时（按 0 分计）');
+    expect(combined.summary).toContain('1 个样本提交答案后异常中止（按最后一次提交评分）');
+    expect(combined.summary).toContain('1 个样本未调用 submit_answer 提交（按 0 分计）');
+    expect(combined.summary).toContain('用量不完整：2 次请求尝试未返回用量');
 });

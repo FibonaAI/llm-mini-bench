@@ -19,8 +19,8 @@ const normalizeSearch = value =>
     .normalize('NFKC')
     .toLocaleLowerCase()
     .replace(/[^\p{L}\p{N}]+/gu, '');
-/** Default omits reasoning and must stay distinct from explicit none. */
-export const thinkingLabel = value => (value === 'default' ? '默认（不指定）' : value === 'unknown' ? '未记录' : String(value));
+/** Default omits reasoning (only offered for models without levels) and stays distinct from explicit none. */
+export const thinkingLabel = value => (value === 'default' ? '默认' : value === 'unknown' ? '未记录' : String(value));
 
 /** Unified search uses recorded identity fields, never inferred route segments. */
 export function recordMatchesSearch(record, query) {
@@ -137,19 +137,20 @@ export function createDataPicker(container, { records, selectedKeys, mode = 'ana
     setFilterOptions(models, modelOptions(scope));
   }
   const efforts = [...new Set(leaves.map(leaf => leaf.think))];
-  const effortOrder = ['default', 'none', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max', 'unknown'];
+  const effortOrder = ['default', 'none', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max', 'ultra', 'unknown'];
   efforts.sort((a, b) => (effortOrder.includes(a) ? effortOrder.indexOf(a) : 99) - (effortOrder.includes(b) ? effortOrder.indexOf(b) : 99));
   const thinking = filter(
     '思考',
     efforts.map(effort => [effort, thinkingLabel(effort)]),
     'dp-thinking-filter'
   );
-  const resetFilters = button('dp-reset-filters', '重置条件', () => {
+  function clearFilters() {
     search.value = providers.value = models.value = thinking.value = '';
     updateModelOptions();
     list.scrollTop = 0;
     render();
-  });
+  }
+  const resetFilters = button('dp-reset-filters', '重置条件', clearFilters);
   filters.append(resetFilters);
   const resultBar = element('div', 'dp-result-bar');
   const resultCount = element('span', 'dp-result-count');
@@ -242,7 +243,7 @@ export function createDataPicker(container, { records, selectedKeys, mode = 'ana
           'aria-label',
           `${leaf.providerName ?? leaf.provider} / ${leaf.account} / ${leaf.model} / ${thinkingLabel(leaf.think)}`
         );
-        if (leaf.think === 'default') level.setAttribute('title', '请求中不指定 reasoning，使用上游默认行为；不等于 none');
+        if (leaf.think === 'default') level.setAttribute('title', '请求不指定 reasoning，使用上游默认行为');
         for (const field of ['provider', 'account', 'model', 'think']) level.dataset[field] = leaf[field];
         level.dataset.providerId = providerIdentity(leaf);
         level.dataset.accountId = accountIdentity(leaf);
@@ -358,6 +359,7 @@ export function createDataPicker(container, { records, selectedKeys, mode = 'ana
       selected = new Set([...keys].filter(key => knownKeys.has(key)));
       render();
     },
+    resetFilters: clearFilters,
     show,
     hide,
     destroy() {

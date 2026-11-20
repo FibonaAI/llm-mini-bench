@@ -58,18 +58,20 @@ function pickerIdentity(record, routeId, fallbackId) {
     routeId
   };
 }
+
+/** Offer default Thinking only when a route advertises no explicit efforts. */
 export function routePickerLeaves(routes) {
   return routes.flatMap(route => {
     if (!text(route.id)) return [];
     // Explicit routes predate account_evidence and their schema establishes a configured binding.
     const identity = pickerIdentity({ ...route, account_evidence: route.account_evidence ?? 'configured_binding' }, route.id, route.id);
-    const efforts = new Set([
-      'default',
-      ...(route.thinking_levels ?? [])
+    const efforts = new Set(
+      (route.thinking_levels ?? [])
         .map(level => (typeof level === 'string' ? level : level?.effort))
-        .filter(level => typeof level === 'string' && !['mixed', 'unknown'].includes(level))
-    ]);
-    return [...efforts].map(think => ({ ...identity, think, route, routeId: route.id }));
+        .filter(level => typeof level === 'string' && level.trim() && !['default', 'mixed', 'unknown'].includes(level))
+    );
+    const options = efforts.size ? [...efforts] : ['default'];
+    return options.map(think => ({ ...identity, think, route, routeId: route.id }));
   });
 }
 export function observationPickerRecords(observations) {

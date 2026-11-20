@@ -2,7 +2,7 @@ import { expect, test } from 'bun:test';
 import { placeThinkingLabels } from '../web/chart-layout.js';
 
 test('all Thinking labels in a dense top-score cluster have distinct anchored placements', () => {
-    const levels = ['default', 'none', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max', 'ultra'];
+    const levels = ['none', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max', 'ultra'];
     const candidates = levels.map((level, i) => ({ id: level, x: 160 + i * 2, y: 40, width: level.length * 7 }));
     const layout = placeThinkingLabels(candidates, { left: 40, right: 330, top: 38, bottom: 340 });
     expect(layout).toHaveLength(levels.length);

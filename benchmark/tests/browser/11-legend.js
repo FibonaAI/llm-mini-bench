@@ -40,14 +40,15 @@
   require(await page.locator('.score-cost-point[opacity="1"]').count()===42,'Leaving legend did not restore all points');
   await page.locator('#chart-color-by').selectOption('series');await page.evaluate(()=>document.documentElement.dataset.theme='light');await page.setViewportSize({width:1440,height:1000});
   await point('dense-0').evaluate(node=>node.dispatchEvent(new MouseEvent('click',{bubbles:true})));require(await page.locator('[data-label-record="dense-0"]').count()===1,'Selected top-score point lost its label');await page.locator('#close-inspector').click();
-  require(await page.locator('.chart-point-label').count()<=6,'Dense chart repeated series labels for Thinking points');
+  const denseLabelState=await page.locator('.chart-point-label').evaluateAll(nodes=>{const boxes=nodes.map(n=>n.getBoundingClientRect());return {count:nodes.length,overlaps:boxes.some((a,i)=>boxes.slice(i+1).some(b=>a.left<b.right&&a.right>b.left&&a.top<b.bottom&&a.bottom>b.top))};});
+  require(denseLabelState.count>=1&&denseLabelState.count<=28&&!denseLabelState.overlaps,'Dense chart labels overlapped or exceeded budget');
   require(await page.locator('.chart-label-leader').count()===0,'Long annotation leaders must not return');
   await point('dense-1').evaluate(node=>node.dispatchEvent(new MouseEvent('click',{bubbles:true})));
   require(await page.locator('.thinking-series[data-series-selected="true"]').count()===1,'Selected Thinking series must be highlighted');
   require(await page.locator('.thinking-series[data-series-selected="false"]').first().getAttribute('opacity')==='0','Unrelated series must remain hidden after selection');
   await page.locator('#close-inspector').click();
   await point('dense-1').hover();require(await page.locator('.thinking-series[data-hover-highlight="true"]').count()===1,'Point hover did not highlight its Thinking line');
-  require(await page.locator('.thinking-hover-labels text').count()===9,'Hover must reveal ALL Thinking labels of the whole series');
+  require(await page.locator('.thinking-hover-labels text').count()===8,'Hover must reveal ALL recorded Thinking labels of the whole series');
   require(await page.locator('.thinking-label-anchor').evaluateAll(nodes=>nodes.every(anchor=>{const marker=document.querySelector('.score-cost-point[data-record-id="'+anchor.dataset.thinkingRecord+'"] .record-marker');return marker&&anchor.getAttribute('x1')===marker.getAttribute('cx')&&anchor.getAttribute('y1')===marker.getAttribute('cy');})),'Thinking labels must be anchored to the exact corresponding points');
   require(await page.locator('#fullscreen').count()===0,'Fullscreen control must be removed');
   await page.locator('#chart-axis').selectOption('tokens');require(await point('dense-42').count()===1,'Known tokens with missing USD must plot on token axis');

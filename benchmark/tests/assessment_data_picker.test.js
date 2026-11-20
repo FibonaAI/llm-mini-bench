@@ -342,9 +342,16 @@ test('identical labels keep provider and account instances independent', () => {
     expect(picker.getSelection()).toEqual([records[1], records[3]].map(selectionKey));
     expect(changes).toHaveLength(2);
 });
+test('explicit efforts display and select their exact protocol value', () => {
+    const { levels, picker } = fixture({ records: [{ provider: 'A', account: 'B', model: 'Luna', think: 'none' }], selectedKeys: [] });
+    expect(levels()[0].textContent).toBe('none');
+    expect(levels()[0].dataset.think).toBe('none');
+    levels()[0].events.click();
+    expect(JSON.parse(picker.getSelection()[0])[3]).toBe('none');
+});
 test('default has a clear display label but keeps the exact protocol value', () => {
     const { levels, picker } = fixture({ records: [{ provider: 'A', account: 'B', model: 'Luna', think: 'default' }], selectedKeys: [] });
-    expect(levels()[0].textContent).toBe('默认（不指定）');
+    expect(levels()[0].textContent).toBe('默认');
     expect(levels()[0].dataset.think).toBe('default');
     levels()[0].events.click();
     expect(JSON.parse(picker.getSelection()[0])[3]).toBe('default');

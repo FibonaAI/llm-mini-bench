@@ -10,7 +10,7 @@
   require(await page.locator('#bench-max-cost,#bench-max-output,#bench-max-requests,#bench-api-retries,#bench-max-tools,#bench-max-turns').count()===0,'Execution cap controls must be removed');
   require(await page.locator('#bench-timeout').inputValue()==='600','Every sample must default to a 600-second deadline');
   require(!posts.some(post=>post.path==='/api/bench/tasks'||post.path==='/api/bench/runs'),'Opening the task view submitted paid work');
-  require((await page.locator('#bench-bank-label').innerText()).includes('14'),'Bank14 not loaded');
+  require((await page.locator('#bench-bank-label').innerText()).includes('12'),'Bank 12 not loaded');
   await page.locator('#task-picker .dp-trigger').click();const popup=page.locator('.dp-popup:not([hidden])');
   const chooseProvider=async id=>popup.locator('.dp-provider-filter').selectOption(id);
   require(await popup.locator('input[type="search"]').count()===1,'Selector needs one search field');
@@ -42,7 +42,7 @@
   await popup.locator('.dp-reset-filters').click();
   require((await page.evaluate(()=>window.MiniBench.runState.getSelectedTargets())).length===matchedRoutes,'Reset filters cleared selected targets');
   await popup.locator('.dp-action').click();
-  require((await popup.locator('.dp-think[data-think="default"]').first().innerText())==='默认（不指定）','Default effort is ambiguous');
+  require(await popup.locator('.dp-think[data-think="default"]').count()===0,'Default effort must be omitted from target picker');
   await chooseProvider('provider:chatgpt-main');await popup.locator('.dp-think[data-think="high"]').click();
   await chooseProvider('provider:chatgpt-lab');require(await popup.locator('.dp-think[data-think="high"]').getAttribute('aria-pressed')==='false','Cross-instance selection leaked');await popup.locator('.dp-think[data-think="low"]').click();
   await chooseProvider('provider:chatgpt-main');require(await popup.locator('.dp-think[data-think="high"]').getAttribute('aria-pressed')==='true','Filtering cleared selection');
@@ -51,9 +51,9 @@
   for(const [id,bad,good] of [['bench-timeout','0','600'],['run-rounds','4','3'],['sample-concurrency','65','6'],['run-concurrency','11','3']]){await page.locator('#'+id).fill(bad);require(await page.locator('#start-run').isDisabled(),'Invalid config accepted: '+id);await page.locator('#'+id).fill(good);}
   require(await page.locator('#bench-plan').count()===0,'Manual plan button remains');
   await page.locator('#bench-plan-preview').waitFor({state:'visible'});
-  const preview=await page.locator('#bench-plan-preview').innerText();require(preview.includes('294')&&preview.includes('42')&&preview.includes('7')&&preview.includes('600')&&preview.includes('不设置 token'),'7 runs ×42 samples / summed budget not shown: '+preview);
+  const preview=await page.locator('#bench-plan-preview').innerText();require(preview.includes('252')&&preview.includes('36')&&preview.includes('7')&&preview.includes('600')&&preview.includes('不设置 token'),'7 runs × 36 samples / summed budget not shown: '+preview);
   require(!posts.some(post=>post.path==='/api/bench/tasks'),'Planning submitted paid work');
-  await page.locator('#run-rounds').fill('2');require((await page.locator('#bench-plan-preview').innerText()).includes('196'),'Preview did not follow rounds');
+  await page.locator('#run-rounds').fill('2');require((await page.locator('#bench-plan-preview').innerText()).includes('168'),'Preview did not follow rounds');
   await page.locator('#run-rounds').fill('3');
   for(const [id,value] of [['sample-concurrency','8'],['run-concurrency','2']]){await page.locator('#'+id).fill(value);require(!await page.locator('#start-run').isDisabled(),'Valid config requires a planning step');}
   await page.locator('#sample-concurrency').fill('6');await page.locator('#run-concurrency').fill('3');
@@ -66,11 +66,12 @@
   }
   await page.setViewportSize({width:1440,height:1000});
   await page.locator('#start-run').click();await page.locator('#bench-cancel-task').waitFor({state:'visible'});
+  require(await page.locator('#start-run').isDisabled()&&(await page.evaluate(()=>window.MiniBench.runState.getSelectedTargets())).length===0,'Task submission must clear selected targets and reset filters');
   require(plan.targets.length===7&&plan.targets.map(t=>t.route_id).sort().join(',')==='route-0,route-1,route-2,route-3,route-4,route-5,route-6','Target identity or leaf cardinality lost');require(plan.targets.filter(t=>t.thinking==='high').length===6&&plan.targets.find(t=>t.route_id==='route-1').thinking==='low','Thinking cross product');
   require(plan.bank_version==='1.0'&&plan.limits.max_cost_usd===null&&plan.limits.max_requests===null&&plan.limits.max_output_tokens===null&&plan.limits.max_tool_calls===null&&plan.limits.max_turns===null&&plan.limits.timeout_scope==='sample'&&plan.limits.timeout===600&&plan.sample_concurrency===6&&plan.run_concurrency===3&&!('concurrency' in plan),'Task bank/per-run budget/two-level concurrency lost');
   require(await page.locator('#bench-task-section').evaluate(node=>!!node.closest('.history-entry')),'Task details must expand inline');
   require((await page.locator('.task-status-counts').first().innerText()).includes('总计 7'),'Task status counts missing');
-  require(taskRecords[0].children.length===7&&taskRecords[0].children.every(child=>child.sample_count===42),'Task must contain seven independent 42-sample runs');
+  require(taskRecords[0].children.length===7&&taskRecords[0].children.every(child=>child.sample_count===36),'Task must contain seven independent 36-sample runs');
   require(await page.locator('#bench-run-list .run-list-item').count()===2,'Child runs duplicated as top-level tasks or legacy run lost');
   require(await page.locator('#bench-run-list [data-bench-run-id="peer-run"]').count()===1,'Legacy standalone run hidden');
   require(await page.locator('#bench-run-list > .history-entry > [data-bench-run-id^="mock-task-"]').count()===0,'Child run appeared as legacy history');

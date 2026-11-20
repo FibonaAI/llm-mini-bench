@@ -26,7 +26,7 @@ const bank = {
     ...loadedBank,
     tasks: loadedBank.tasks.map(task => Object.fromEntries(Object.entries(task).filter(([, value]) => typeof value !== 'function')))
 };
-assert.equal(bank.tasks.length, 14);
+assert.equal(bank.tasks.length, 12);
 // The acceptance is one sequential browser session split into named steps under tests/browser/.
 // Steps share state in order (later steps rely on earlier ones), so they are concatenated into one
 // script; a failure reports its step name and saves a failure screenshot for that step.

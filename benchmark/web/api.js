@@ -100,6 +100,7 @@
       storage_error: '存储错误',
       failed: 'API 失败',
       api_failure: 'API 失败',
+      timeout: '超时',
       incomplete: '未完成',
       tool_call_limit: '未完成：工具调用超限',
       turn_limit: '未完成：交互轮次超限',

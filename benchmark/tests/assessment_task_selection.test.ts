@@ -4,6 +4,7 @@ import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import vm from 'node:vm';
 import { remoteRouteNamespace } from '../web/data-adapter.js';
+import { thinkingLabel } from '../web/data-picker.js';
 
 class TestNode {
     constructor(value = '') {
@@ -130,9 +131,10 @@ function fixture() {
         Uint8Array,
         remoteRouteNamespace,
         selectionKey: key,
+        thinkingLabel,
         createDataPicker: () => ({ setQuotaCatalog() {}, setSelection() {}, destroy() {} }),
         routePickerLeaves: records =>
-            records.flatMap(route => ['default', ...route.thinking_levels].map(think => ({ ...route, route, routeId: route.id, think })))
+            records.flatMap(route => route.thinking_levels.map(think => ({ ...route, route, routeId: route.id, think })))
     });
     for (const filename of ['app-context.js', 'runs.js', 'task-history-view.js', 'task-submission.js', 'bench.js']) {
         const raw = readFileSync(
@@ -218,7 +220,7 @@ test('long route and Thinking identities retain exact payload with short determi
     f.mini.runState.setTaskSelection(keys);
     const first = f.mini.runState.getSelectedTargets();
     expect(first.every(target => target.id.length <= 256)).toBe(true);
-    expect(first.map(target => target.id)).toEqual(['target-1', 'target-2', 'target-3', 'target-4']);
+    expect(first.map(target => target.id)).toEqual(['target-1', 'target-2']);
     expect(first.find(target => target.thinking === longThink).route_id).toBe(longRoute);
     f.setRoutes([...routes].reverse());
     await f.load();
@@ -251,7 +253,7 @@ test('one action starts the latest exact targets; config changes update preview 
     const posts = f.calls.filter(c => c.options?.method === 'POST');
     expect(posts).toHaveLength(1);
     expect(posts[0].path).toBe('./api/bench/tasks');
-    expect(JSON.parse(posts[0].options.body).targets[0].thinking).toBe('high');
+    expect(JSON.parse(posts[0].options.body).targets[0].thinking).toBe('low');
 });
 
 test('submission timeout checks history and requires explicit review before another attempt', async () => {
@@ -431,6 +433,9 @@ test('double submit and config edits during creation cannot submit a second task
     expect(f.calls.filter(call => call.options?.method === 'POST')).toHaveLength(1);
     release();
     await pending;
+    expect(f.mini.runState.getSelectedTargets()).toEqual([]);
+    expect(f.element('start-run').disabled).toBe(true);
+    f.mini.runState.setTaskSelection([key]);
     expect(f.element('start-run').disabled).toBe(false);
 });
 
@@ -461,7 +466,7 @@ test('966 samples preview automatically without starting a paid task', async () 
             providerId: `p-${i}`,
             accountId: 'one',
             model: `model-${i}`,
-            thinking_levels: []
+            thinking_levels: ['high']
         }))
     );
     await f.load();
@@ -483,7 +488,7 @@ test('gateway selections warn about unfixed accounts and upstream retries withou
             providerId: 'provider',
             accountId: 'gateway',
             model: 'model',
-            thinking_levels: [],
+            thinking_levels: ['high'],
             account_evidence: 'gateway_binding'
         }
     ]);
@@ -555,6 +560,8 @@ test('manual retry requires confirmation, reuses uncertain id and refreshes anal
     f.window.addEventListener('mini-bench:observations-changed', () => updates++);
     await f.element('bench-retry-run').emit('click');
     expect(f.calls.filter(c => c.path.endsWith('/retry'))).toHaveLength(0);
+    expect(f.element('bench-retry-run').textContent).toBe('确认重试 API 失败');
+    expect(f.element('bench-run-detail').innerHTML).toContain('待确认：仅重试 API 失败');
     f.setFailRetry(true);
     await f.element('bench-retry-run').emit('click');
     const first = f.calls.find(c => c.path.endsWith('/retry'));

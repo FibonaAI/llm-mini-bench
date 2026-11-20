@@ -268,3 +268,249 @@ test('failed samples show journaled call diagnoses, never-sent attempts and a ta
     withRequest.renderDetails();
     expect(requests).toHaveLength(1);
 });
+
+test('queued and running records omit unknown usage warnings and duplicate cost labels; finished records report unknown usage once', () => {
+    const { nodes, state, view } = fixture();
+    const target = state.tasks[0].plan.targets[0];
+    const quality = {
+        completed_samples: 6,
+        unscored_samples: 0,
+        unknown_usage_samples: 2,
+        unknown_cost_samples: 2,
+        prior_unknown_usage_samples: 0,
+        prior_unknown_cost_samples: 0
+    };
+    state.tasks = [
+        {
+            id: 'task',
+            status: 'running',
+            plan: { targets: [target], run_count: 2 },
+            children: [
+                {
+                    run_id: 'run',
+                    target,
+                    status: 'running',
+                    sample_count: 36,
+                    sample_status_counts: { completed: 6, running: 6, pending: 24 },
+                    result_quality: quality,
+                    budget: { estimated_uncached_cost_usd: null, max_cost_usd: null }
+                },
+                {
+                    run_id: 'queued-run',
+                    target,
+                    status: 'queued',
+                    sample_count: 36,
+                    sample_status_counts: { pending: 36 },
+                    result_quality: { ...quality, completed_samples: 0, unknown_usage_samples: 0, unknown_cost_samples: 0 },
+                    budget: { estimated_uncached_cost_usd: 0, max_cost_usd: null }
+                }
+            ]
+        }
+    ];
+    state.taskDetail = state.tasks[0];
+    view.renderDetails();
+    expect(nodes.get('bench-run-list').innerHTML).not.toContain('累计用量未知');
+    expect(nodes.get('bench-run-list').innerHTML).not.toContain('累计费用未知');
+    expect(nodes.get('bench-task-detail').innerHTML).not.toContain('累计用量未知');
+    expect(nodes.get('bench-task-detail').innerHTML).not.toContain('估算 未记录');
+    expect(nodes.get('bench-task-detail').innerHTML).not.toContain('不设 USD 上限');
+    state.tasks[0] = {
+        ...state.tasks[0],
+        status: 'completed',
+        children: [{ ...state.tasks[0].children[0], status: 'completed' }]
+    };
+    state.taskDetail = state.tasks[0];
+    view.renderDetails();
+    expect(nodes.get('bench-run-list').innerHTML).toContain('2 个累计用量未知');
+    expect(nodes.get('bench-run-list').innerHTML).not.toContain('累计费用未知');
+    expect(nodes.get('bench-task-detail').innerHTML).toContain('2 个累计用量未知');
+    expect(nodes.get('bench-task-detail').innerHTML).not.toContain('累计费用未知');
+});
+
+test('history search filters both task list and expanded child runs without leaking unmatched channels', () => {
+    const { nodes, state, view } = fixture();
+    const devin = { model: 'claude-sonnet-5.5', provider_id: 'homelab', provider_name: 'devin', route_id: 'devin-route', thinking: 'high' };
+    const opencode = {
+        model: 'claude-sonnet-5.5',
+        provider_id: 'homelab',
+        provider_name: 'opencode',
+        route_id: 'opencode-route',
+        thinking: 'high'
+    };
+    state.tasks = [
+        {
+            id: 'task-mixed',
+            status: 'completed',
+            plan: { targets: [devin, opencode], run_count: 2 },
+            children: [
+                { run_id: 'run-devin', target: devin, status: 'completed', sample_status_counts: { completed: 12 } },
+                { run_id: 'run-opencode', target: opencode, status: 'failed', sample_status_counts: { api_failure: 2, completed: 10 } }
+            ]
+        },
+        {
+            id: 'task-other',
+            status: 'completed',
+            plan: { targets: [opencode], run_count: 1 },
+            children: [{ run_id: 'run-only-opencode', target: opencode, status: 'completed', sample_status_counts: { completed: 12 } }]
+        }
+    ];
+    state.selectedTaskId = 'task-mixed';
+    state.taskDetail = state.tasks[0];
+    nodes.get('history-search').value = 'devin';
+    view.renderDetails();
+    const listHtml = nodes.get('bench-run-list').innerHTML;
+    const detailHtml = nodes.get('bench-task-detail').innerHTML;
+    expect(listHtml).toContain('task-mixed');
+    expect(listHtml).not.toContain('task-other');
+    expect(detailHtml).toContain('run-devin');
+    expect(detailHtml).not.toContain('run-opencode');
+    expect(detailHtml).toContain('仅显示 1 / 2 个匹配子运行');
+});
+
+test('status badges, sample cells, and retry labels distinguish timeout, cancelled, interrupted, and api_failure', () => {
+    const { nodes, state, view } = fixture();
+    state.runDetail = {
+        ...state.runDetail,
+        status: 'completed',
+        retryable_samples: 1,
+        sample_status_counts: { completed: 1, timeout: 1 },
+        samples: [
+            { sample_id: 's-ok', task: 't1', round: 1, status: 'completed', grade: { content_score: 1 } },
+            { sample_id: 's-to', task: 't2', round: 1, status: 'api_failure', runner_error: 'SampleTimeout' },
+            { sample_id: 's-fail', task: 't3', round: 1, status: 'api_failure' },
+            { sample_id: 's-cancel', task: 't4', round: 1, status: 'cancelled' },
+            { sample_id: 's-int', task: 't5', round: 1, status: 'interrupted' }
+        ]
+    };
+    view.renderDetails();
+    const html = nodes.get('bench-run-detail').innerHTML;
+    expect(html).toContain('sample-cell is-timeout');
+    expect(html).toContain('sample-cell is-failed');
+    expect(html).toContain('sample-cell is-cancelled');
+    expect(html).toContain('sample-cell is-interrupted');
+    expect(html).toContain('0（超时）');
+    expect(nodes.get('bench-retry-run').textContent).toBe('重试未完成样本');
+
+    // Pure cancelled run gets cancelled-specific retry label
+    state.runDetail = {
+        ...state.runDetail,
+        status: 'cancelled',
+        retryable_samples: 1,
+        samples: [{ sample_id: 's-cancel', task: 't4', round: 1, status: 'cancelled' }]
+    };
+    view.renderDetails();
+    expect(nodes.get('bench-retry-run').textContent).toBe('重跑已取消样本');
+});
+
+test('outer task cards show model names and expanded tasks render a model-grouped preview with collapsed full run list', () => {
+    const { nodes, state, view } = fixture();
+    const mkTarget = (model, display, provider, thinking) => ({
+        model,
+        model_display_name: display,
+        provider_id: 'homelab',
+        provider_name: `homelab / ${provider}`,
+        route_id: `${provider}:${model}`,
+        thinking
+    });
+    const manyTargets = Array.from({ length: 7 }, (_, i) => mkTarget(`m-${i}`, `Model ${i + 1}`, i % 2 ? 'opencode' : 'codex', 'high'));
+    state.tasks = [
+        {
+            id: 'task-single',
+            status: 'running',
+            plan: {
+                targets: [
+                    mkTarget('sonnet', 'Claude Sonnet 5.5', 'claude', 'high'),
+                    mkTarget('sonnet', 'Claude Sonnet 5.5', 'claude', 'max')
+                ],
+                run_count: 2,
+                rounds: 3,
+                sample_count: 72
+            },
+            children: [
+                {
+                    run_id: 'r-1',
+                    target: mkTarget('sonnet', 'Claude Sonnet 5.5', 'claude', 'high'),
+                    status: 'completed',
+                    sample_count: 36,
+                    sample_status_counts: { completed: 36 }
+                },
+                {
+                    run_id: 'r-2',
+                    target: mkTarget('sonnet', 'Claude Sonnet 5.5', 'claude', 'max'),
+                    status: 'running',
+                    sample_count: 36,
+                    sample_status_counts: { completed: 12, running: 2, pending: 22 }
+                }
+            ]
+        },
+        {
+            id: 'task-seven',
+            status: 'completed',
+            plan: { targets: manyTargets, run_count: 7, rounds: 3, sample_count: 252 },
+            children: manyTargets.map((target, index) => ({
+                run_id: `r-many-${index}`,
+                target,
+                status: index === 0 ? 'failed' : 'completed',
+                sample_count: 36,
+                sample_status_counts: index === 0 ? { completed: 30, api_failure: 6 } : { completed: 36 }
+            }))
+        }
+    ];
+    state.selectedTaskId = 'task-single';
+    state.selectedRunId = null;
+    state.taskDetail = state.tasks[0];
+    view.renderDetails();
+    const listHtml = nodes.get('bench-run-list').innerHTML;
+    expect(listHtml).toContain('Claude Sonnet 5.5 · homelab / claude');
+    expect(listHtml).toContain('Model 1、Model 2、Model 3、Model 4、Model 5 等 7 个模型');
+    const detailHtml = nodes.get('bench-task-detail').innerHTML;
+    expect(detailHtml).toContain('class="task-preview"');
+    expect(detailHtml).toContain('data-preview-run-id="r-1"');
+    expect(detailHtml).toContain('data-preview-run-id="r-2"');
+    expect(detailHtml).toContain('12/36');
+    expect(detailHtml).toContain('class="raw-block task-all-runs"');
+    expect(detailHtml).toContain('全部 2 个独立运行列表');
+});
+
+test('run detail defers raw JSON formatting until a disclosure is opened', () => {
+    const { state, view, nodes } = fixture();
+    const run = {
+        id: 'run-lazy',
+        status: 'completed',
+        plan: { targets: [{ id: 't1', model: 'gpt-test', thinking: 'high' }], limits: { timeout: 600 } },
+        budget: { requests: 1, estimated_uncached_cost_usd: 0.01 },
+        samples: [
+            {
+                sample_id: 's-1',
+                task: 'K23_HTTP_Conditional_Cache_Precedence',
+                round: 1,
+                status: 'completed',
+                text: 'very-large-model-answer-payload',
+                grade: { content_score: 1, outcome: 'correct' },
+                usage: { input_tokens: 10, output_tokens: 20 }
+            }
+        ]
+    };
+    state.runs = [run];
+    state.selectedRunId = 'run-lazy';
+    state.runDetail = run;
+    view.renderDetails();
+    const detail = nodes.get('bench-run-detail');
+    expect(detail.innerHTML).toContain('data-lazy-json="run-lazy:s-1:原始回答"');
+    expect(detail.innerHTML).not.toContain('very-large-model-answer-payload');
+    expect(detail.innerHTML).not.toContain('<pre>');
+
+    const appended = [];
+    const fakeDetails = {
+        open: true,
+        dataset: { lazyJson: 'run-lazy:s-1:原始回答' },
+        querySelector: () => null,
+        ownerDocument: {
+            createElement: tag => ({ tag, textContent: '' })
+        },
+        append: node => appended.push(node)
+    };
+    detail.handlers.get('toggle')({ target: fakeDetails });
+    expect(appended).toHaveLength(1);
+    expect(appended[0].textContent).toContain('very-large-model-answer-payload');
+});

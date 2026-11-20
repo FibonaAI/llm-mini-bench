@@ -33,7 +33,7 @@ test('latest keeps recorded channel/account/model/Thinking, bank scope and sourc
         { providerId: 'other' },
         { accountId: 'other' },
         { model: 'other' },
-        { think: 'default' },
+        { think: 'low' },
         { bank_version: '2.3' },
         { bank_scope: 'subset' },
         { source: 'baseline' }

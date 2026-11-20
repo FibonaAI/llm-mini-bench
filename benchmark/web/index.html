@@ -105,7 +105,7 @@
           <div class="chart-top">
             <div>
               <h2 id="chart-title">分数与用量</h2>
-              <p>每点是一条评测记录；悬停或选中展开同批 Thinking，点击查看详情</p>
+              <p>每点是一条评测记录；点击固定卡片，滚轮缩放、缩放后拖拽平移，双击复位</p>
             </div>
             <div class="chart-tools">
               <label for="chart-color-by"
@@ -121,6 +121,7 @@
                 <select id="chart-axis">
                   <option value="cost">每轮费用 / USD</option>
                   <option value="tokens">每轮总 tokens</option>
+                  <option value="duration">每轮耗时</option>
                 </select></label
               ><button class="icon-btn" id="export-chart" type="button" aria-label="导出 SVG 图表" title="导出 SVG 图表">
                 <span class="icon download"></span>
@@ -147,8 +148,8 @@
                   ><label><input type="checkbox" id="pareto-line" checked />显示帕累托前沿</label
                   ><label><input type="checkbox" id="usage-lower-bound" checked />用量不完整时按已知下限绘制</label>
                   <p>
-                    前沿按当前可见点计算，越高分、越低用量越优；不同 Thinking
-                    可直接对照。用量不完整的点带橙色角标，横坐标是已知下限（实际只会更高），不参与前沿。
+                    前沿按当前可见点计算，越高分、越低用量越优；不同 Thinking 可直接对照。含异常项（样本超时、提交后异常中止、未调用
+                    submit_answer 提交或用量不完整）的点带橙色角标，均不参与前沿。
                   </p>
                 </section>
               </div>
@@ -158,7 +159,8 @@
           <div class="chart-footer">
             <span class="source-key"><i class="source-dot"></i>最新</span><span class="source-key"><i class="source-history"></i>历史</span
             ><span class="source-key"><i class="source-unknown"></i>时间未知</span
-            ><span class="source-key"><i class="source-incomplete"></i>用量不完整（下限）</span
+            ><span class="source-key" title="含样本超时、提交后异常中止、未调用 submit_answer 提交或用量不完整的记录，不参与前沿"
+              ><i class="source-incomplete"></i>含异常项</span
             ><span class="source-key"><i class="source-baseline"></i>基线</span
             ><span class="source-key source-key-lines"><i class="source-thinking"></i>同批 Thinking</span
             ><span class="source-key"><i class="source-frontier"></i>前沿</span

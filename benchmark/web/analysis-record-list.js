@@ -34,15 +34,32 @@ export function renderAnalysisRecordList(
       .join(' · ');
     const score = Number.isFinite(record.score) ? `${record.score.toFixed(1)} 分` : '无完整均分';
     const bound = record.usageIncomplete ? '≥ ' : '';
+    const formatSeconds = value => {
+      if (value < 60) return `${Number(value.toFixed(value < 10 ? 1 : 0))}s`;
+      const total = Math.round(value);
+      const mins = Math.floor(total / 60),
+        secs = total % 60;
+      if (mins < 60) return secs ? `${mins}m ${secs}s` : `${mins}m`;
+      const hrs = Math.floor(mins / 60),
+        remMins = mins % 60;
+      return remMins ? `${hrs}h ${remMins}m` : `${hrs}h`;
+    };
     const quantity = Number.isFinite(record.cost)
       ? axis === 'tokens'
         ? `${bound}${Math.round(record.cost).toLocaleString('zh-CN')} tokens / 轮`
-        : `${bound}$${record.cost.toFixed(4)} / 轮`
+        : axis === 'duration'
+          ? `${formatSeconds(record.cost)} / 轮`
+          : `${bound}$${record.cost.toFixed(4)} / 轮`
       : '';
-    const note =
-      reason || (record.usageIncomplete ? `用量不完整：${record.usageIncomplete.unknownAttempts} 次尝试未返回用量，按已知下限绘制` : '');
+    const anomalyItems = Array.isArray(record.anomalies?.items)
+      ? record.anomalies.items
+      : record.usageIncomplete
+        ? [`用量不完整：${record.usageIncomplete.unknownAttempts} 次尝试未返回用量，按已知下限绘制`]
+        : [];
+    const note = reason || (anomalyItems.length ? `含异常项：${anomalyItems.join('；')}` : '');
+    const retryableAnomaly = !reason && (record.anomalies?.timedOut > 0 || Boolean(record.usageIncomplete));
     const retry =
-      reason && record.source === 'run' && record.run_id && /API 失败或超时/.test(reason)
+      record.source === 'run' && record.run_id && ((reason && /API 失败|超时|已中断|已取消/.test(reason)) || retryableAnomaly)
         ? ` <button class="text-control" type="button" data-open-run="${escapeHtml(record.run_id)}">去任务页重试</button>`
         : '';
     const label = `${model} · ${thinking} · ${source} · ${fullTime}`;

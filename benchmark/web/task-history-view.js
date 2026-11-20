@@ -34,37 +34,138 @@ export function createTaskHistoryView({ app, state, retryRequests, retrying }) {
           .reduce((sum, [, count]) => sum + count, 0);
     return { done, total: record.sample_count ?? record.plan?.sample_count ?? record.samples?.length ?? 0 };
   };
-  const budgetLabel = budget =>
-    `估算 ${Number.isFinite(budget?.estimated_uncached_cost_usd) ? '$' + budget.estimated_uncached_cost_usd.toFixed(4) : '未记录'} / 上限 ${Number.isFinite(budget?.max_cost_usd) ? '$' + budget.max_cost_usd.toFixed(2) : budget?.max_cost_usd === null ? '不设 USD 上限' : '未记录'}`;
+  const budgetLabel = (budget, status) => {
+    const cap = Number.isFinite(budget?.max_cost_usd) ? ` / 上限 $${budget.max_cost_usd.toFixed(2)}` : '';
+    if (Number.isFinite(budget?.estimated_uncached_cost_usd)) {
+      if (status === 'queued' || (activeStatus(status) && budget.estimated_uncached_cost_usd === 0 && !(budget?.requests > 0)))
+        return cap ? `上限 $${budget.max_cost_usd.toFixed(2)}` : '';
+      return `估算 $${budget.estimated_uncached_cost_usd.toFixed(4)}${cap}`;
+    }
+    if (Number.isFinite(budget?.known_cost_lower_bound_usd) && budget.known_cost_lower_bound_usd > 0)
+      return `估算 ≥ $${budget.known_cost_lower_bound_usd.toFixed(4)}${cap}`;
+    return cap ? `上限 $${budget.max_cost_usd.toFixed(2)}` : '';
+  };
+  const isTimeoutSample = sample =>
+    sample &&
+    (sample.status === 'timeout' ||
+      sample.grade?.outcome === 'timeout' ||
+      (sample.status === 'api_failure' && sample.runner_error === 'SampleTimeout'));
+  const hasTimeoutSamples = record => {
+    if (!record) return false;
+    if ((record.sample_status_counts?.timeout ?? 0) > 0) return true;
+    if (Array.isArray(record.samples) && record.samples.some(isTimeoutSample)) return true;
+    return Array.isArray(record.children) && record.children.some(hasTimeoutSamples);
+  };
+  const statusBadgeClass = record => {
+    if (!record) return '';
+    if (inProgress(record)) return 'is-running';
+    if (record.status === 'failed') return 'is-failed';
+    if (record.status === 'interrupted') return 'is-interrupted';
+    if (record.status === 'cancelled') return 'is-cancelled';
+    if (record.status === 'timeout' || record.status === 'incomplete') return 'is-timeout';
+    if (record.status === 'completed') return hasTimeoutSamples(record) ? 'is-timeout' : 'is-completed';
+    return '';
+  };
+  const retryCopy = (record, confirming) => {
+    const counts = { api: 0, timeout: 0, interrupted: 0, cancelled: 0 };
+    const collect = item => {
+      if (!item) return;
+      if (Array.isArray(item.samples)) {
+        for (const sample of item.samples) {
+          if (isTimeoutSample(sample)) counts.timeout++;
+          else if (sample.status === 'api_failure') counts.api++;
+          else if (sample.status === 'interrupted') counts.interrupted++;
+          else if (sample.status === 'cancelled') counts.cancelled++;
+        }
+        return;
+      }
+      const c = item.sample_status_counts || {};
+      counts.api += c.api_failure || 0;
+      counts.timeout += c.timeout || 0;
+      counts.interrupted += c.interrupted || 0;
+      counts.cancelled += c.cancelled || 0;
+    };
+    if (Array.isArray(record?.children)) for (const child of record.children) collect(child);
+    else collect(record);
+    const activeKinds = Object.entries(counts).filter(([, count]) => count > 0);
+    if (activeKinds.length === 1) {
+      const [kind] = activeKinds[0];
+      if (kind === 'interrupted') return confirming ? '确认重跑中断样本' : '继续重跑中断样本';
+      if (kind === 'cancelled') return confirming ? '确认重跑已取消样本' : '重跑已取消样本';
+      if (kind === 'timeout') return confirming ? '确认重试超时样本' : '重试超时样本';
+    }
+    if (activeKinds.length > 1) return confirming ? '确认重试未完成样本' : '重试未完成样本';
+    return confirming ? '确认重试 API 失败' : '重试 API 失败';
+  };
   const historicalOutcomeText = sample =>
-    sample.attempts?.length
-      ? statusText(sample.status)
-      : {
-          request_timeout: 'API 失败：请求超时',
-          rate_limited: 'API 失败：上游限流',
-          upstream_http_error: 'API 失败：上游服务错误',
-          transport_error: 'API 失败：传输异常',
-          output_token_limit: '未完成：输出 token 超限',
-          response_incomplete: '未完成：响应被截断',
-          tool_call_limit: '未完成：工具调用超限',
-          unsupported_tool_sequence: '未完成：工具调用序列不符合要求',
-          turn_limit: '未完成：交互轮次超限',
-          empty_final_answer: '未完成：未给出最终答案',
-          not_executed_after_api_failure: '未执行：此前 API 失败导致停止',
-          not_executed_execution_limit: '未执行：触及执行上限'
-        }[sample.historical_outcome_classification?.reason] || statusText(sample.status);
-  /** Terminal 'failed' means some samples hit API/timeout failures, not that the whole run failed. */
+    isTimeoutSample(sample)
+      ? '超时（按 0 分计）'
+      : sample.attempts?.length
+        ? statusText(sample.status)
+        : {
+            request_timeout: 'API 失败：请求超时',
+            rate_limited: 'API 失败：上游限流',
+            upstream_http_error: 'API 失败：上游服务错误',
+            transport_error: 'API 失败：传输异常',
+            output_token_limit: '未完成：输出 token 超限',
+            response_incomplete: '未完成：响应被截断',
+            tool_call_limit: '未完成：工具调用超限',
+            unsupported_tool_sequence: '未完成：工具调用序列不符合要求',
+            turn_limit: '未完成：交互轮次超限',
+            empty_final_answer: '未完成：未给出最终答案',
+            not_executed_after_api_failure: '未执行：此前 API 失败导致停止',
+            not_executed_execution_limit: '未执行：触及执行上限'
+          }[sample.historical_outcome_classification?.reason] || statusText(sample.status);
+  /** Terminal 'failed' means some samples hit API failures, not that the whole run failed. */
   const recordStatusLabel = record => {
+    if (record.status === 'completed') {
+      const timeouts =
+        record.sample_status_counts?.timeout ??
+        (Array.isArray(record.samples) ? record.samples.filter(isTimeoutSample).length : 0) +
+          (Array.isArray(record.children) ? record.children.reduce((sum, c) => sum + (c.sample_status_counts?.timeout ?? 0), 0) : 0);
+      return timeouts > 0 ? `已完成 · ${timeouts} 超时` : statusText(record.status);
+    }
     if (record.status !== 'failed') return statusText(record.status);
     const counts = record.sample_status_counts;
     const failed = counts
       ? Object.entries(counts)
-          .filter(([status]) => status !== 'completed')
+          .filter(([status]) => status !== 'completed' && status !== 'timeout')
           .reduce((sum, [, count]) => sum + count, 0)
       : 0;
     if (record.children?.length)
       return `部分失败 · ${record.children.filter(child => child.status === 'failed').length}/${record.children.length} 个运行`;
     return failed ? `${failed} 个样本失败` : '部分失败';
+  };
+  const targetModelName = target => target?.model_display_name || target?.model || target?.route_id || '模型未记录';
+  const targetShortChannel = target => {
+    const namespace = remoteRouteNamespace(target);
+    if (namespace) return target?.provider_id ? `${target.provider_id} / ${namespace}` : namespace;
+    return target?.provider_name || target?.provider_id || '渠道未记录';
+  };
+  const sharedChannelPrefix = channels => {
+    const unique = [...new Set(channels.filter(Boolean))];
+    if (unique.length <= 1 || !unique.every(ch => ch.includes(' / '))) return '';
+    const prefix = unique[0].slice(0, unique[0].indexOf(' / ') + 3);
+    return unique.every(ch => ch.startsWith(prefix)) ? prefix : '';
+  };
+  const taskHeadline = record => {
+    const children = Array.isArray(record.children) ? record.children : [];
+    const entries = children.length ? children.map(child => child.target || {}) : fixedTargets(record);
+    const models = [...new Set(entries.map(targetModelName).filter(Boolean))];
+    const channels = [...new Set(entries.map(targetShortChannel).filter(Boolean))];
+    const full = models.join('、');
+    if (!models.length)
+      return {
+        text: `${record.plan?.run_count ?? children.length} 个独立运行 · ${record.plan?.rounds ?? '?'} 轮`,
+        title: '',
+        modelCount: 0
+      };
+    if (models.length === 1) {
+      const channelHint = channels.length >= 1 && channels.length <= 2 ? ` · ${channels.join(' / ')}` : '';
+      return { text: `${models[0]}${channelHint}`, title: `${models[0]}${channelHint}`, modelCount: 1 };
+    }
+    const shown = models.length <= 6 ? full : `${models.slice(0, 5).join('、')} 等 ${models.length} 个模型`;
+    return { text: shown, title: full, modelCount: models.length };
   };
   const targetLabel = target => `${target.model || target.route_id || '模型未记录'} · ${target.thinking || 'Thinking 未记录'}`;
   const targetIdentity = target => {
@@ -147,6 +248,7 @@ export function createTaskHistoryView({ app, state, retryRequests, retrying }) {
     return entry?.calls ?? null;
   }
   function sampleScoringLabel(sample) {
+    if (isTimeoutSample(sample)) return '0（超时）';
     if (validScore(sample) && sample.grade.outcome === 'no_submission') return '未调用 submit_answer 提交答案 · 0';
     if (validScore(sample)) return Number(sample.grade.content_score.toFixed(3));
     if (sample.status !== 'completed') return '无评分';
@@ -182,14 +284,19 @@ export function createTaskHistoryView({ app, state, retryRequests, retrying }) {
     return notes.map(note => `<p class="task-detail-note">${escapeHtml(note)}</p>`).join('');
   }
   function qualityLabel(record) {
+    if (inProgress(record)) return '';
     const qualities = record.result_quality
       ? [record.result_quality]
-      : (record.children || []).map(child => child.result_quality).filter(Boolean);
+      : (record.children || [])
+          .filter(child => !inProgress(child))
+          .map(child => child.result_quality)
+          .filter(Boolean);
     const total = field => qualities.reduce((sum, quality) => sum + (quality[field] || 0), 0);
+    const unknownUsage = total('unknown_usage_samples'),
+      unknownCost = total('unknown_cost_samples');
     return [
       total('unscored_samples') > 0 && `${total('unscored_samples')} 个已完成样本无法评分`,
-      total('unknown_usage_samples') > 0 && `${total('unknown_usage_samples')} 个累计用量未知`,
-      total('unknown_cost_samples') > 0 && `${total('unknown_cost_samples')} 个累计费用未知`
+      unknownUsage > 0 ? `${unknownUsage} 个累计用量未知` : unknownCost > 0 && `${unknownCost} 个累计费用未知`
     ]
       .filter(Boolean)
       .join(' · ');
@@ -200,25 +307,43 @@ export function createTaskHistoryView({ app, state, retryRequests, retrying }) {
       ...state.runs.filter(record => !record.task_id).map(record => ({ kind: 'legacy', record }))
     ].sort((a, b) => Number(new Date(b.record.created_at || 0)) - Number(new Date(a.record.created_at || 0)));
   }
+  const searchTokens = query => query.trim().toLowerCase().split(/\s+/).filter(Boolean);
+  const matchesTokens = (text, tokens) => !tokens.length || tokens.every(token => text.includes(token));
+  const targetSearchText = target =>
+    [
+      target?.model,
+      target?.model_display_name,
+      target?.thinking,
+      target?.route_id,
+      target?.account_ref,
+      target?.provider_id,
+      target?.provider_name,
+      target ? remoteRouteNamespace(target) : null
+    ]
+      .filter(Boolean)
+      .join(' ')
+      .toLowerCase();
+  const childMatchesTokens = (child, tokens) =>
+    matchesTokens(
+      [child?.run_id, child?.status, statusText(child?.status), targetSearchText(child?.target)].join(' ').toLowerCase(),
+      tokens
+    );
+  const recordHeaderMatchesTokens = (record, tokens) =>
+    matchesTokens([record?.id, record?.status, statusText(record?.status)].join(' ').toLowerCase(), tokens);
   function renderHistory() {
     const entries = historyEntries();
     element('run-summary').textContent =
       `${state.tasks.length} 个任务 · ${entries.filter(entry => entry.kind === 'legacy').length} 条旧运行 · ${entries.filter(entry => inProgress(entry.record)).length} 个进行中`;
-    const query = element('history-search').value.trim().toLowerCase(),
+    const tokens = searchTokens(element('history-search').value),
       status = element('history-status').value;
-    const shown = entries.filter(
-      ({ record }) =>
-        (status === 'all' || record.status === status) &&
-        [
-          record.id,
-          record.status,
-          ...fixedTargets(record).flatMap(target => [target.model, target.thinking, target.route_id, target.account_ref]),
-          ...(record.children || []).map(child => child.run_id)
-        ]
-          .join(' ')
-          .toLowerCase()
-          .includes(query)
-    );
+    const shown = entries.filter(({ kind, record }) => {
+      if (status !== 'all' && record.status !== status) return false;
+      if (!tokens.length) return true;
+      if (recordHeaderMatchesTokens(record, tokens)) return true;
+      if (kind === 'task' && Array.isArray(record.children) && record.children.length)
+        return record.children.some(child => childMatchesTokens(child, tokens));
+      return fixedTargets(record).some(target => matchesTokens(targetSearchText(target), tokens));
+    });
     replaceHistoryMarkup(
       element('bench-run-list'),
       shown.length
@@ -235,12 +360,17 @@ export function createTaskHistoryView({ app, state, retryRequests, retrying }) {
                   : sampleProgress(record);
               const selected =
                 kind === 'task' ? state.selectedTaskId === record.id : !state.selectedTaskId && state.selectedRunId === record.id;
+              const headline = kind === 'task' ? taskHeadline(record) : null;
               const title =
                 kind === 'task'
-                  ? `${record.plan?.run_count ?? children.length} 个独立运行 · ${new Set(targets.map(target => target.model)).size} 个模型 · ${record.plan?.rounds ?? '?'} 轮`
+                  ? headline.text
                   : `${record.execution_kind === 'calibration-import-v1' ? '校准导入' : '旧运行'} · ${targets.map(targetLabel).join('、') || record.id}`;
+              const taskMetaPrefix =
+                kind === 'task'
+                  ? `${record.plan?.run_count ?? children.length} 个独立运行 · ${headline.modelCount || new Set(targets.map(targetModelName)).size} 个模型 · ${record.plan?.rounds ?? '?'} 轮 · `
+                  : '';
               const counts = kind === 'task' ? runCounts(children) : '';
-              return `<article class="history-entry"><button class="run-list-item ${selected ? 'is-selected' : ''}" type="button" aria-expanded="${selected}" aria-controls="history-${kind === 'task' ? 'task' : 'run'}-${escapeHtml(record.id)}" data-history-focus="${escapeHtml(kind + ':' + record.id)}" ${kind === 'task' ? 'data-bench-task-id' : 'data-bench-run-id'}="${escapeHtml(record.id)}"><span><strong>${escapeHtml(title)}</strong><small>${escapeHtml(formatDate(record.created_at))} · ${progress.done}/${progress.total} 样本已结束 · ${escapeHtml(record.id)}${kind === 'legacy' ? (record.execution_kind === 'calibration-import-v1' ? ' · 只读，不可重试' : ' · 未归入新任务') : ''}${qualityLabel(record) ? ' · ' + escapeHtml(qualityLabel(record)) : ''}</small></span><span class="run-list-status ${record.status === 'failed' ? 'is-failed' : inProgress(record) ? 'is-running' : ''}">${escapeHtml(recordStatusLabel(record))}</span></button>${counts ? `<p class="task-status-counts">${counts}</p>` : ''}<div id="history-${kind === 'task' ? 'task' : 'run'}-${escapeHtml(record.id)}" data-inline-${kind === 'task' ? 'task' : 'run'}="${escapeHtml(record.id)}"></div></article>`;
+              return `<article class="history-entry"><button class="run-list-item ${selected ? 'is-selected' : ''}" type="button" aria-expanded="${selected}" aria-controls="history-${kind === 'task' ? 'task' : 'run'}-${escapeHtml(record.id)}" data-history-focus="${escapeHtml(kind + ':' + record.id)}" ${kind === 'task' ? 'data-bench-task-id' : 'data-bench-run-id'}="${escapeHtml(record.id)}"><span><strong${headline?.title ? ` title="${escapeHtml(headline.title)}"` : ''}>${escapeHtml(title)}</strong><small>${escapeHtml(taskMetaPrefix)}${escapeHtml(formatDate(record.created_at))} · ${progress.done}/${progress.total} 样本已结束 · ${escapeHtml(record.id)}${kind === 'legacy' ? (record.execution_kind === 'calibration-import-v1' ? ' · 只读，不可重试' : ' · 未归入新任务') : ''}${qualityLabel(record) ? ' · ' + escapeHtml(qualityLabel(record)) : ''}</small></span><span class="run-list-status ${statusBadgeClass(record)}">${escapeHtml(recordStatusLabel(record))}</span></button>${counts ? `<p class="task-status-counts">${counts}</p>` : ''}<div id="history-${kind === 'task' ? 'task' : 'run'}-${escapeHtml(record.id)}" data-inline-${kind === 'task' ? 'task' : 'run'}="${escapeHtml(record.id)}"></div></article>`;
             })
             .join('')
         : `<div class="empty">${entries.length ? '没有匹配的任务，请调整搜索或状态筛选。' : '暂无任务。选择目标并点击“开始评测”，即可创建第一个任务。'}</div>`
@@ -248,6 +378,7 @@ export function createTaskHistoryView({ app, state, retryRequests, retrying }) {
   }
   function runCounts(children) {
     const count = status => children.filter(child => child.status === status).length;
+    const timeouts = children.reduce((sum, child) => sum + (child.sample_status_counts?.timeout ?? 0), 0);
     return (
       '总计 ' +
       children.length +
@@ -257,6 +388,7 @@ export function createTaskHistoryView({ app, state, retryRequests, retrying }) {
       count('queued') +
       ' · 完成 ' +
       count('completed') +
+      (timeouts ? '（含 ' + timeouts + ' 超时样本）' : '') +
       ' · 未完成 ' +
       count('incomplete') +
       ' · API 失败 ' +
@@ -265,6 +397,134 @@ export function createTaskHistoryView({ app, state, retryRequests, retrying }) {
       count('cancelled') +
       (count('interrupted') ? ' · 中断 ' + count('interrupted') : '')
     );
+  }
+  function childPreviewTone(child) {
+    if (!child) return 'queued';
+    if (child.status === 'queued') return 'queued';
+    if (child.status === 'running' || child.status === 'cancelling') return 'running';
+    if (child.status === 'failed') return 'failed';
+    if (child.status === 'interrupted') return 'interrupted';
+    if (child.status === 'cancelled') return 'cancelled';
+    if (child.status === 'timeout' || child.status === 'incomplete') return 'timeout';
+    if (child.status === 'completed') return hasTimeoutSamples(child) ? 'timeout' : 'completed';
+    return 'queued';
+  }
+  function childPreviewStateText(child, progress) {
+    if (child.status === 'queued') return '排队';
+    if (child.status === 'running' || child.status === 'cancelling') return `${progress.done}/${progress.total}`;
+    if (child.status === 'failed') return '失败';
+    if (child.status === 'interrupted') return '中断';
+    if (child.status === 'cancelled') return '取消';
+    if (child.status === 'incomplete') return '未完成';
+    if (child.status === 'completed') {
+      const timeouts = child.sample_status_counts?.timeout ?? 0;
+      if (timeouts > 0) return `${timeouts}超时`;
+      return qualityLabel(child) ? '✓·注' : '✓';
+    }
+    return statusText(child.status);
+  }
+  function renderTaskPreview(task, visibleChildren) {
+    if (!visibleChildren.length) return '<div class="empty">没有匹配的子运行。</div>';
+    const groups = [];
+    const byModel = new Map();
+    for (const child of visibleChildren) {
+      const modelName = targetModelName(child.target);
+      if (!byModel.has(modelName)) {
+        const group = { modelName, children: [] };
+        byModel.set(modelName, group);
+        groups.push(group);
+      }
+      byModel.get(modelName).children.push(child);
+    }
+    const prefix = sharedChannelPrefix(visibleChildren.map(child => targetShortChannel(child.target)));
+    const shortChannel = target => {
+      const raw = targetShortChannel(target);
+      return prefix && raw.startsWith(prefix) && raw.length > prefix.length ? raw.slice(prefix.length) : raw;
+    };
+    const shortThink = target => (target?.thinking === 'default' ? '默认' : target?.thinking || '未记录');
+    const presentTones = new Set(visibleChildren.map(childPreviewTone));
+    const rows = groups
+      .map((group, index) => {
+        const channels = [...new Set(group.children.map(child => shortChannel(child.target)))];
+        const thinkings = [...new Set(group.children.map(child => shortThink(child.target)))];
+        const singleChannel = channels.length === 1 && group.children.length > 1;
+        const singleThinking = thinkings.length === 1 && group.children.length > 1 && channels.length > 1;
+        const doneRuns = group.children.filter(child => child.status === 'completed').length;
+        const failedRuns = group.children.filter(child => child.status === 'failed').length;
+        const runningRuns = group.children.filter(child => child.status === 'running' || child.status === 'cancelling').length;
+        const sampleDone = group.children.reduce((sum, child) => sum + sampleProgress(child).done, 0);
+        const sampleTotal = group.children.reduce((sum, child) => sum + sampleProgress(child).total, 0);
+        const contextParts = [
+          singleChannel ? targetShortChannel(group.children[0].target) : '',
+          singleThinking ? `Thinking ${thinkings[0]}` : '',
+          `完成 ${doneRuns}/${group.children.length}`,
+          runningRuns ? `运行中 ${runningRuns}` : '',
+          failedRuns ? `失败 ${failedRuns}` : '',
+          `${sampleDone}/${sampleTotal} 样本`
+        ].filter(Boolean);
+        const slotId = `history-preview-run-${task.id}-${index}`;
+        const chips = group.children
+          .map(child => {
+            const target = child.target || {},
+              progress = sampleProgress(child),
+              tone = childPreviewTone(child),
+              selected = child.run_id === state.selectedRunId,
+              ch = shortChannel(target),
+              th = shortThink(target),
+              budget = budgetLabel(child.budget, child.status),
+              quality = qualityLabel(child);
+            const label = singleChannel ? th : singleThinking ? ch : `${ch} · ${th}`;
+            const stateLabel = childPreviewStateText(child, progress);
+            const tooltip = [
+              targetLabel(target),
+              targetIdentity(target),
+              recordStatusLabel(child),
+              `${progress.done}/${progress.total} 样本`,
+              budget,
+              quality,
+              child.retryable_samples > 0 && !inProgress(child) ? `${child.retryable_samples} 个可重试` : ''
+            ]
+              .filter(Boolean)
+              .join(' · ');
+            return `<button type="button" class="task-preview-chip is-${tone}${selected ? ' is-selected' : ''}" data-preview-run-id="${escapeHtml(child.run_id)}" data-history-focus="preview-run:${escapeHtml(child.run_id)}" aria-expanded="${selected}" aria-controls="${escapeHtml(slotId)}" title="${escapeHtml(tooltip)}"><span class="task-preview-chip-label">${escapeHtml(label)}</span><span class="task-preview-chip-state">${escapeHtml(stateLabel)}</span></button>`;
+          })
+          .join('');
+        return `<div class="task-preview-group"><div class="task-preview-head"><strong>${escapeHtml(group.modelName)}</strong><span class="task-preview-stats">${escapeHtml(contextParts.join(' · '))}</span></div><div class="task-preview-runs">${chips}</div><div id="${escapeHtml(slotId)}" class="task-preview-slot" data-preview-model-slot="${index}" data-preview-run-ids="${escapeHtml(group.children.map(child => child.run_id).join(','))}"></div></div>`;
+      })
+      .join('');
+    const legend = [
+      ['completed', '已完成'],
+      ['running', '运行中'],
+      ['queued', '排队中'],
+      ['timeout', '超时 / 未完成'],
+      ['failed', 'API 失败'],
+      ['interrupted', '已中断'],
+      ['cancelled', '已取消']
+    ]
+      .filter(([tone]) => presentTones.has(tone))
+      .map(([tone, label]) => `<span class="task-preview-legend-item"><i class="task-preview-swatch is-${tone}"></i>${label}</span>`)
+      .join('');
+    return `<div class="task-preview" aria-label="任务按模型预览">${rows}</div><p class="task-preview-legend">${legend}<span class="muted">点击运行标签查看样本详情</span></p>`;
+  }
+  function taskCostLabel(children) {
+    let total = 0,
+      hasKnown = false,
+      hasUnknown = false;
+    for (const child of children) {
+      const cost = child.budget?.estimated_uncached_cost_usd;
+      if (Number.isFinite(cost) && cost >= 0) {
+        total += cost;
+        if (cost > 0 || child.status === 'completed') hasKnown = true;
+      } else if (Number.isFinite(child.budget?.known_cost_lower_bound_usd) && child.budget.known_cost_lower_bound_usd > 0) {
+        total += child.budget.known_cost_lower_bound_usd;
+        hasKnown = true;
+        hasUnknown = true;
+      } else if (!inProgress(child) && child.status !== 'queued') {
+        hasUnknown = true;
+      }
+    }
+    if (!hasKnown) return '';
+    return `${hasUnknown ? '≥ ' : ''}$${total.toFixed(4)}`;
   }
   function renderTaskDetail() {
     const task =
@@ -278,26 +538,60 @@ export function createTaskHistoryView({ app, state, retryRequests, retrying }) {
     }
     const plan = task.plan || {},
       children = task.children || [];
+    const rawQuery = element('history-search').value.trim(),
+      tokens = searchTokens(rawQuery);
+    const filterChildren = tokens.length > 0 && !recordHeaderMatchesTokens(task, tokens);
+    const visibleChildren = filterChildren ? children.filter(child => childMatchesTokens(child, tokens)) : children;
+    const taskConfirmLabel = retryCopy(task, true);
     element('bench-retry-task').hidden = inProgress(task) || !children.some(child => child.retryable_samples > 0);
     element('bench-retry-task').disabled = retrying.has(`tasks:${task.id}`);
-    element('bench-retry-task').textContent = retryRequests.has(`tasks:${task.id}`) ? '确认重试 API 失败' : '重试 API 失败';
+    element('bench-retry-task').textContent = retrying.has(`tasks:${task.id}`)
+      ? '正在提交重试…'
+      : retryCopy(task, retryRequests.has(`tasks:${task.id}`));
+    const totalDone = children.reduce((sum, child) => sum + sampleProgress(child).done, 0);
+    const totalSamples = plan.sample_count ?? children.reduce((sum, child) => sum + sampleProgress(child).total, 0);
+    const totalCost = taskCostLabel(children);
+    const allRunsKey = escapeHtml(`${task.id}:all-runs`);
     replaceHistoryMarkup(
       element('bench-task-detail'),
-      `<div class="run-detail-meta"><span>任务 <strong>${escapeHtml(task.id)}</strong></span><span>状态 <strong>${escapeHtml(recordStatusLabel(task))}</strong></span><span>独立运行 <strong>${children.length}</strong></span><span>样本总数 <strong>${escapeHtml(plan.sample_count ?? '未记录')}</strong></span><span>运行并发 <strong>${escapeHtml(plan.run_concurrency ?? '未记录')}</strong></span><span>每运行样本并发 <strong>${escapeHtml(plan.sample_concurrency ?? '未记录')}</strong></span></div><div class="task-child-list">${children
+      `${retryRequests.has(`tasks:${task.id}`) && !retrying.has(`tasks:${task.id}`) ? `<p class="task-detail-note">待确认：仅重试失败、超时、中断或已取消样本，保留已完成结果；再次点击右上角“${escapeHtml(taskConfirmLabel)}”后开始。</p>` : ''}<div class="run-detail-meta"><span>任务 <strong>${escapeHtml(task.id)}</strong></span><span>状态 <strong>${escapeHtml(recordStatusLabel(task))}</strong></span><span>独立运行 <strong>${children.length}</strong></span><span>样本进度 <strong>${totalDone}/${escapeHtml(totalSamples)}</strong></span>${plan.rounds ? `<span>轮数 <strong>${escapeHtml(plan.rounds)}</strong></span>` : ''}<span>运行并发 <strong>${escapeHtml(plan.run_concurrency ?? '未记录')}</strong></span><span>每运行样本并发 <strong>${escapeHtml(plan.sample_concurrency ?? '未记录')}</strong></span>${totalCost ? `<span>估算费用 <strong>${escapeHtml(totalCost)}</strong></span>` : ''}</div>${filterChildren && visibleChildren.length < children.length ? `<p class="task-detail-note">已按搜索“${escapeHtml(rawQuery)}”筛选：仅显示 ${visibleChildren.length} / ${children.length} 个匹配子运行。</p>` : ''}${renderTaskPreview(task, visibleChildren)}<details class="raw-block task-all-runs" data-history-disclosure="${allRunsKey}"><summary data-history-focus="${allRunsKey}">全部 ${visibleChildren.length} 个独立运行列表${filterChildren && visibleChildren.length < children.length ? `（共 ${children.length} 个）` : ''}</summary><div class="task-child-list">${visibleChildren
         .map(child => {
           const target = child.target || {},
-            progress = sampleProgress(child);
-          return `<div class="task-child-row ${child.run_id === state.selectedRunId ? 'is-selected' : ''}" data-child-run-id="${escapeHtml(child.run_id)}"><button class="task-child-open" type="button" aria-expanded="${child.run_id === state.selectedRunId}" aria-controls="history-run-${escapeHtml(child.run_id)}" data-history-focus="run:${escapeHtml(child.run_id)}" data-bench-run-id="${escapeHtml(child.run_id)}"><strong>${escapeHtml(targetLabel(target))}</strong><span>${escapeHtml(targetIdentity(target))}</span><small>运行 ${escapeHtml(child.run_id)} · ${progress.done}/${progress.total} 样本已结束 · ${escapeHtml(budgetLabel(child.budget))}${qualityLabel(child) ? ` · ${escapeHtml(qualityLabel(child))}` : ''}${child.stop_reason && child.stop_reason !== 'api_failure' ? ` · 停止原因 ${escapeHtml(child.stop_reason)}` : ''}${child.retryable_samples > 0 && !inProgress(child) ? ` · ${child.retryable_samples} 个可重试` : ''}</small></button><span class="run-list-status ${inProgress(child) ? 'is-running' : child.status === 'failed' ? 'is-failed' : ''}">${escapeHtml(recordStatusLabel(child))}</span><button class="btn" type="button" data-history-focus="cancel:${escapeHtml(child.run_id)}" data-cancel-child="${escapeHtml(child.run_id)}" ${!canCancel(child) || state.cancelling.has(`run:${child.run_id}`) ? 'disabled' : ''}>取消运行</button></div><div id="history-run-${escapeHtml(child.run_id)}" data-inline-run="${escapeHtml(child.run_id)}"></div>`;
+            progress = sampleProgress(child),
+            budget = budgetLabel(child.budget, child.status),
+            quality = qualityLabel(child);
+          return `<div class="task-child-row ${child.run_id === state.selectedRunId ? 'is-selected' : ''}" data-child-run-id="${escapeHtml(child.run_id)}"><button class="task-child-open" type="button" aria-expanded="${child.run_id === state.selectedRunId}" aria-controls="history-run-${escapeHtml(child.run_id)}" data-history-focus="run:${escapeHtml(child.run_id)}" data-bench-run-id="${escapeHtml(child.run_id)}"><strong>${escapeHtml(targetLabel(target))}</strong><span>${escapeHtml(targetIdentity(target))}</span><small>运行 ${escapeHtml(child.run_id)} · ${progress.done}/${progress.total} 样本已结束${budget ? ` · ${escapeHtml(budget)}` : ''}${quality ? ` · ${escapeHtml(quality)}` : ''}${child.stop_reason && child.stop_reason !== 'api_failure' ? ` · 停止原因 ${escapeHtml(child.stop_reason)}` : ''}${child.retryable_samples > 0 && !inProgress(child) ? ` · ${child.retryable_samples} 个可重试` : ''}</small></button><span class="run-list-status ${statusBadgeClass(child)}">${escapeHtml(recordStatusLabel(child))}</span><button class="btn" type="button" data-history-focus="cancel:${escapeHtml(child.run_id)}" data-cancel-child="${escapeHtml(child.run_id)}" ${!canCancel(child) || state.cancelling.has(`run:${child.run_id}`) ? 'disabled' : ''}>取消运行</button></div><div id="history-run-${escapeHtml(child.run_id)}" data-inline-run="${escapeHtml(child.run_id)}"></div>`;
         })
         .join(
           ''
-        )}</div><p class="task-detail-note">每个运行固定路由、模型和 Thinking，账号绑定以路由证据为准；独立保存样本与预算状态。取消某个运行不会取消其他运行。</p>`
+        )}</div></details><p class="task-detail-note">每个运行固定路由、模型和 Thinking，账号绑定以路由证据为准；独立保存样本与预算状态。取消某个运行不会取消其他运行。</p>`
     );
+  }
+  const lazyJsonPayloads = new Map();
+  function hydrateLazyJson(node) {
+    const key = node?.dataset?.lazyJson;
+    if (!key || !node.open || !lazyJsonPayloads.has(key)) return;
+    const text = JSON.stringify(lazyJsonPayloads.get(key), null, 2);
+    const existing = node.querySelector?.('pre');
+    if (existing) {
+      if (existing.textContent !== text) existing.textContent = text;
+      return;
+    }
+    const doc = node.ownerDocument || (typeof document !== 'undefined' ? document : null);
+    if (!doc?.createElement || !node.append) return;
+    const pre = doc.createElement('pre');
+    pre.textContent = text;
+    node.append(pre);
+  }
+  function syncOpenLazyJson(container) {
+    for (const node of container.querySelectorAll?.('details[data-lazy-json][open]') || []) hydrateLazyJson(node);
   }
   function jsonBlock(title, value, scope = state.selectedRunId) {
     if (value === undefined || value === null || value === '') return '';
-    const key = escapeHtml(`${scope}:${title}`);
-    return `<details class="raw-block" data-history-disclosure="${key}"><summary data-history-focus="${key}">${escapeHtml(title)}</summary><pre>${escapeHtml(JSON.stringify(value, null, 2))}</pre></details>`;
+    const rawKey = `${scope}:${title}`;
+    const key = escapeHtml(rawKey);
+    lazyJsonPayloads.set(rawKey, value);
+    return `<details class="raw-block" data-history-disclosure="${key}" data-lazy-json="${key}"><summary data-history-focus="${key}">${escapeHtml(title)}</summary></details>`;
   }
   function renderRunDetail() {
     const run = state.runDetail?.id === state.selectedRunId ? state.runDetail : null;
@@ -305,6 +599,7 @@ export function createTaskHistoryView({ app, state, retryRequests, retrying }) {
     element('bench-run-title').textContent = state.selectedTaskId ? '子运行样本' : '旧运行详情';
     element('bench-cancel-run').hidden = !inProgress(run);
     element('bench-cancel-run').disabled = !canCancel(run) || state.cancelling.has(`run:${run?.id}`);
+    lazyJsonPayloads.clear();
     if (!run) {
       replaceHistoryMarkup(
         container,
@@ -312,10 +607,15 @@ export function createTaskHistoryView({ app, state, retryRequests, retrying }) {
       );
       return;
     }
+    const runConfirmLabel = retryCopy(run, true);
     element('bench-retry-run').hidden = inProgress(run) || !(run.retryable_samples > 0);
     element('bench-retry-run').disabled = retrying.has(`runs:${run.id}`);
-    element('bench-retry-run').textContent = retryRequests.has(`runs:${run.id}`) ? '确认重试 API 失败' : '重试 API 失败';
+    element('bench-retry-run').textContent = retrying.has(`runs:${run.id}`)
+      ? '正在提交重试…'
+      : retryCopy(run, retryRequests.has(`runs:${run.id}`));
     const samples = run.samples || [];
+    const retryBatches = Array.isArray(run.retry_batches) ? run.retry_batches : [];
+    const latestRetry = retryBatches.at(-1);
     const calls = ensureCallSummaries(run);
     const timeout = run.plan?.limits?.timeout;
     const failureText = sample => {
@@ -324,37 +624,53 @@ export function createTaskHistoryView({ app, state, retryRequests, retrying }) {
         attemptFailureText(sample, calls, timeout) ?? (calls === null && callSummaries.get(run.id)?.loading ? '正在读取调用记录…' : null)
       );
     };
-    const summary = `<div class="run-detail-meta"><span>运行 <strong>${escapeHtml(run.id)}</strong></span><span>状态 <strong>${escapeHtml(recordStatusLabel(run))}</strong></span><span>样本 <strong>${samples.length}</strong></span><span>已结束 <strong>${sampleProgress(run).done}</strong></span>${run.budget?.stop_reason ? `<span>停止原因 <strong>${escapeHtml(run.budget.stop_reason)}</strong></span>` : ''}</div><p class="task-detail-note">${escapeHtml(
+    const retryNotePrefix =
+      runConfirmLabel === '确认重试 API 失败'
+        ? '待确认：仅重试 API 失败及因其停止的未执行样本，保留成功结果'
+        : '待确认：仅重试失败、超时、中断或已取消样本，保留已完成结果';
+    const summary = `${retryRequests.has(`runs:${run.id}`) && !retrying.has(`runs:${run.id}`) ? `<p class="task-detail-note">${retryNotePrefix}；再次点击右上角“${escapeHtml(runConfirmLabel)}”后开始。</p>` : ''}<div class="run-detail-meta"><span>运行 <strong>${escapeHtml(run.id)}</strong></span><span>状态 <strong>${escapeHtml(recordStatusLabel(run))}</strong></span><span>样本 <strong>${samples.length}</strong></span><span>已结束 <strong>${sampleProgress(run).done}</strong></span>${retryBatches.length ? `<span>手动重试 <strong>${retryBatches.length} 次${latestRetry?.created_at ? `（最近 ${escapeHtml(formatDate(latestRetry.created_at))}）` : ''}</strong></span>` : ''}${run.budget?.stop_reason ? `<span>停止原因 <strong>${escapeHtml(run.budget.stop_reason)}</strong></span>` : ''}</div><p class="task-detail-note">${escapeHtml(
       fixedTargets(run)
         .map(target => `${targetLabel(target)} · ${targetIdentity(target)}`)
         .join('；')
     )}${!run.task_id ? ' · 旧运行记录，未迁移为新任务。' : ''}</p>`;
     const sampleTone = sample =>
-      validScore(sample)
-        ? sample.grade.content_score >= 1
-          ? 'full'
-          : sample.grade.content_score > 0
-            ? 'partial'
-            : 'zero'
-        : sample.status === 'completed'
-          ? 'unscored'
-          : ['pending', 'queued', 'running'].includes(sample.status)
-            ? 'pending'
-            : 'failed';
-    const cellText = sample =>
-      validScore(sample)
-        ? String(Number(sample.grade.content_score.toFixed(2)))
-        : sample.status === 'completed'
-          ? sample.grade?.outcome === 'ambiguous'
-            ? '歧义'
-            : '无分'
-          : ['pending', 'queued'].includes(sample.status)
-            ? '…'
+      isTimeoutSample(sample)
+        ? 'timeout'
+        : validScore(sample)
+          ? sample.grade.content_score >= 1
+            ? 'full'
+            : sample.grade.content_score > 0
+              ? 'partial'
+              : 'zero'
+          : sample.status === 'completed'
+            ? 'unscored'
             : sample.status === 'running'
-              ? '运行'
-              : sample.status === 'cancelled'
-                ? '取消'
-                : '失败';
+              ? 'running'
+              : ['pending', 'queued'].includes(sample.status)
+                ? 'pending'
+                : sample.status === 'cancelled'
+                  ? 'cancelled'
+                  : sample.status === 'interrupted'
+                    ? 'interrupted'
+                    : 'failed';
+    const cellText = sample =>
+      isTimeoutSample(sample)
+        ? '超时'
+        : validScore(sample)
+          ? String(Number(sample.grade.content_score.toFixed(2)))
+          : sample.status === 'completed'
+            ? sample.grade?.outcome === 'ambiguous'
+              ? '歧义'
+              : '无分'
+            : ['pending', 'queued'].includes(sample.status)
+              ? '…'
+              : sample.status === 'running'
+                ? '运行'
+                : sample.status === 'cancelled'
+                  ? '取消'
+                  : sample.status === 'interrupted'
+                    ? '中断'
+                    : '失败';
     const taskIds = [...new Set(samples.map(sample => sample.task))],
       rounds = [...new Set(samples.map(sample => sample.round))].sort((a, b) => a - b);
     const byCell = new Map(samples.map(sample => [`${sample.task}\u0000${sample.round}`, sample]));
@@ -405,9 +721,13 @@ export function createTaskHistoryView({ app, state, retryRequests, retrying }) {
               ['full', '1', '满分'],
               ['partial', '0.5', '部分得分'],
               ['zero', '0', '零分'],
+              ['timeout', '超时', '超时（0分/可重试）'],
               ['unscored', '无分', '答案不可评分'],
-              ['failed', '失败', 'API 失败或超时'],
-              ['pending', '…', '未结束']
+              ['failed', '失败', 'API 失败'],
+              ['interrupted', '中断', '已中断'],
+              ['cancelled', '取消', '已取消'],
+              ['running', '运行', '运行中'],
+              ['pending', '…', '待执行']
             ]
               .filter(([tone]) => samples.some(sample => sampleTone(sample) === tone))
               .map(([tone, cell, label]) => `<span class="sample-cell is-${tone}">${cell}</span>${label}`)
@@ -420,26 +740,52 @@ export function createTaskHistoryView({ app, state, retryRequests, retrying }) {
     );
     for (const node of container.querySelectorAll?.('[data-sample-id]') || []) if (openSamples.has(node.dataset.sampleId)) node.open = true;
   }
+  function placeRunSection() {
+    if (!state.selectedRunId) {
+      runSection.hidden = true;
+      return;
+    }
+    const list = element('bench-run-list');
+    const taskDetail = element('bench-task-detail');
+    const allRuns = taskDetail.querySelector?.('details.task-all-runs');
+    const previewSlot =
+      allRuns && !allRuns.open
+        ? [...(taskDetail.querySelectorAll?.('[data-preview-model-slot]') || [])].find(slot =>
+            (slot.dataset?.previewRunIds || '').split(',').includes(state.selectedRunId)
+          )
+        : null;
+    const runSlot =
+      previewSlot ||
+      taskDetail.querySelector?.('[data-inline-run="' + state.selectedRunId + '"]') ||
+      list.querySelector?.('[data-inline-run="' + state.selectedRunId + '"]');
+    if (allRuns && !allRuns.open && !previewSlot && runSlot && allRuns.contains?.(runSlot)) allRuns.open = true;
+    moveHistorySection(runSlot, runSection);
+    runSection.hidden = false;
+  }
   function renderDetails() {
     const list = element('bench-run-list'),
       active = list.ownerDocument?.activeElement;
     const focused = list.contains?.(active) ? active : null;
     const focusKey = focused?.dataset?.historyFocus,
       focusId = focused?.id;
+    const openTaskDisclosures = new Set(
+      [...(taskSection.querySelectorAll?.('details[data-history-disclosure][open]') || [])]
+        .filter(node => !runSection.contains?.(node))
+        .map(node => node.dataset.historyDisclosure)
+    );
     const openDisclosures = new Set(
       [...(runSection.querySelectorAll?.('details[data-history-disclosure][open]') || [])].map(node => node.dataset.historyDisclosure)
     );
     renderHistory();
     moveHistorySection(list.querySelector?.('[data-inline-task="' + state.selectedTaskId + '"]'), taskSection);
     renderTaskDetail();
+    for (const node of taskSection.querySelectorAll?.('details[data-history-disclosure]') || [])
+      if (!runSection.contains?.(node) && openTaskDisclosures.has(node.dataset.historyDisclosure)) node.open = true;
     renderRunDetail();
-    const runSlot =
-      element('bench-task-detail').querySelector?.('[data-inline-run="' + state.selectedRunId + '"]') ||
-      list.querySelector?.('[data-inline-run="' + state.selectedRunId + '"]');
-    moveHistorySection(runSlot, runSection);
-    runSection.hidden = !state.selectedRunId;
+    placeRunSection();
     for (const node of runSection.querySelectorAll?.('details[data-history-disclosure]') || [])
       if (openDisclosures.has(node.dataset.historyDisclosure)) node.open = true;
+    syncOpenLazyJson(runSection);
     if (focused && list.ownerDocument.activeElement !== focused) {
       const replacement = focusKey
         ? [...(list.querySelectorAll?.('[data-history-focus]') || [])].find(node => node.dataset.historyFocus === focusKey)
@@ -449,6 +795,22 @@ export function createTaskHistoryView({ app, state, retryRequests, retrying }) {
       if (replacement?.isConnected && !replacement.closest?.('[hidden]')) replacement.focus({ preventScroll: true });
     }
   }
+
+  element('bench-task-detail').addEventListener(
+    'toggle',
+    event => {
+      if (event.target?.classList?.contains?.('task-all-runs') && state.selectedRunId) placeRunSection();
+    },
+    true
+  );
+
+  element('bench-run-detail').addEventListener(
+    'toggle',
+    event => {
+      if (event.target?.dataset?.lazyJson && event.target.open) hydrateLazyJson(event.target);
+    },
+    true
+  );
 
   element('bench-run-detail').addEventListener('click', event => {
     const cell = event.target.closest?.('[data-open-sample]');

@@ -1,6 +1,7 @@
-  await page.locator('#bench-run-list [data-bench-run-id="peer-run"]').click();await page.waitForFunction(()=>document.querySelector('#bench-run-detail').textContent.includes('saved legacy response'));
+  await page.locator('#bench-run-list [data-bench-run-id="peer-run"]').click();await page.waitForFunction(()=>document.querySelector('#bench-run-detail').textContent.includes('peer-run'));
   await page.locator('[data-view-link="analysis"]').click();await point('peer').evaluate(node=>node.dispatchEvent(new MouseEvent('click',{bubbles:true})));await page.locator('[data-open-run="peer-run"]').click();
-  await page.locator('#runs-view').waitFor({state:'visible'});require((await page.locator('#bench-run-detail').textContent()).includes('saved legacy response'),'Analysis-to-legacy-run navigation lost');
+  await page.locator('#runs-view').waitFor({state:'visible'});require((await page.locator('#bench-run-detail').textContent()).includes('peer-run'),'Analysis-to-legacy-run navigation lost');
+  await page.waitForFunction(()=>{const el=document.querySelector('#bench-run-section');if(!el||el.hidden)return false;const r=el.getBoundingClientRect(),atBottom=window.scrollY+window.innerHeight>=document.documentElement.scrollHeight-2;return r.top>=0&&(r.top<120||(atBottom&&r.bottom<=window.innerHeight));});
   await page.locator('#history-search').fill('not-found');require(await page.locator('.run-list-item').count()===0,'History search');await page.locator('#history-search').fill('');await page.locator('#history-status').selectOption('running');require(await page.locator('.run-list-item').count()===0,'History status');await page.locator('#history-status').selectOption('all');
   await page.screenshot({path:(ARTIFACTS + '/tasks.png'),fullPage:true});
   timeoutNextSubmit=true;const beforeTimeoutRequests=requests.length;await page.locator('#start-run').click();
@@ -14,5 +15,5 @@
   observations.push({...baseline,id:'eligible',source:'run',run_id:'eligible-run',target_id:'eligible-target',thinking:'low',task_sha256:'c'.repeat(64),assessment_protocol_sha256:'b'.repeat(64)});
   observations.push({...baseline,id:'historical',source:'run',source_sha256:historicalSources,estimated_cost_usd:null});
   observations.push({...baseline,id:'incomplete',source:'run',assessment_protocol_sha256:null,baseline_eligible:false,ineligibility_reason:'Incomplete samples',estimated_cost_usd:.06,tasks:tasks.map(task=>({...task,samples:task.samples.map(sample=>({...sample,status:'failed',content_score:null}))}))});
-  observations.push({...baseline,id:'extra-sample',source:'run',sample_count:43});
+  observations.push({...baseline,id:'extra-sample',source:'run',sample_count:37});
   observations.push({...baseline,id:'zero-cost',source:'run',estimated_cost_usd:0});

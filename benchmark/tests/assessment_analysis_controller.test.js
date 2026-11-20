@@ -3,7 +3,7 @@ import { readFileSync } from 'node:fs';
 import vm from 'node:vm';
 import { createAppContext } from '../web/app-context.js';
 import { createAnalysisModel, attachAnalysisBatchIds } from '../web/analysis-model.js';
-import { assessmentChartMetric, observationQualitySummary } from '../web/assessment-chart-metric.js';
+import { assessmentChartMetric, buildObservationAnomalies, observationQualitySummary } from '../web/assessment-chart-metric.js';
 import { selectAnalysisHistoryRecords } from '../web/analysis-history.js';
 import { renderAnalysisRecordList } from '../web/analysis-record-list.js';
 
@@ -106,6 +106,7 @@ test('analysis redraw events reuse derived metrics; source, bank and axes invali
         attachAnalysisBatchIds,
         selectAnalysisHistoryRecords,
         renderAnalysisRecordList,
+        buildObservationAnomalies,
         observationQualitySummary,
         createAnalysisFilters: () => ({ matches: () => true, setRecords() {}, reset() {}, setSource() {}, focus() {} }),
         createAnalysisPopover: (_, panel) => ({

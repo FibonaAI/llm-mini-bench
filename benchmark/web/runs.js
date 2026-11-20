@@ -1,4 +1,4 @@
-import { createDataPicker, selectionKey } from './data-picker.js';
+import { createDataPicker, selectionKey, thinkingLabel } from './data-picker.js';
 import { routePickerLeaves } from './data-adapter.js';
 
 /** Initialize exact target selection with the shared app context; no import-time DOM writes. */
@@ -31,7 +31,7 @@ export function createTaskTargets(app) {
       ? leaves
           .map(
             leaf =>
-              `<div class="selected-target"><strong>${escapeHtml(leaf.model)}</strong><span>${escapeHtml(leaf.providerName || leaf.provider)} · ${escapeHtml(leaf.providerDisplayId || leaf.providerId || leaf.provider)} / ${escapeHtml(leaf.account)} · ${escapeHtml(leaf.think === 'default' ? '默认（不指定）' : leaf.think)}</span></div>`
+              `<div class="selected-target"><strong>${escapeHtml(leaf.modelDisplayName || leaf.model)}</strong><span>${escapeHtml(leaf.providerName || leaf.providerDisplayId || leaf.provider)} / ${escapeHtml(leaf.account)} · ${escapeHtml(thinkingLabel(leaf.think))}</span></div>`
           )
           .join('')
       : '<p class="empty">尚未选择目标。搜索模型可跨渠道选择，也可按渠道、模型或思考筛选。</p>';
@@ -58,6 +58,7 @@ export function createTaskTargets(app) {
     const available = new Set(app.targets.leaves.map(selectionKey));
     app.setTargetSelection(requested.filter(key => available.has(key)));
     picker?.setSelection(app.targets.selectedKeys);
+    if (!requested.length) picker?.resetFilters?.();
     renderSelection();
     app.emit('mini-bench:targets-changed');
     if (announce) {

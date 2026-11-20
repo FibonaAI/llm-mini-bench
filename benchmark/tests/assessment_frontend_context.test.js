@@ -15,6 +15,8 @@ test('context publishes updated bank and history before notifying listeners', ()
     app.on('mini-bench:history-changed', () => seen.push(app.getTaskId('run')));
     app.setBank(bank);
     app.setHistory([{ id: 'batch', children: [{ run_id: 'run' }] }]);
+    // Unchanged task membership during history polling must not trigger analysis chart redraws.
+    app.setHistory([{ id: 'batch', status: 'running', children: [{ run_id: 'run', status: 'running' }] }]);
     expect(seen).toEqual([[bank, bank, 1], 'batch']);
     expect(app.runState.bank).toBe(app.bank);
     expect(app.runState.taskCount).toBe(1);

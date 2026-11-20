@@ -1,7 +1,7 @@
 import { test, expect } from 'bun:test';
 import { createAnalysisFilterState, matchesAnalysisFilters } from '../web/analysis-filters.js';
 
-const observation = (id, providerId, model, think = 'default', extra = {}) => ({
+const observation = (id, providerId, model, think = 'low', extra = {}) => ({
     id,
     providerId,
     providerName: providerId,
@@ -16,7 +16,7 @@ const observation = (id, providerId, model, think = 'default', extra = {}) => ({
 const records = [
     observation('one', 'channel-a', 'Beam Free'),
     observation('repeat', 'channel-a', 'Beam Free'),
-    observation('other-account', 'channel-a', 'Beam Free', 'default', { accountId: 'configured:b', account: 'Account B' }),
+    observation('other-account', 'channel-a', 'Beam Free', 'low', { accountId: 'configured:b', account: 'Account B' }),
     observation('high', 'channel-b', 'beam_free', 'high'),
     observation('second-model', 'channel-a', 'Luna', 'high'),
     observation('baseline', 'channel-b', 'Luna', 'unknown', { source: 'baseline' })
@@ -51,7 +51,7 @@ test('source and unified search directly constrain observations without rewritin
     expect(matchIds(state)).toEqual(['baseline']);
     state.think.add('unknown');
     expect(matchIds(state)).toEqual(['baseline']);
-    state.think = new Set(['default']);
+    state.think = new Set(['low']);
     expect(matchIds(state)).toEqual([]);
 });
 
@@ -70,7 +70,7 @@ test('facet counts omit only their own dimension and do not discard absent filte
 });
 
 test('request path segments do not invent a shared display model or provider', () => {
-    const record = observation('remote', 'owner-a', 'owner-a/openai/exact/model', 'default');
+    const record = observation('remote', 'owner-a', 'owner-a/openai/exact/model', 'low');
     const state = createAnalysisFilterState();
     state.model.add('exact/model');
     expect(matchesAnalysisFilters(record, state)).toBe(false);

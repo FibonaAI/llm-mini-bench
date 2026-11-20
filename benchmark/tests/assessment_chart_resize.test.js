@@ -23,7 +23,20 @@ function chartResizeFixture() {
             this.dataset = {};
             this.clientWidth = 900;
             this.attributes = {};
-            this.classList = { add() {}, remove() {} };
+            this.classes = new Set();
+            this.classList = {
+                add: name => this.classes.add(name),
+                remove: name => this.classes.delete(name),
+                toggle: (name, force) =>
+                    force === undefined
+                        ? this.classes.has(name)
+                            ? this.classes.delete(name)
+                            : this.classes.add(name)
+                        : force
+                          ? this.classes.add(name)
+                          : this.classes.delete(name),
+                contains: name => this.classes.has(name)
+            };
         }
         setAttribute(key, value) {
             this.attributes[key] = String(value);
@@ -45,6 +58,9 @@ function chartResizeFixture() {
         addEventListener(name, handler) {
             (this.handlers ??= new Map()).set(name, handler);
         }
+        removeEventListener(name, handler) {
+            if (this.handlers?.get(name) === handler) this.handlers.delete(name);
+        }
         emit(name, event = {}) {
             this.handlers?.get(name)?.(event);
         }
@@ -55,7 +71,12 @@ function chartResizeFixture() {
             return { x: 0, y: 0, width: 0, height: 0 };
         }
         getBoundingClientRect() {
-            return { top: 0 };
+            return {
+                left: 0,
+                top: 0,
+                width: Number(this.attributes.width) || this.clientWidth || 900,
+                height: Number(this.attributes.height) || 400
+            };
         }
         getComputedTextLength() {
             return 40;
@@ -113,12 +134,17 @@ function chartResizeFixture() {
     vm.runInContext(source + '\nthis.createChart = createScoreCostChart;', context);
     const container = new Node(),
         selections = [],
-        chart = context.createChart(container, { onSelect: id => selections.push(id) });
+        openedRuns = [],
+        chart = context.createChart(container, {
+            onSelect: id => selections.push(id),
+            onOpenRun: runId => openedRuns.push(runId)
+        });
     return {
         chart,
         container,
         frames,
         selections,
+        openedRuns,
         get writes() {
             return writes;
         },
@@ -203,7 +229,7 @@ test('chart color mode changes markers and lines without merging points or Think
 
 test('legend includes only rendered points and follows axis eligibility and zoom', () => {
     const f = chartResizeFixture();
-    const base = { model: 'gpt-6-luna', providerId: 'a', accountId: 'one', score: 80, think: 'default' };
+    const base = { model: 'gpt-6-luna', providerId: 'a', accountId: 'one', score: 80, think: 'high' };
     const rows = [
         { ...base, id: 'zero', cost: 0 },
         { ...base, id: 'positive', cost: 1 },
@@ -459,12 +485,391 @@ test('dense chart uses a compact desktop canvas and short model labels without l
     expect(f.container.children[0].attributes.viewBox).toBe('0 0 900 400');
     expect(chartFixtureNodes(f, 'score-cost-point')).toHaveLength(49);
     const labels = chartFixtureNodes(f, 'chart-point-label');
-    expect(labels.length).toBeLessThanOrEqual(5);
+    expect(labels.length).toBeGreaterThan(5);
+    expect(labels.length).toBeLessThanOrEqual(28);
     expect(labels.every(node => !node.textContent?.includes('Channel'))).toBe(true);
-    expect(new Set(labels.map(node => node.textContent)).size).toBe(labels.length);
     expect(f.legendEntries).toHaveLength(10);
     f.deliver(390);
     f.flush();
-    expect(chartFixtureNodes(f, 'chart-point-label').length).toBeLessThanOrEqual(2);
+    expect(chartFixtureNodes(f, 'chart-point-label').length).toBeLessThanOrEqual(8);
     expect(chartFixtureNodes(f, 'score-cost-point')).toHaveLength(49);
+});
+
+test('single-model multi-channel chart labels distinguish channels and thinking levels without crowding', () => {
+    const f = chartResizeFixture();
+    const rows = [
+        {
+            id: 'r1',
+            model: 'sonnet',
+            modelDisplayName: 'Claude Sonnet 5.5',
+            providerId: 'p1',
+            providerName: 'homelab / agy-pro',
+            think: 'low',
+            created_at: '2026-11-18T12:00:00Z',
+            cost: 0.6,
+            score: 75
+        },
+        {
+            id: 'r2',
+            model: 'sonnet',
+            modelDisplayName: 'Claude Sonnet 5.5',
+            providerId: 'p2',
+            providerName: 'homelab / claude-code',
+            think: 'high',
+            created_at: '2026-11-18T12:00:00Z',
+            cost: 1.0,
+            score: 88
+        },
+        {
+            id: 'r3',
+            model: 'sonnet',
+            modelDisplayName: 'Claude Sonnet 5.5',
+            providerId: 'p3',
+            providerName: 'homelab / opencode',
+            think: 'max',
+            created_at: '2026-11-18T12:00:00Z',
+            cost: 1.6,
+            score: 96
+        }
+    ];
+    f.chart.render(rows);
+    const texts = chartFixtureNodes(f, 'chart-point-label').map(node => node.textContent);
+    expect(texts).toHaveLength(3);
+    expect(texts).toContain('agy-pro · low');
+    expect(texts).toContain('claude-code · high');
+    expect(texts).toContain('opencode · max');
+});
+
+test('wheel zoom at cursor, drag-to-pan when zoomed, duration axis, and pinned tooltip with run detail link', () => {
+    const f = chartResizeFixture();
+    const rows = [
+        {
+            id: 'p1',
+            source: 'run',
+            run_id: 'run-1',
+            model: 'm1',
+            modelDisplayName: 'Model 1',
+            providerName: 'ch1',
+            account: 'a1',
+            think: 'high',
+            created_at: '2026-11-18T12:00:00Z',
+            cost: 120,
+            score: 70,
+            rounds: 1,
+            original: { rounds: 1, elapsed_seconds: 120 }
+        },
+        {
+            id: 'p2',
+            source: 'run',
+            run_id: 'run-2',
+            model: 'm2',
+            modelDisplayName: 'Model 2',
+            providerName: 'ch2',
+            account: 'a2',
+            think: 'high',
+            created_at: '2026-11-18T12:00:00Z',
+            cost: 600,
+            score: 92,
+            rounds: 1,
+            original: { rounds: 1, elapsed_seconds: 600 }
+        }
+    ];
+    f.chart.render(rows, { axis: 'duration', log: false });
+    const svg = f.container.children[0];
+    const tooltip = f.container.children[1];
+    // Duration axis renders time-formatted ticks
+    const allTexts = [];
+    const walk = node => {
+        if (node.textContent !== undefined) allTexts.push(String(node.textContent));
+        for (const child of node.children || []) walk(child);
+    };
+    walk(svg);
+    expect(allTexts.some(t => t.includes('平均耗时'))).toBe(true);
+    expect(allTexts.some(t => /\d+[ms]/.test(t))).toBe(true);
+
+    // Clicking a point pins the tooltip and exposes the task detail button
+    const point1 = chartFixtureNodes(f, 'score-cost-point').find(node => node.attributes['data-record-id'] === 'p1');
+    point1.emit('click', { stopPropagation() {} });
+    expect(f.selections).toEqual(['p1']);
+    expect(tooltip.hidden).toBe(false);
+    expect(tooltip.classList.contains('is-pinned')).toBe(true);
+    // Leaving the point keeps pinned tooltip open
+    point1.emit('pointerleave');
+    expect(tooltip.hidden).toBe(false);
+    // Clicking the tooltip run detail button invokes onOpenRun
+    const findBtn = node => {
+        if (node.dataset?.tooltipOpenRun) return node;
+        for (const child of node.children || []) {
+            const found = findBtn(child);
+            if (found) return found;
+        }
+        return null;
+    };
+    const openBtn = findBtn(tooltip);
+    expect(openBtn?.dataset.tooltipOpenRun).toBe('run-1');
+    openBtn.emit('click', { stopPropagation() {} });
+    expect(f.openedRuns).toEqual(['run-1']);
+
+    // Clicking the same point again deselects it and unpins the tooltip
+    point1.emit('click', { stopPropagation() {} });
+    expect(f.selections).toEqual(['p1', null]);
+    expect(tooltip.hidden).toBe(true);
+    expect(tooltip.classList.contains('is-pinned')).toBe(false);
+
+    // Re-clicking selects and pins it again; blank click closes pinned tooltip without box-selecting
+    point1.emit('click', { stopPropagation() {} });
+    expect(f.selections).toEqual(['p1', null, 'p1']);
+    expect(tooltip.hidden).toBe(false);
+    expect(tooltip.classList.contains('is-pinned')).toBe(true);
+    expect(svg.classList.contains('is-pannable')).toBe(false);
+    svg.emit('pointerdown', { button: 0, pointerId: 1, clientX: 500, clientY: 40 });
+    svg.emit('pointermove', { pointerId: 1, clientX: 860, clientY: 160 });
+    svg.emit('pointerup', { pointerId: 1, clientX: 860, clientY: 160 });
+    expect(chartFixtureNodes(f, 'score-cost-point')).toHaveLength(2);
+    expect(chartFixtureNodes(f, 'chart-brush-rect')).toHaveLength(0);
+    expect(tooltip.hidden).toBe(true);
+
+    // Clicking a point selected externally via options.selectedIds also toggles it off
+    f.chart.render(rows, { axis: 'duration', log: false, selectedIds: ['p2'] });
+    const point2 = chartFixtureNodes(f, 'score-cost-point').find(node => node.attributes['data-record-id'] === 'p2');
+    point2.emit('click', { stopPropagation() {} });
+    expect(f.selections).toEqual(['p1', null, 'p1', null]);
+    expect(tooltip.hidden).toBe(true);
+    f.chart.render(rows, { axis: 'duration', log: false, selectedIds: [] });
+
+    // Wheel zoom in right over p2 keeps p2 anchored under the cursor while excluding p1
+    const p2Marker = chartFixtureNodes(f, 'record-marker').at(-1);
+    const p2X = Number(p2Marker.attributes.cx);
+    const p2Y = Number(p2Marker.attributes.cy);
+    let prevented = false;
+    for (let i = 0; i < 2; i++) {
+        svg.emit('wheel', {
+            clientX: p2X,
+            clientY: p2Y,
+            deltaY: -200,
+            deltaMode: 0,
+            preventDefault() {
+                prevented = true;
+            }
+        });
+    }
+    expect(prevented).toBe(true);
+    expect(svg.classList.contains('is-pannable')).toBe(true);
+    expect(chartFixtureNodes(f, 'score-cost-point').map(n => n.attributes['data-record-id'])).toEqual(['p2']);
+    const p2After = chartFixtureNodes(f, 'record-marker')[0];
+    expect(Math.abs(Number(p2After.attributes.cx) - p2X)).toBeLessThan(1.5);
+    expect(Math.abs(Number(p2After.attributes.cy) - p2Y)).toBeLessThan(1.5);
+
+    // A small drag moves the point 1:1 with the pointer (drag right -> cx increases, drag up -> cy decreases)
+    const beforePanX = Number(p2After.attributes.cx);
+    const beforePanY = Number(p2After.attributes.cy);
+    svg.emit('pointerdown', { button: 0, pointerId: 2, clientX: 400, clientY: 200 });
+    svg.emit('pointermove', { pointerId: 2, clientX: 460, clientY: 160 });
+    expect(svg.classList.contains('is-panning')).toBe(true);
+    const p2MidPan = chartFixtureNodes(f, 'record-marker')[0];
+    expect(Number(p2MidPan.attributes.cx)).toBeGreaterThan(beforePanX + 30);
+    expect(Number(p2MidPan.attributes.cy)).toBeLessThan(beforePanY - 20);
+    svg.emit('pointerup', { pointerId: 2, clientX: 460, clientY: 160 });
+    expect(svg.classList.contains('is-panning')).toBe(false);
+
+    // Continuing to drag right & up pans all the way to p1 (lower cost & lower score)
+    for (let i = 0; i < 3; i++) {
+        svg.emit('pointerdown', { button: 0, pointerId: 3 + i, clientX: 100, clientY: 320 });
+        svg.emit('pointermove', { pointerId: 3 + i, clientX: 820, clientY: 60 });
+        svg.emit('pointerup', { pointerId: 3 + i, clientX: 820, clientY: 60 });
+    }
+    expect(chartFixtureNodes(f, 'score-cost-point').map(n => n.attributes['data-record-id'])).toEqual(['p1']);
+
+    // Double click resets zoom to both points and clears pannable state
+    svg.emit('dblclick', {});
+    expect(svg.classList.contains('is-pannable')).toBe(false);
+    expect(chartFixtureNodes(f, 'score-cost-point')).toHaveLength(2);
+});
+
+test('tooltip anchors near the active point without covering it and flips side near chart edges', () => {
+    const f = chartResizeFixture();
+    const tooltip = f.container.children[1];
+    tooltip.offsetWidth = 348;
+    tooltip.offsetHeight = 176;
+    const baseRows = [
+        {
+            id: 'mid-left',
+            source: 'run',
+            run_id: 'r-left',
+            model: 'gpt-6.1-terra',
+            modelDisplayName: 'GPT-6.1 Terra',
+            provider: 'codex',
+            providerName: 'homelab / codex',
+            account: 'acc',
+            think: 'high',
+            created_at: '2026-11-19T12:00:00Z',
+            cost: 0.25,
+            score: 76,
+            rounds: 3,
+            batch_id: 'b1'
+        },
+        {
+            id: 'top-right',
+            source: 'run',
+            run_id: 'r-top',
+            model: 'gpt-6.1-terra',
+            modelDisplayName: 'GPT-6.1 Terra',
+            provider: 'codex',
+            providerName: 'homelab / codex',
+            account: 'acc',
+            think: 'max',
+            created_at: '2026-11-19T12:00:00Z',
+            cost: 0.9,
+            score: 94,
+            rounds: 3,
+            batch_id: 'b1'
+        }
+    ];
+    f.chart.render(baseRows, { axis: 'cost', log: false });
+    const leftPoint = chartFixtureNodes(f, 'score-cost-point').find(node => node.attributes['data-record-id'] === 'mid-left');
+    const leftMarker = leftPoint.children.find(node => node.attributes.class?.includes('record-marker'));
+    const leftX = Number(leftMarker.attributes.cx);
+    leftPoint.emit('pointerenter');
+    const leftCardX = Number.parseFloat(tooltip.style.left);
+    // Anchors directly beside the hovered point instead of jumping to the far corner.
+    expect(leftCardX).toBeGreaterThanOrEqual(leftX + 12);
+    expect(leftCardX).toBeLessThanOrEqual(leftX + 40);
+
+    // Pinning keeps the tooltip steady even if the pointer brushes another dot on the way to the card.
+    leftPoint.emit('click', { stopPropagation() {} });
+    expect(tooltip.classList.contains('is-pinned')).toBe(true);
+    const pinnedLeft = tooltip.style.left;
+    const topRightPoint = chartFixtureNodes(f, 'score-cost-point').find(node => node.attributes['data-record-id'] === 'top-right');
+    topRightPoint.emit('pointerenter');
+    expect(tooltip.style.left).toBe(pinnedLeft);
+    expect(tooltip.classList.contains('is-pinned')).toBe(true);
+    leftPoint.emit('click', { stopPropagation() {} });
+    expect(tooltip.hidden).toBe(true);
+
+    // When the active point sits near the right edge, the card flips to its left side while staying close.
+    f.chart.render(
+        [
+            ...baseRows,
+            {
+                id: 'bottom-right',
+                source: 'run',
+                run_id: 'r-br',
+                model: 'slow-model',
+                modelDisplayName: 'Slow Model',
+                provider: 'slow',
+                providerName: 'homelab / slow',
+                account: 'acc',
+                think: 'high',
+                created_at: '2026-11-19T12:00:00Z',
+                cost: 1.0,
+                score: 40,
+                rounds: 3
+            }
+        ],
+        { axis: 'cost', log: false }
+    );
+    const brPoint = chartFixtureNodes(f, 'score-cost-point').find(node => node.attributes['data-record-id'] === 'bottom-right');
+    const brMarker = brPoint.children.find(node => node.attributes.class?.includes('record-marker'));
+    const brX = Number(brMarker.attributes.cx);
+    brPoint.emit('pointerenter');
+    const brCardX = Number.parseFloat(tooltip.style.left);
+    expect(brCardX + tooltip.offsetWidth).toBeLessThanOrEqual(brX - 10);
+    expect(brCardX + tooltip.offsetWidth).toBeGreaterThanOrEqual(brX - 40);
+});
+
+test('all anomaly categories show amber badges, list details in tooltip, and stay off the Pareto frontier', () => {
+    const f = chartResizeFixture();
+    const tooltip = f.container.children.find(node => node.className === 'score-cost-tooltip');
+    const collectText = node => {
+        if (!node) return '';
+        return [node.textContent || '', ...(node.children || []).map(collectText)].join('');
+    };
+    const rows = [
+        {
+            id: 'anomalous-top',
+            source: 'run',
+            run_id: 'r-anom',
+            model: 'Anom Model',
+            provider: 'ch',
+            account: 'acc',
+            think: 'high',
+            created_at: '2026-11-19T12:00:00Z',
+            cost: 0.05,
+            score: 99,
+            rounds: 1,
+            anomalies: {
+                timedOut: 1,
+                endedAfterSubmission: 1,
+                noSubmission: 1,
+                usageIncomplete: null,
+                items: [
+                    '1 个样本超时（按 0 分计）',
+                    '1 个样本提交答案后异常中止（按最后一次提交评分）',
+                    '1 个样本未调用 submit_answer 提交（按 0 分计）'
+                ],
+                hasAny: true,
+                summary:
+                    '1 个样本超时（按 0 分计）；1 个样本提交答案后异常中止（按最后一次提交评分）；1 个样本未调用 submit_answer 提交（按 0 分计）'
+            }
+        },
+        {
+            id: 'usage-only-top',
+            source: 'run',
+            run_id: 'r-usage',
+            model: 'Usage Gap Model',
+            provider: 'ch',
+            account: 'acc',
+            think: 'high',
+            created_at: '2026-11-19T12:00:00Z',
+            cost: 0.08,
+            score: 95,
+            rounds: 1,
+            usageIncomplete: { cost: 0.08, unknownAttempts: 2, attempts: 12 }
+        },
+        {
+            id: 'clean-frontier',
+            source: 'run',
+            run_id: 'r-clean',
+            model: 'Clean Model',
+            provider: 'ch',
+            account: 'acc',
+            think: 'high',
+            created_at: '2026-11-19T12:00:00Z',
+            cost: 0.2,
+            score: 80,
+            rounds: 1
+        }
+    ];
+    f.chart.render(rows, { axis: 'cost', log: false, pareto: true });
+    const points = chartFixtureNodes(f, 'score-cost-point');
+    const anomPoint = points.find(node => node.attributes['data-record-id'] === 'anomalous-top');
+    const usagePoint = points.find(node => node.attributes['data-record-id'] === 'usage-only-top');
+    const cleanPoint = points.find(node => node.attributes['data-record-id'] === 'clean-frontier');
+
+    // Both anomalous records get amber badge and data-has-anomalies; clean record does not.
+    expect(anomPoint.attributes['data-has-anomalies']).toBe('true');
+    expect(anomPoint.children.some(child => child.attributes.class?.includes('record-anomaly-badge'))).toBe(true);
+    expect(usagePoint.attributes['data-has-anomalies']).toBe('true');
+    expect(usagePoint.attributes['data-usage-incomplete']).toBe('true');
+    expect(usagePoint.children.some(child => child.attributes.class?.includes('record-anomaly-badge'))).toBe(true);
+    expect(cleanPoint.attributes['data-has-anomalies']).toBeUndefined();
+    expect(cleanPoint.children.some(child => child.attributes.class?.includes('record-anomaly-badge'))).toBe(false);
+
+    // Pareto frontier includes ONLY clean-frontier, never the higher-scoring/cheaper anomalous points.
+    const frontier = chartFixtureNodes(f, 'pareto-frontier')[0];
+    const cleanMarker = cleanPoint.children.find(node => node.attributes.class?.includes('record-marker'));
+    const frontierPts = frontier.attributes.points
+        .split(' ')
+        .slice(0, -1)
+        .map(pair => pair.split(',').map(Number));
+    expect(frontierPts).toEqual([[Number(cleanMarker.attributes.cx), Number(cleanMarker.attributes.cy)]]);
+
+    // Hovering anomalous point displays unified header and all specific anomaly reasons.
+    anomPoint.emit('pointerenter');
+    const tooltipText = collectText(tooltip);
+    expect(tooltipText).toContain('含异常项（不参与前沿）');
+    expect(tooltipText).toContain('1 个样本超时（按 0 分计）');
+    expect(tooltipText).toContain('1 个样本提交答案后异常中止（按最后一次提交评分）');
+    expect(tooltipText).toContain('1 个样本未调用 submit_answer 提交（按 0 分计）');
+    f.chart.destroy();
 });

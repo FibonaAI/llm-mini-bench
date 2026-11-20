@@ -8,7 +8,7 @@
   await chooseData('all');require(await page.locator('.score-cost-point').count()===16,'All history lost repeated evaluations');
   await point('history-15').focus();
   const overlapCard=page.locator('.score-cost-tooltip');await overlapCard.waitFor({state:'visible'});
-  const overlapText=await overlapCard.innerText();require(overlapText.includes('时间')&&overlapText.includes('共 16 条记录')&&overlapText.includes(' 至 '),'Stable overlap needs a bounded date range and count');
+  const overlapText=await overlapCard.innerText();require(/2026[/-]11[/-]16/.test(overlapText)&&overlapText.includes('共 16 条记录')&&overlapText.includes(' 至 '),'Stable overlap needs a bounded date range and count');
   require(await overlapCard.locator('.score-cost-tooltip-overlap').count()===1&&(await overlapCard.locator('.score-cost-tooltip-overlap').innerText()).length<100,'Overlap card expanded into a long history list');
   require(await point('history-15').getAttribute('data-overlap-count')==='16','Overlap count omitted hidden coincident markers');
   await page.locator('#chart-card').screenshot({path:ARTIFACTS+'/history-overlap.png'});

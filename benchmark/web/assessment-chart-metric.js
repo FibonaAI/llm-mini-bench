@@ -24,6 +24,9 @@ export function assessmentChartMetric(record, expectedTaskIds, axis = 'cost', ba
   const expected = new Set(expectedTaskIds),
     seen = new Set();
   let total = 0;
+  let elapsedSum = 0,
+    allElapsedValid = true;
+  const valid = value => typeof value === 'number' && Number.isFinite(value) && value >= 0;
   for (const task of record.tasks) {
     if (!task || !expected.has(task.task_id) || seen.has(task.task_id)) return exclude('题目 ID 缺失、重复或不属于正式题库');
     seen.add(task.task_id);
@@ -33,20 +36,22 @@ export function assessmentChartMetric(record, expectedTaskIds, axis = 'cost', ba
       if (!sample || !Number.isInteger(sample.round) || sample.round < 1 || sample.round > record.rounds || rounds.has(sample.round))
         return exclude('样本轮次缺失、重复或越界');
       rounds.add(sample.round);
-      if (sample.status !== 'completed') return exclude('存在未完成或失败样本');
-      if (
-        typeof sample.content_score !== 'number' ||
-        !Number.isFinite(sample.content_score) ||
-        sample.content_score < 0 ||
-        sample.content_score > 1
-      )
+      if (sample.status !== 'completed' && sample.status !== 'timeout') return exclude('存在未完成或失败样本');
+      const scoreValue = sample.status === 'timeout' && sample.content_score === null ? 0 : sample.content_score;
+      if (typeof scoreValue !== 'number' || !Number.isFinite(scoreValue) || scoreValue < 0 || scoreValue > 1)
         return exclude(observationQualitySummary(record).text || '存在缺失或无效内容分');
-      total += sample.content_score;
+      total += scoreValue;
+      if (valid(sample.elapsed_seconds)) elapsedSum += sample.elapsed_seconds;
+      else allElapsedValid = false;
     }
   }
-  const valid = value => typeof value === 'number' && Number.isFinite(value) && value >= 0;
   const usage = record.usage,
     score = (total / (taskCount * record.rounds)) * 100;
+  if (axis === 'duration') {
+    const elapsed = valid(record.elapsed_seconds) ? record.elapsed_seconds : allElapsedValid ? elapsedSum : null;
+    if (!valid(elapsed)) return { score, cost: null, exclusionReason: '未记录完整执行耗时', usageLowerBound: null };
+    return { score, cost: elapsed / record.rounds, exclusionReason: null, usageLowerBound: null };
+  }
   const usageGap = reason => ({ score, cost: null, exclusionReason: reason, usageLowerBound: usageLowerBound(record, axis) });
   if (axis === 'tokens' && (!valid(usage?.input_tokens) || !valid(usage?.output_tokens))) return usageGap(usageGapReason(record, axis));
   if (axis !== 'tokens' && !valid(record.estimated_cost_usd)) return usageGap(usageGapReason(record, axis));
@@ -90,7 +95,8 @@ function usageLowerBound(record, axis) {
 /** Human-readable sample-level quality counts for one observation; never a score. */
 export function observationQualitySummary(record, { includeUsage = true } = {}) {
   const samples = (record?.tasks || []).flatMap(task => (task.samples || []).map(sample => ({ ...sample, task_id: task.task_id })));
-  const failed = samples.filter(sample => sample.status !== 'completed');
+  const timedOut = samples.filter(sample => sample.status === 'timeout');
+  const failed = samples.filter(sample => sample.status !== 'completed' && sample.status !== 'timeout');
   const unscored = samples.filter(
     sample => sample.status === 'completed' && !(typeof sample.content_score === 'number' && Number.isFinite(sample.content_score))
   );
@@ -98,7 +104,7 @@ export function observationQualitySummary(record, { includeUsage = true } = {}) 
   const failedStatus = {};
   for (const sample of failed) failedStatus[sample.status ?? 'unknown'] = (failedStatus[sample.status ?? 'unknown'] ?? 0) + 1;
   const statusText = {
-    api_failure: 'API 失败或超时',
+    api_failure: 'API 失败',
     cancelled: '已取消',
     pending: '未执行',
     queued: '未执行',
@@ -108,6 +114,7 @@ export function observationQualitySummary(record, { includeUsage = true } = {}) 
     interrupted: '已中断'
   };
   const parts = [];
+  if (timedOut.length > 0) parts.push(`${timedOut.length} 个样本超时（按 0 分计）`);
   for (const [status, count] of Object.entries(failedStatus)) {
     const label = statusText[status] ?? status;
     parts.push(`${count} 个样本${/^[A-Za-z]/.test(label) ? ' ' : ''}${label}`);
@@ -118,5 +125,63 @@ export function observationQualitySummary(record, { includeUsage = true } = {}) 
   if (otherUnscored > 0) parts.push(`${otherUnscored} 个样本评分缺失`);
   const unknown = record?.usage_accounting?.unknown_cost_attempts;
   if (includeUsage && Number.isInteger(unknown) && unknown > 0) parts.push(`${unknown} 次尝试未返回用量`);
-  return { failed: failed.length, unscored: unscored.length, retryable: failedStatus.api_failure ?? 0, text: parts.join(' · ') };
+  return {
+    failed: failed.length,
+    timedOut: timedOut.length,
+    unscored: unscored.length,
+    retryable: (failedStatus.api_failure ?? 0) + timedOut.length + (failedStatus.interrupted ?? 0) + (failedStatus.cancelled ?? 0),
+    text: parts.join(' · ')
+  };
+}
+
+/**
+ * Scan sample-level anomalies that affect plotted score/usage once per observation response.
+ * Cached by analysis-model so presentation changes never rescan task samples.
+ */
+export function observationSampleAnomalies(record) {
+  let timedOut = 0,
+    endedAfterSubmission = 0,
+    noSubmission = 0;
+  for (const task of record?.tasks || []) {
+    for (const sample of task?.samples || []) {
+      if (!sample) continue;
+      if (sample.status === 'timeout') {
+        timedOut++;
+        continue;
+      }
+      if (sample.status !== 'completed') continue;
+      if (typeof sample.ended_after_submission === 'string' && sample.ended_after_submission.trim()) endedAfterSubmission++;
+      if (sample.outcome === 'no_submission') noSubmission++;
+    }
+  }
+  return { timedOut, endedAfterSubmission, noSubmission };
+}
+
+/** Combine cached sample anomalies with active usage lower-bound state without rescanning tasks. */
+export function buildObservationAnomalies(sampleAnomalies, usageIncomplete = null) {
+  const timedOut = Number.isInteger(sampleAnomalies?.timedOut) && sampleAnomalies.timedOut > 0 ? sampleAnomalies.timedOut : 0;
+  const endedAfterSubmission =
+    Number.isInteger(sampleAnomalies?.endedAfterSubmission) && sampleAnomalies.endedAfterSubmission > 0
+      ? sampleAnomalies.endedAfterSubmission
+      : 0;
+  const noSubmission =
+    Number.isInteger(sampleAnomalies?.noSubmission) && sampleAnomalies.noSubmission > 0 ? sampleAnomalies.noSubmission : 0;
+  const items = [];
+  if (timedOut > 0) items.push(`${timedOut} 个样本超时（按 0 分计）`);
+  if (endedAfterSubmission > 0) items.push(`${endedAfterSubmission} 个样本提交答案后异常中止（按最后一次提交评分）`);
+  if (noSubmission > 0) items.push(`${noSubmission} 个样本未调用 submit_answer 提交（按 0 分计）`);
+  const activeUsageIncomplete =
+    usageIncomplete && Number.isInteger(usageIncomplete.unknownAttempts) && usageIncomplete.unknownAttempts > 0 ? usageIncomplete : null;
+  if (activeUsageIncomplete) {
+    items.push(`用量不完整：${activeUsageIncomplete.unknownAttempts} 次请求尝试未返回用量，横坐标按已知下限绘制`);
+  }
+  return {
+    timedOut,
+    endedAfterSubmission,
+    noSubmission,
+    usageIncomplete: activeUsageIncomplete,
+    items,
+    hasAny: items.length > 0,
+    summary: items.join('；')
+  };
 }

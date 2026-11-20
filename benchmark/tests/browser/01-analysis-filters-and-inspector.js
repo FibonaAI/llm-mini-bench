@@ -68,9 +68,13 @@
   await page.locator('#analysis-source').selectOption('all');require(await point('peer').count()===1,'Thinking/source selections coupled');
   require(await page.locator('#observation-select').count()===0,'Results dropdown must not return');
   await point('baseline-fixture').evaluate(node=>node.dispatchEvent(new MouseEvent('click',{bubbles:true})));
-  require(await page.locator('#model-inspector').isVisible(),'Inspector missing');
+  require(await page.locator('#model-inspector').isVisible()&&await point('baseline-fixture').getAttribute('aria-pressed')==='true','Inspector missing');
+  await point('baseline-fixture').evaluate(node=>node.dispatchEvent(new MouseEvent('click',{bubbles:true})));
+  require(await page.locator('#model-inspector').isHidden()&&await point('baseline-fixture').getAttribute('aria-pressed')==='false'&&await page.locator('.score-cost-tooltip').isHidden(),'Repeat click on selected point must deselect it');
+  await point('baseline-fixture').evaluate(node=>node.dispatchEvent(new MouseEvent('click',{bubbles:true})));
+  require(await page.locator('#model-inspector').isVisible(),'Inspector missing after re-select');
   require(await page.locator('#model-inspector').evaluate(node=>node.getBoundingClientRect().top>=document.querySelector('#chart-card').getBoundingClientRect().bottom),'Clicked details must not overlay the chart');
-  require(await page.locator('#inspector-content .run-item').count()===14,'Inspector must retain all14 tasks');
+  require(await page.locator('#inspector-content .run-item').count()===12,'Inspector must retain all 12 tasks');
   await page.locator('#inspector-content .run-item summary').first().click();require((await page.locator('#inspector-content').innerText()).includes('指令检查'),'Instruction checks missing');
   await page.locator('[data-load-evidence="baseline-fixture"]').click();
   await page.waitForFunction(()=>document.querySelector('#inspector-content').textContent.includes('saved raw evidence'));

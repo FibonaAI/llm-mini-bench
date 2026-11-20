@@ -91,7 +91,9 @@ export function createAppContext(services, eventTarget) {
     },
     /** Only membership is shared with analysis; history must not rewrite observations. */
     setHistory(tasks) {
-      runTaskIds = new Map(tasks.flatMap(task => (task.children || []).map(child => [child.run_id, task.id])));
+      const next = new Map(tasks.flatMap(task => (task.children || []).map(child => [child.run_id, task.id])));
+      if (next.size === runTaskIds.size && [...next].every(([runId, taskId]) => runTaskIds.get(runId) === taskId)) return;
+      runTaskIds = next;
       emit('mini-bench:history-changed');
     },
     /** Install the target controller once, before task configuration is initialized. */

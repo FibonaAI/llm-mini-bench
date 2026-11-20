@@ -28,33 +28,46 @@ export function placeThinkingLabels(candidates, bounds) {
 }
 
 const intersects = (a, b) => a.x < b.x + b.w && a.x + a.w > b.x && a.y < b.y + b.h && a.y + a.h > b.y;
-/** Place model names near their anchors within a width-based label budget; details retain omitted names. */
+/** Place concise labels near their anchors within a collision-checked budget; details retain omitted names. */
 export function placeChartLabels(candidates, points, bounds) {
-  const occupied = points.map(point => ({ x: point.x - 9, y: point.y - 9, w: 18, h: 18 }));
+  const occupied = points.map(point => ({ x: point.x - 7, y: point.y - 7, w: 14, h: 14 }));
   const placed = [],
     placedGroups = new Set();
   for (const candidate of candidates) {
     if (placed.length >= (bounds.maxLabels ?? Infinity)) break;
     if (candidate.group && placedGroups.has(candidate.group)) continue;
+    const w = candidate.width,
+      h = 14;
+    const positions = [
+      { x: candidate.x + 10, y: candidate.y - h / 2 },
+      { x: candidate.x + 9, y: candidate.y - h - 8 },
+      { x: candidate.x + 9, y: candidate.y + 9 },
+      { x: candidate.x - w - 10, y: candidate.y - h / 2 },
+      { x: candidate.x - w / 2, y: candidate.y - h - 8 },
+      { x: candidate.x - w / 2, y: candidate.y + 9 },
+      { x: candidate.x - w - 9, y: candidate.y - h - 8 },
+      { x: candidate.x - w - 9, y: candidate.y + 9 },
+      { x: candidate.x + 10, y: candidate.y - h - 18 },
+      { x: candidate.x + 10, y: candidate.y + 19 },
+      { x: candidate.x - w - 10, y: candidate.y - h - 18 },
+      { x: candidate.x - w - 10, y: candidate.y + 19 }
+    ];
     let chosen;
-    for (const dy of [20, -20, 30, -30, 44, -44]) {
-      for (const dx of [12, -candidate.width - 12, -candidate.width / 2]) {
-        const box = { x: candidate.x + dx, y: candidate.y + dy - 11, w: candidate.width, h: 15 };
-        if (
-          box.x < bounds.left ||
-          box.x + box.w > bounds.right ||
-          box.y < bounds.top ||
-          box.y + box.h > bounds.bottom ||
-          occupied.some(other => (!candidate.selected || other.label) && intersects(box, other))
-        )
-          continue;
-        chosen = box;
-        break;
-      }
-      if (chosen) break;
+    for (const pos of positions) {
+      const box = { x: pos.x, y: pos.y, w, h };
+      if (
+        box.x < bounds.left ||
+        box.x + box.w > bounds.right ||
+        box.y < bounds.top ||
+        box.y + box.h > bounds.bottom ||
+        occupied.some(other => (!candidate.selected || other.label) && intersects(box, other))
+      )
+        continue;
+      chosen = box;
+      break;
     }
     if (!chosen) continue;
-    occupied.push({ x: chosen.x - 5, y: chosen.y - 4, w: chosen.w + 10, h: chosen.h + 8, label: true });
+    occupied.push({ x: chosen.x - 3, y: chosen.y - 2, w: chosen.w + 6, h: chosen.h + 4, label: true });
     placed.push({ ...candidate, box: chosen });
     if (candidate.group) placedGroups.add(candidate.group);
   }

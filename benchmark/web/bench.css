@@ -921,6 +921,10 @@ input::placeholder {
   color: var(--readable-muted);
   outline: 1px dashed var(--line);
 }
+.sample-chip.is-anomaly {
+  outline: 1px dashed var(--amber, #b45309);
+  outline-offset: -1px;
+}
 .inspector-heading {
   display: flex;
   align-items: flex-start;
@@ -1114,15 +1118,42 @@ input::placeholder {
   line-height: 1.6;
 }
 .run-list-status {
-  color: var(--muted);
+  display: inline-flex;
+  align-items: center;
+  padding: 2px 8px;
+  border-radius: 999px;
+  background: var(--pill);
+  color: var(--readable-muted);
   white-space: nowrap;
-  font-size: 12px;
+  font-size: 11px;
+  font-weight: 500;
+  line-height: 1.4;
+}
+.run-list-status.is-completed {
+  background: var(--green-soft, rgba(24, 154, 88, 0.14));
+  color: var(--green, #189a58);
 }
 .run-list-status.is-running {
+  background: var(--accent-soft, rgba(79, 70, 229, 0.12));
   color: var(--accent);
 }
+.run-list-status.is-timeout,
+.run-list-status.is-incomplete {
+  background: var(--amber-soft, rgba(180, 83, 9, 0.12));
+  color: var(--amber, #b45309);
+}
+.run-list-status.is-interrupted {
+  background: rgba(139, 92, 246, 0.12);
+  color: var(--c6, #7c3aed);
+}
 .run-list-status.is-failed {
+  background: var(--red-soft, rgba(214, 69, 69, 0.12));
   color: var(--red);
+  font-weight: 600;
+}
+.run-list-status.is-cancelled {
+  background: var(--pill);
+  color: var(--fg-2);
 }
 #bench-run-detail {
   padding: 0 18px 16px;
@@ -1402,6 +1433,167 @@ th {
 #bench-task-detail {
   padding: 0 18px;
 }
+.task-preview {
+  display: grid;
+  border-top: 1px solid var(--line-2);
+}
+.task-preview-group {
+  padding: 10px 0;
+  border-bottom: 1px solid var(--line-2);
+  scroll-margin-top: 16px;
+}
+.bench-task-section,
+.bench-run-section,
+.history-entry {
+  scroll-margin-top: 16px;
+}
+.task-preview-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 4px 12px;
+}
+.task-preview-head strong {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--fg);
+  overflow-wrap: anywhere;
+}
+.task-preview-stats {
+  color: var(--readable-muted);
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+  overflow-wrap: anywhere;
+}
+.task-preview-runs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 8px;
+}
+.task-preview-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  max-width: 100%;
+  min-height: 26px;
+  padding: 3px 9px;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  background: var(--pill);
+  color: var(--fg-2);
+  font: inherit;
+  font-size: 11px;
+  line-height: 1.35;
+  font-variant-numeric: tabular-nums;
+  text-align: left;
+  cursor: pointer;
+}
+.task-preview-chip-label {
+  overflow-wrap: anywhere;
+}
+.task-preview-chip-state {
+  font-weight: 600;
+  white-space: nowrap;
+}
+.task-preview-chip.is-completed {
+  background: var(--green-soft, rgba(24, 154, 88, 0.14));
+  color: var(--green, #189a58);
+}
+.task-preview-chip.is-running {
+  background: var(--accent-soft, rgba(79, 70, 229, 0.12));
+  color: var(--accent);
+}
+.task-preview-chip.is-queued {
+  background: var(--pill);
+  color: var(--readable-muted);
+}
+.task-preview-chip.is-timeout {
+  background: var(--amber-soft, rgba(180, 83, 9, 0.12));
+  color: var(--amber, #b45309);
+}
+.task-preview-chip.is-failed {
+  background: var(--red-soft, rgba(214, 69, 69, 0.12));
+  color: var(--red);
+}
+.task-preview-chip.is-interrupted {
+  background: rgba(139, 92, 246, 0.12);
+  color: var(--c6, #7c3aed);
+}
+.task-preview-chip.is-cancelled {
+  background: var(--pill);
+  color: var(--fg-2);
+}
+.task-preview-chip.is-selected {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 1px var(--accent-soft, rgba(79, 70, 229, 0.2));
+}
+.task-preview-chip:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+@media (hover: hover) {
+  .task-preview-chip:hover:not(:disabled) {
+    border-color: currentColor;
+    filter: brightness(0.97);
+  }
+}
+.task-preview-slot .bench-run-section {
+  margin-top: 10px;
+  border: 1px solid var(--line-2);
+  border-radius: 7px;
+  overflow: hidden;
+}
+.task-preview-legend {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px 12px;
+  margin: 8px 0 4px;
+  color: var(--readable-muted);
+  font-size: 11px;
+}
+.task-preview-legend-item {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+}
+.task-preview-swatch {
+  display: inline-block;
+  width: 8px;
+  height: 8px;
+  border-radius: 999px;
+  background: var(--muted);
+}
+.task-preview-swatch.is-completed {
+  background: var(--green, #189a58);
+}
+.task-preview-swatch.is-running {
+  background: var(--accent);
+}
+.task-preview-swatch.is-queued {
+  background: var(--muted);
+}
+.task-preview-swatch.is-timeout {
+  background: var(--amber, #b45309);
+}
+.task-preview-swatch.is-failed {
+  background: var(--red, #d64545);
+}
+.task-preview-swatch.is-interrupted {
+  background: var(--c6, #7c3aed);
+}
+.task-preview-swatch.is-cancelled {
+  background: var(--fg-2);
+}
+.task-all-runs {
+  margin-top: 10px;
+}
+.task-all-runs .task-child-list {
+  padding: 0 12px;
+  background: var(--card);
+}
 .task-child-list {
   border-top: 1px solid var(--line-2);
 }
@@ -1573,12 +1765,32 @@ th {
   background: var(--amber-soft, rgba(180, 83, 9, 0.1));
   color: var(--amber, #b45309);
 }
-.sample-cell.is-zero,
-.sample-cell.is-failed {
+.sample-cell.is-zero {
   background: var(--red-soft, rgba(220, 38, 38, 0.1));
   color: var(--red, #b91c1c);
 }
+.sample-cell.is-timeout {
+  background: var(--amber-soft, rgba(180, 83, 9, 0.12));
+  color: var(--amber, #b45309);
+  font-weight: 600;
+}
+.sample-cell.is-interrupted {
+  background: rgba(139, 92, 246, 0.12);
+  color: var(--c6, #7c3aed);
+  font-weight: 600;
+}
+.sample-cell.is-cancelled {
+  background: var(--pill);
+  color: var(--fg-2);
+}
+.sample-cell.is-running {
+  background: var(--accent-soft, rgba(79, 70, 229, 0.12));
+  color: var(--accent);
+  font-weight: 600;
+}
 .sample-cell.is-failed {
+  background: var(--red-soft, rgba(220, 38, 38, 0.12));
+  color: var(--red, #b91c1c);
   font-weight: 600;
 }
 .sample-cell.is-unscored {

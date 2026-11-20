@@ -89,3 +89,28 @@ test('record data is escaped in text and attributes; empty list stays explicit',
     expect(html).toContain('data-inspect-observation="&quot; onclick=&quot;alert(1)"');
     expect(renderAnalysisRecordList([], options)).toContain('没有匹配结果');
 });
+
+test('plotted records with anomalies list all anomaly details and offer retry for timed-out runs', async () => {
+    const html = renderAnalysisRecordList(
+        [
+            {
+                ...record,
+                run_id: 'run-timeout',
+                anomalies: {
+                    timedOut: 2,
+                    endedAfterSubmission: 0,
+                    noSubmission: 1,
+                    usageIncomplete: null,
+                    items: ['2 个样本超时（按 0 分计）', '1 个样本未调用 submit_answer 提交（按 0 分计）'],
+                    hasAny: true,
+                    summary: '2 个样本超时（按 0 分计）；1 个样本未调用 submit_answer 提交（按 0 分计）'
+                }
+            }
+        ],
+        options
+    );
+    const text = await visibleText(html);
+    expect(text).toContain('含异常项：2 个样本超时（按 0 分计）；1 个样本未调用 submit_answer 提交（按 0 分计）');
+    expect(html).toContain('data-open-run="run-timeout"');
+    expect(text).toContain('去任务页重试');
+});

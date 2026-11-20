@@ -14,11 +14,25 @@ const route = (id, provider_id) => ({
 });
 test('catalog provider instance IDs are exact and independent of human labels', () => {
     const records = routePickerLeaves([route('a', 'chatgpt-api'), route('b', 'chatgpt-api-2')]);
-    expect(new Set(records.map(selectionKey)).size).toBe(6);
+    expect(new Set(records.map(selectionKey)).size).toBe(4);
+    expect(records.some(r => r.think === 'default')).toBe(false);
     expect(new Set(records.map(r => r.providerId))).toEqual(new Set(['provider:chatgpt-api', 'provider:chatgpt-api-2']));
     expect(records.every(r => r.account.includes('账号未记录') && r.providerType === '')).toBe(true);
     expect(records[0].model).toBe('remote-magpie/openai/same-model');
     expect(records[0].modelDisplayName).toBe('Same model');
+});
+test('models without levels offer only default; models with levels never offer default', () => {
+    const records = routePickerLeaves([
+        { ...route('plain', 'chatgpt-api'), thinking_levels: [] },
+        { ...route('missing', 'chatgpt-api'), thinking_levels: undefined },
+        { ...route('reserved', 'chatgpt-api'), thinking_levels: ['default', 'mixed'] },
+        route('levels', 'chatgpt-api')
+    ]);
+    const by = id => records.filter(r => r.routeId === id).map(r => r.think);
+    expect(by('plain')).toEqual(['default']);
+    expect(by('missing')).toEqual(['default']);
+    expect(by('reserved')).toEqual(['default']);
+    expect(by('levels')).toEqual(['high', 'low']);
 });
 test('nested model names do not create a provider or verified account', () => {
     const [record] = routePickerLeaves([route('a', undefined)]);
@@ -47,7 +61,7 @@ test('explicit configured bindings and anonymous routes stay separate', () => {
     const a = { id: 'explicit-a', model: 'same', account_ref: 'configured-account', thinking_levels: ['high'] };
     const b = { ...a, id: 'explicit-b' };
     const records = routePickerLeaves([a, b]);
-    expect(new Set(records.map(selectionKey)).size).toBe(4);
+    expect(new Set(records.map(selectionKey)).size).toBe(2);
     expect(records.every(r => r.account === 'configured-account（配置绑定）')).toBe(true);
     const unknown = observationPickerRecords([
         { id: 'old-1', model: 'same', thinking: 'high' },
@@ -78,7 +92,7 @@ test('remote namespaces group by outer provider instance and namespace without c
     expect(records[0].provider).toBe('远端路由目录');
     expect(records.every(record => record.providerType === '' && record.accountDisplayId === '实际账号未记录')).toBe(true);
     expect(records.filter(record => record.routeId === 'c').every(record => record.model === 'another/exact/model')).toBe(true);
-    expect(new Set(records.map(selectionKey)).size).toBe(9);
+    expect(new Set(records.map(selectionKey)).size).toBe(6);
     expect(input).toEqual(before);
 });
 test('inner auto and group are labeled as routing constructs, unknown namespaces remain neutral', () => {

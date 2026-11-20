@@ -36,6 +36,7 @@ function fixture() {
         samples: []
     }));
     let state,
+        refreshHistory,
         renders = 0,
         defer;
     const app = {
@@ -73,7 +74,10 @@ function fixture() {
                 runSection: element('run-section')
             };
         },
-        createTaskSubmission: () => ({ updateTaskPreview() {}, renderBanks() {} }),
+        createTaskSubmission: options => {
+            refreshHistory = options.refreshHistory;
+            return { updateTaskPreview() {}, renderBanks() {} };
+        },
         clearTimeout() {},
         setTimeout() {
             throw Error('Completed fixture must not poll');
@@ -102,9 +106,12 @@ function fixture() {
         state,
         requests,
         notices,
+        element,
         click,
         refresh: () => events.get('mini-bench:refresh')(),
+        refreshHistory: forceFresh => refreshHistory(forceFresh),
         select: id => events.get('mini-bench:select-run')({ detail: id }),
+        emitView: view => events.get('mini-bench:view')?.({ detail: view }),
         defer(path) {
             let resolve;
             const promise = new Promise(done => {
@@ -195,4 +202,58 @@ test('switching cards rejects stale child responses and cancel actions do not to
     await f.click('bench-task-detail', { childRunId: 'other', cancelChild: 'other' });
     expect(f.state.selectedRunId).toBe('other');
     expect(f.requests.some(path => path.endsWith('/cancel'))).toBe(false);
+});
+
+test('jumping to a run waits for runs-view visibility and loaded details, clears blocking filters, and scrolls target into view', async () => {
+    const f = fixture();
+    await f.refresh();
+    const scrolled = [];
+    const previewGroup = { scrollIntoView: opts => scrolled.push({ target: 'preview-group', opts }) };
+    const runSection = f.element('run-section');
+    runSection.closest = selector => (selector === '.task-preview-group' ? previewGroup : null);
+    runSection.scrollIntoView = opts => scrolled.push({ target: 'run-section', opts });
+    f.element('runs-view').hidden = true;
+    f.element('history-search').value = 'unrelated-query';
+    f.element('history-status').value = 'failed';
+
+    // Select while runs-view is still hidden (before hashchange completes): should not scroll yet.
+    await f.select('child');
+    expect(scrolled).toEqual([]);
+
+    // Once runs-view becomes visible via mini-bench:view, blocking filters clear and preview group scrolls into view.
+    f.element('runs-view').hidden = false;
+    f.emitView('runs');
+    expect(f.element('history-search').value).toBe('');
+    expect(f.element('history-status').value).toBe('all');
+    expect(scrolled).toEqual([{ target: 'preview-group', opts: { block: 'start' } }]);
+
+    // Re-jumping to an already selected run still scrolls once runs-view becomes visible again.
+    f.element('runs-view').hidden = true;
+    await f.select('child');
+    expect(scrolled).toHaveLength(1);
+    f.element('runs-view').hidden = false;
+    f.emitView('runs');
+    expect(scrolled).toHaveLength(2);
+});
+
+test('background polling skips refetching unchanged terminal task and run details while explicit refresh still refetches', async () => {
+    const f = fixture();
+    await f.refresh();
+    // Stamp updated_at so terminal detail records can be recognized as unchanged.
+    f.state.tasks[0].updated_at = '2026-11-20T00:00:00.000Z';
+    f.state.tasks[0].children[0].updated_at = '2026-11-20T00:00:00.000Z';
+    await f.select('child');
+    f.state.taskDetail.updated_at = '2026-11-20T00:00:00.000Z';
+    f.state.runDetail.updated_at = '2026-11-20T00:00:00.000Z';
+    const before = f.requests.length;
+
+    // Non-forced history refresh skips refetching unchanged terminal task/run details.
+    await f.refreshHistory(false);
+    expect(f.requests.slice(before)).toEqual(['./api/bench/tasks', './api/bench/runs']);
+
+    // Explicit refresh (forceFresh) still refetches selected details.
+    const beforeForced = f.requests.length;
+    await f.refreshHistory(true);
+    expect(f.requests.slice(beforeForced)).toContain('./api/bench/tasks/task');
+    expect(f.requests.slice(beforeForced)).toContain('./api/bench/runs/child');
 });

@@ -63,7 +63,7 @@ export function createTaskSubmission({
       ...config,
       run_count: config.targets.length,
       samples_per_run: app.taskCount * config.rounds,
-      sample_count: config.targets.length * 14 * config.rounds,
+      sample_count: config.targets.length * app.taskCount * config.rounds,
       total_max_cost_usd: config.limits.max_cost_usd === null ? null : config.targets.length * config.limits.max_cost_usd
     });
   }
@@ -103,6 +103,7 @@ export function createTaskSubmission({
       state.selectedRunId = null;
       state.taskDetail = null;
       state.runDetail = null;
+      app.setTaskSelection([]);
       await refreshHistory(true);
       notify('评测已启动，各运行独立保存样本与预算状态。');
     } catch (error) {
@@ -154,17 +155,16 @@ export function createTaskSubmission({
     if (!id || retrying.has(key)) return;
     const record = kind === 'tasks' ? state.taskDetail : state.runDetail;
     if (!record || record.id !== id || inProgress(record)) return;
-    const button = element(kind === 'tasks' ? 'bench-retry-task' : 'bench-retry-run');
     if (!retryRequests.has(key)) {
       const bytes = new Uint8Array(16);
       crypto.getRandomValues(bytes);
       retryRequests.set(key, [...bytes].map(byte => byte.toString(16).padStart(2, '0')).join(''));
-      button.textContent = '确认重试 API 失败';
-      notify('仅重试 API 失败及因其停止的未执行样本，保留成功结果。会产生额外用量，仍使用原账号与剩余执行上限。再次点击确认。');
+      renderDetails();
+      notify('仅重试失败、超时、已中断或已取消样本，保留已完成结果。会产生额外用量，仍使用原账号与剩余执行上限。再次点击确认。');
       return;
     }
     retrying.add(key);
-    button.disabled = true;
+    renderDetails();
     try {
       const result = await request('./api/bench/' + kind + '/' + encodeURIComponent(id) + '/retry', {
         method: 'POST',

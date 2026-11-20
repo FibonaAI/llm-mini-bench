@@ -1,5 +1,5 @@
 import { observationPickerRecords } from './data-adapter.js';
-import { assessmentChartMetric } from './assessment-chart-metric.js';
+import { assessmentChartMetric, observationSampleAnomalies } from './assessment-chart-metric.js';
 
 /**
  * Derive observation metrics independently of chart presentation. Each instance owns
@@ -20,7 +20,10 @@ export function createAnalysisModel({ mapObservations = observationPickerRecords
     setObservations(value) {
       if (value === observations) return;
       observations = value;
-      records = mapObservations(value);
+      records = mapObservations(value).map(record => ({
+        ...record,
+        sampleAnomalies: observationSampleAnomalies(record.original)
+      }));
       axes.clear();
     },
     /** Only official task membership/order affects metrics; labels/theme do not. */
@@ -35,7 +38,7 @@ export function createAnalysisModel({ mapObservations = observationPickerRecords
     },
     /** Return stable derived records for one axis, preserving repeats and raw originals. */
     records(axis = 'cost') {
-      const key = axis === 'tokens' ? 'tokens' : 'cost';
+      const key = axis === 'tokens' ? 'tokens' : axis === 'duration' ? 'duration' : 'cost';
       if (!axes.has(key))
         axes.set(
           key,
