@@ -346,6 +346,7 @@ function renderObservations() {
     `Mini Bench · ${state.observations.filter(record => record.source === 'baseline').length} 份基线 · ${state.observations.filter(record => record.source === 'run').length} 个运行目标`;
   const colorDescription = {
     series: '颜色区分供应商-模型组合（保留账号区分）',
+    account: '颜色区分渠道与账号 / Key 组合，同账号或 Key 下不同模型同色',
     model: '颜色区分模型，同名模型跨供应商同色',
     family: '颜色区分模型系列（按记录名称识别，未识别的模型单独着色，不代表实际服务身份）',
     time: '颜色按记录的评测时间区分本地日期，使用多色调色板；日期颜色在全部已加载记录中固定，时间未记录用中性色'

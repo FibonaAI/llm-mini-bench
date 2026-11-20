@@ -14,7 +14,7 @@ export function buildChartLegendGroups(records, dimension) {
         key: category.key,
         label: category.label,
         name: dimension === 'series' ? chartCategory(record, 'model').label : category.label,
-        detail: dimension === 'series' ? `${provider} / ${account}` : '',
+        detail: dimension === 'series' ? `${provider} / ${account}` : dimension === 'account' ? (record.account ?? '') : '',
         record,
         count: 0,
         searchValues: new Set()
@@ -78,7 +78,7 @@ export function createChartLegend(container, id) {
   searchLabel.append(legendNode('span', 'visually-hidden', '搜索图例，不筛选图表数据'));
   const search = legendNode('input', 'field');
   search.type = 'search';
-  search.placeholder = '搜索模型、供应商或账号';
+  search.placeholder = '搜索模型、供应商、账号或 Key';
   search.autocomplete = 'off';
   searchLabel.append(search);
   const count = legendNode('span', 'chart-legend-count');

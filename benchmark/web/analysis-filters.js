@@ -1,15 +1,55 @@
 import { analysisPopoverPlacement } from './analysis-popover.js';
-import { providerIdentity, modelFilterIdentity, modelFilterLabel, thinkingLabel, recordMatchesSearch } from './data-picker.js';
+import {
+  providerIdentity,
+  accountIdentity,
+  modelFilterIdentity,
+  modelFilterLabel,
+  thinkingLabel,
+  recordMatchesSearch
+} from './data-picker.js';
+
+const isGenericAccount = record => {
+  const id = String(accountIdentity(record) ?? '');
+  return id === 'unknown-account' || id.startsWith('gateway-binding:');
+};
+const shortAccountLabel = record => {
+  const id = String(accountIdentity(record) ?? '');
+  if (id === 'unknown-account') return '未记录账号';
+  if (id.startsWith('gateway-binding:')) return record.accountShortName ?? '网关自动分配';
+  if (record.accountDisplayId && record.accountDisplayId !== '实际账号未记录') return record.accountDisplayId;
+  return record.accountShortName ?? record.account ?? '未记录账号';
+};
+const accountFacetValue = record =>
+  isGenericAccount(record) ? accountIdentity(record) : JSON.stringify([providerIdentity(record), accountIdentity(record)]);
+const accountFacetRank = value => (String(value).startsWith('gateway-binding:') ? 1 : value === 'unknown-account' ? 2 : 0);
 
 const facets = [
   { id: 'provider', label: '渠道', width: 320, value: providerIdentity, text: record => record.providerName ?? record.provider },
+  {
+    id: 'account',
+    label: '账号',
+    heading: '账号 / Key',
+    width: 340,
+    value: accountFacetValue,
+    text: record =>
+      isGenericAccount(record) ? shortAccountLabel(record) : `${record.providerName ?? record.provider} / ${shortAccountLabel(record)}`,
+    option: record =>
+      isGenericAccount(record)
+        ? { primary: shortAccountLabel(record), secondary: '' }
+        : { primary: shortAccountLabel(record), secondary: record.providerName ?? record.provider },
+    sort: (a, b) =>
+      accountFacetRank(a[0]) - accountFacetRank(b[0]) ||
+      String(a[1].secondary || '').localeCompare(String(b[1].secondary || ''), 'zh-CN') ||
+      String(a[1].primary || '').localeCompare(String(b[1].primary || ''), 'zh-CN') ||
+      String(a[0]).localeCompare(String(b[0]))
+  },
   { id: 'model', label: '模型', width: 340, value: modelFilterIdentity, text: modelFilterLabel },
   { id: 'think', label: 'Thinking', width: 240, value: record => record.think, text: record => thinkingLabel(record.think) }
 ];
 
 /** Analysis facets are OR within a dimension, AND across dimensions; empty means unrestricted. */
 export function createAnalysisFilterState() {
-  return { query: '', source: 'all', provider: new Set(), model: new Set(), think: new Set() };
+  return { query: '', source: 'all', provider: new Set(), account: new Set(), model: new Set(), think: new Set() };
 }
 
 /** Filter observations without deduplicating repeated runs or mutating identity. */
@@ -39,7 +79,7 @@ export function createAnalysisFilters(container, { onChange = () => {} } = {}) {
   };
   const search = node('input', 'field af-search');
   search.type = 'search';
-  search.placeholder = '搜索模型、渠道或账号';
+  search.placeholder = '搜索模型、渠道、账号或 Key';
   search.setAttribute('aria-label', '搜索分析结果');
   search.setAttribute('spellcheck', 'false');
   search.setAttribute('autocapitalize', 'none');
@@ -65,7 +105,7 @@ export function createAnalysisFilters(container, { onChange = () => {} } = {}) {
       summary.focus({ preventScroll: true });
     });
     actions.append(unrestricted, close);
-    heading.append(node('strong', '', facet.label), actions);
+    heading.append(node('strong', '', facet.heading ?? facet.label), actions);
     const list = node('div', 'af-option-list');
     popup.append(heading, list);
     details.append(summary, popup);
@@ -114,10 +154,21 @@ export function createAnalysisFilters(container, { onChange = () => {} } = {}) {
         })
       );
     for (const { facet, summary, list } of controls) {
-      const values = new Map(records.map(record => [facet.value(record), facet.text(record)]));
+      const values = new Map();
+      for (const record of records) {
+        const key = facet.value(record);
+        if (values.has(key)) continue;
+        const text = facet.text(record);
+        const option = facet.option ? facet.option(record) : { primary: text, secondary: '' };
+        values.set(key, { text, ...option });
+      }
       const labels = new Map();
-      for (const label of values.values()) labels.set(label, (labels.get(label) ?? 0) + 1);
-      const labelFor = value => (labels.get(values.get(value)) > 1 ? `${values.get(value)} · ${value}` : (values.get(value) ?? value));
+      for (const entry of values.values()) labels.set(entry.text, (labels.get(entry.text) ?? 0) + 1);
+      const labelFor = value => {
+        const entry = values.get(value);
+        if (!entry) return value;
+        return labels.get(entry.text) > 1 ? `${entry.text} · ${value}` : entry.text;
+      };
       summary.textContent = `${facet.label} · ${state[facet.id].size ? `${state[facet.id].size} 项` : '不限'}`;
       summary.dataset.filtered = String(state[facet.id].size > 0);
       list.replaceChildren();
@@ -131,8 +182,9 @@ export function createAnalysisFilters(container, { onChange = () => {} } = {}) {
         conditions.append(chip);
       }
       // Keep temporarily absent selections visible so refreshes never silently broaden a filter.
-      for (const value of state[facet.id]) if (!values.has(value)) values.set(value, value);
-      for (const [value] of values) {
+      for (const value of state[facet.id]) if (!values.has(value)) values.set(value, { text: value, primary: value, secondary: '' });
+      const ordered = facet.sort ? [...values.entries()].sort(facet.sort) : [...values.entries()];
+      for (const [value, entry] of ordered) {
         const count = records.filter(record => matchesAnalysisFilters(record, state, facet.id) && facet.value(record) === value).length;
         const row = node('div', 'af-option');
         const label = node('label', '');
@@ -144,7 +196,11 @@ export function createAnalysisFilters(container, { onChange = () => {} } = {}) {
           checkbox.checked ? state[facet.id].add(value) : state[facet.id].delete(value);
           update();
         });
-        label.append(checkbox, node('span', '', labelFor(value)), node('span', 'muted', String(count)));
+        const textWrap = node('span', 'af-option-text');
+        const duplicate = labels.get(entry.text) > 1;
+        textWrap.append(node('span', 'af-option-primary', duplicate && !entry.secondary ? `${entry.primary} · ${value}` : entry.primary));
+        if (entry.secondary) textWrap.append(node('span', 'af-option-sub', duplicate ? `${entry.secondary} · ${value}` : entry.secondary));
+        label.append(checkbox, textWrap, node('span', 'muted af-option-count', String(count)));
         const only = button('text-control af-only', '仅此项', () => {
           state[facet.id] = new Set([value]);
           update();

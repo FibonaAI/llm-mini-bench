@@ -1,5 +1,6 @@
 import { _route_text } from '../benchmark/src/bench_routes.ts';
 import type { BenchQuotaCard, BenchQuotaCatalog } from '../benchmark/src/bench_adapter.ts';
+import { discoverMagpieLocalAccounts, type MagpieAccountBinding } from './magpie_accounts.ts';
 
 const object = (v: unknown): v is Record<string, unknown> => !!v && typeof v === 'object' && !Array.isArray(v);
 const text = (v: unknown) => (_route_text(v) ? v : null);
@@ -33,9 +34,13 @@ export function normalize_quota_cards(payload: unknown): BenchQuotaCard[] {
 /** Cache only read-only quota GETs; an outage can retain explicitly stale display data. */
 export class MagpieQuotaCatalogReader {
   private cached: BenchQuotaCatalog = { status: 'unavailable', fetched_at: null, cards: [] };
+  private localAccounts: MagpieAccountBinding[] = [];
   private expires = 0;
   private pending: Promise<BenchQuotaCatalog> | null = null;
   constructor(private readonly load: () => Promise<unknown>) {}
+  invalidate(): void {
+    this.expires = 0;
+  }
   async read(refresh = false): Promise<BenchQuotaCatalog> {
     if (!refresh && performance.now() < this.expires) return structuredClone(this.cached);
     if (!this.pending) this.pending = this.fetch();
@@ -46,12 +51,19 @@ export class MagpieQuotaCatalogReader {
       if (this.pending === pending) this.pending = null;
     }
   }
+  async readLocalAccounts(refresh = false): Promise<MagpieAccountBinding[]> {
+    await this.read(refresh);
+    return structuredClone(this.localAccounts);
+  }
   private async fetch(): Promise<BenchQuotaCatalog> {
     try {
-      const cards = normalize_quota_cards(await this.load());
+      const payload = await this.load();
+      const cards = normalize_quota_cards(payload);
+      this.localAccounts = discoverMagpieLocalAccounts(payload);
       this.cached = { status: 'available', fetched_at: new Date().toISOString(), cards };
     } catch (error) {
       const forbidden = error instanceof Error && /^gateway HTTP error (401|403)$/.test(error.message);
+      if (forbidden) this.localAccounts = [];
       this.cached = forbidden
         ? { status: 'forbidden', fetched_at: null, cards: [] }
         : { ...this.cached, status: this.cached.fetched_at ? 'stale' : 'unavailable' };

@@ -514,3 +514,53 @@ test('run detail defers raw JSON formatting until a disclosure is opened', () =>
     expect(appended).toHaveLength(1);
     expect(appended[0].textContent).toContain('very-large-model-answer-payload');
 });
+
+test('task preview distinguishes multiple accounts on the same channel and model', () => {
+    const { state, view, nodes } = fixture();
+    const mkTarget = (account_ref, thinking, account_evidence = 'gateway_account_binding') => ({
+        provider_id: 'bench-mock',
+        model: 'bench-mock/gpt-6-luna',
+        model_display_name: 'GPT-6 Luna',
+        route_id: `r-${account_ref}`,
+        account_ref,
+        account_evidence,
+        thinking
+    });
+    const multiAcctTask = {
+        id: 'task-multi-acct',
+        status: 'completed',
+        plan: { run_count: 3, rounds: 1 },
+        children: [
+            {
+                run_id: 'r-a-low',
+                target: mkTarget('alpha', 'low'),
+                status: 'completed',
+                sample_count: 12,
+                sample_status_counts: { completed: 12 }
+            },
+            {
+                run_id: 'r-a-high',
+                target: mkTarget('alpha', 'high'),
+                status: 'completed',
+                sample_count: 12,
+                sample_status_counts: { completed: 12 }
+            },
+            {
+                run_id: 'r-b-high',
+                target: mkTarget('beta', 'high'),
+                status: 'completed',
+                sample_count: 12,
+                sample_status_counts: { completed: 12 }
+            }
+        ]
+    };
+    state.tasks = [multiAcctTask];
+    state.selectedTaskId = 'task-multi-acct';
+    state.selectedRunId = null;
+    state.taskDetail = multiAcctTask;
+    view.renderDetails();
+    const html = nodes.get('bench-task-detail').innerHTML;
+    expect(html).toContain('<span class="task-preview-chip-label">alpha · low</span>');
+    expect(html).toContain('<span class="task-preview-chip-label">alpha · high</span>');
+    expect(html).toContain('<span class="task-preview-chip-label">beta · high</span>');
+});

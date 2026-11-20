@@ -10,7 +10,7 @@ In the Magpie plugin, when `MAGPIE_BENCH_ROUTES_FILE` is unset and the data dire
 
 When the catalog supplies valid `owned_by` and `display_name` fields, public routes retain them as optional `provider_id` and `model_display_name`, with `provider_evidence: "gateway_catalog"` for the provider claim. `provider_id` identifies the catalog owner instance, not its provider type or the upstream provider that ultimately serves a request. Distinct instance IDs remain separate even when they offer the same model. The UI does not split model IDs or labels to infer identity, and uses neutral icons because the public catalog does not supply authoritative provider types or icons. Plans and results preserve the recorded metadata; historical observations with no recorded fields return `null` and are never backfilled from the current catalog. Explicit route configuration keeps its existing strict schema and requires no new metadata fields.
 
-Automatically allocated targets share the `gateway-default` concurrency pool and use `gateway_binding` evidence. The plugin can also expose explicitly configured local account targets through its [`accounts` option](../magpie/README.md#explicit-local-account-bindings). The adapter supplies the account pin header; quota information never creates account bindings. Standalone Bench uses explicit routes and does not implicitly connect to Magpie.
+Automatically allocated targets share the `gateway-default` concurrency pool and use `gateway_binding` evidence. For local (non-remote) Magpie providers, the plugin automatically discovers named accounts and multi-key entries on the receiving gateway (`gateway_account_binding`) and also supports overriding or extending them via its [`accounts` option](../magpie/README.md#local-account-and-multi-key-bindings) (`configured_binding`). The adapter supplies the `X-Magpie-Account` pin header; remote quota cards never become pins. Standalone Bench uses explicit routes and does not implicitly connect to Magpie.
 
 The adapter caches models for up to 60 seconds and coalesces concurrent reads. Refreshing routes invalidates that cache. Removed models can no longer resolve, while started runs retain their original bindings and snapshots. Catalog failures do not prevent opening historical results or cancelling runs. Reading the catalog sends no model requests. Duplicate model IDs cause an error rather than silently selecting prices.
 
@@ -24,7 +24,7 @@ For a direct remote entry such as `office/openai/model`, the channel column show
 
 Public routes, plans, and new results retain `remote_route: {"namespace": "openai", "evidence": "magpie_via_catalog"}`. The full request model and route ID are unchanged, and accounts remain unknown. Missing or invalid hop evidence, local routing groups, and older records without the metadata keep their original grouping. No historical record is backfilled. Per-process hop IDs are not saved as stable identity. See Magpie's [remote routing convention](https://usemagpie.ai/docs/remote).
 
-The task picker shows the provider, recorded or configured account, model and thinking levels. It does not display or fetch quotas. Missing account identity stays unknown; it is never inferred from a quota card or backfilled into historical results.
+The task picker shows the provider, recorded or pinned account, model and thinking levels. It does not display or fetch quotas in the browser. Remote and unpinned routes keep account identity unknown, and historical results are never backfilled.
 
 ## Configure two routes
 

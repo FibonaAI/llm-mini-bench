@@ -442,20 +442,36 @@ export function createTaskHistoryView({ app, state, retryRequests, retrying }) {
       return prefix && raw.startsWith(prefix) && raw.length > prefix.length ? raw.slice(prefix.length) : raw;
     };
     const shortThink = target => (target?.thinking === 'default' ? '默认' : target?.thinking || '未记录');
+    const shortAccount = target => (target?.account_evidence === 'gateway_binding' ? '默认' : target?.account_ref || '未记录');
+    const isPinnedAccount = target => Boolean(target?.account_ref) && target?.account_evidence !== 'gateway_binding';
     const presentTones = new Set(visibleChildren.map(childPreviewTone));
     const rows = groups
       .map((group, index) => {
         const channels = [...new Set(group.children.map(child => shortChannel(child.target)))];
         const thinkings = [...new Set(group.children.map(child => shortThink(child.target)))];
+        const accountsByChannel = new Map();
+        for (const child of group.children) {
+          const ch = shortChannel(child.target);
+          if (!accountsByChannel.has(ch)) accountsByChannel.set(ch, new Set());
+          accountsByChannel.get(ch).add(shortAccount(child.target));
+        }
+        const accounts = [...new Set(group.children.map(child => shortAccount(child.target)))];
         const singleChannel = channels.length === 1 && group.children.length > 1;
-        const singleThinking = thinkings.length === 1 && group.children.length > 1 && channels.length > 1;
+        const singleAccount = accounts.length === 1 && group.children.length > 1;
+        const singleThinking = thinkings.length === 1 && group.children.length > 1 && (channels.length > 1 || accounts.length > 1);
         const doneRuns = group.children.filter(child => child.status === 'completed').length;
         const failedRuns = group.children.filter(child => child.status === 'failed').length;
         const runningRuns = group.children.filter(child => child.status === 'running' || child.status === 'cancelling').length;
         const sampleDone = group.children.reduce((sum, child) => sum + sampleProgress(child).done, 0);
         const sampleTotal = group.children.reduce((sum, child) => sum + sampleProgress(child).total, 0);
+        const firstTarget = group.children[0].target;
+        const singleChannelContext = singleChannel
+          ? singleAccount && isPinnedAccount(firstTarget)
+            ? `${targetShortChannel(firstTarget)} / ${firstTarget.account_ref}`
+            : targetShortChannel(firstTarget)
+          : '';
         const contextParts = [
-          singleChannel ? targetShortChannel(group.children[0].target) : '',
+          singleChannelContext,
           singleThinking ? `Thinking ${thinkings[0]}` : '',
           `完成 ${doneRuns}/${group.children.length}`,
           runningRuns ? `运行中 ${runningRuns}` : '',
@@ -471,9 +487,12 @@ export function createTaskHistoryView({ app, state, retryRequests, retrying }) {
               selected = child.run_id === state.selectedRunId,
               ch = shortChannel(target),
               th = shortThink(target),
+              acc = shortAccount(target),
+              showAcc = (accountsByChannel.get(ch)?.size ?? 0) > 1 || (!singleChannel && isPinnedAccount(target)),
+              origin = singleChannel ? (showAcc ? acc : '') : showAcc ? `${ch} / ${acc}` : ch,
               budget = budgetLabel(child.budget, child.status),
               quality = qualityLabel(child);
-            const label = singleChannel ? th : singleThinking ? ch : `${ch} · ${th}`;
+            const label = origin && !singleThinking ? `${origin} · ${th}` : origin || th;
             const stateLabel = childPreviewStateText(child, progress);
             const tooltip = [
               targetLabel(target),

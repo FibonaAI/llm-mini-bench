@@ -41,9 +41,11 @@ The adapter imports `benchmark/backend/mini_bench.ts` directly and starts its lo
 
 The benchmark backend and interface can also run with Bun without this adapter. See the [execution guide](../docs/BENCH_EXECUTION.md) for standalone startup and explicit account routes. Do not start another service on the active plugin’s port or data directory.
 
-## Explicit local account bindings
+## Local account and multi-key bindings
 
-For optional account-specific comparisons, add an `accounts` array without removing the automatically saved connection settings:
+Magpie uses the same `X-Magpie-Account` header for both subscription multi-account providers and multi-key API providers (when a provider has two or more active keys). For local (non-remote) providers on the receiving Magpie, the adapter automatically discovers named subscription accounts and multi-key entries that emit balance/plan cards in `/v1/magpie/quotas/cards`, exposing them alongside each model's default gateway route as `gateway_account_binding` targets. Remote cards (`from`, `gatewayKey`, multi-hop `via`, or `/` in `provider`), unnamed single-key cards, and ambiguous duplicate names within the same provider/kind are skipped, and quota outages degrade cleanly to default routes.
+
+Multi-key API providers without a balance or plan card in `/v1/magpie/quotas/cards` (for example, local API-key providers without a balance check or estimate configured in Magpie) are not listed by Magpie's gateway API. To bind those keys—or to customize `account_ref`, restrict models, or disambiguate duplicate names using trace/key IDs (such as `openai#<keyID>` or a masked key)—add an optional `accounts` array without removing the automatically saved connection settings (explicit `accounts` entries take precedence over auto-discovered bindings for the same provider/account):
 
 ```json
 {
@@ -56,7 +58,7 @@ For optional account-specific comparisons, add an `accounts` array without remov
 
 Use account names or routing-trace IDs recognized by the receiving Magpie. A missing `models` list exposes all priced catalog models of that local provider; listing a model does not prove the account can serve it. Magpie rejects an unavailable or unknown pin instead of choosing another account. Duplicate display names should use distinct trace IDs. The adapter sends `X-Magpie-Account` and records an opaque binding fingerprint in the plan. Core Bench does not parse that header or account configuration.
 
-This does not pin accounts behind Remote Magpie: the header stops at the receiving gateway. Remote quotas remain informational. Configured bindings are request evidence, not independently verified upstream identity. Magpie may still retry within the selected account; Mini Bench retries transient API failures within its configured retry and sample-timeout (or legacy run) limits, without switching account bindings.
+This does not pin accounts behind Remote Magpie: the header stops at the receiving gateway. Remote quotas remain informational. Account bindings are request evidence, not independently verified upstream identity. Magpie may still retry within the selected account; Mini Bench retries transient API failures within its configured retry and sample-timeout (or legacy run) limits, without switching account bindings.
 
 ## Offline adapter test
 

@@ -31,6 +31,7 @@ function pickerIdentity(record, routeId, fallbackId) {
   const binding = text(record.account_ref);
   const gateway = record.account_evidence === 'gateway_binding';
   const configured = record.account_evidence === 'configured_binding';
+  const pinned = record.account_evidence === 'gateway_account_binding';
   const model = text(record.model) ?? text(record.label) ?? '未记录模型';
   const namespace = remoteRouteNamespace(record);
   const path = namespace ? `${provider} / ${namespace}` : null;
@@ -48,9 +49,11 @@ function pickerIdentity(record, routeId, fallbackId) {
       ? '网关自动分配（账号未记录）'
       : configured && binding
         ? `${binding}（配置绑定）`
-        : binding
-          ? `${binding}（未核验）`
-          : '未记录账号',
+        : pinned && binding
+          ? `${binding}（固定绑定）`
+          : binding
+            ? `${binding}（未核验）`
+            : '未记录账号',
     accountShortName: gateway ? '网关自动分配' : undefined,
     accountDisplayId: gateway ? '实际账号未记录' : (binding ?? '未记录'),
     model,

@@ -68,6 +68,22 @@ test('explicit configured bindings and anonymous routes stay separate', () => {
         { id: 'old-2', model: 'same', thinking: 'high' }
     ]);
     expect(new Set(unknown.map(selectionKey)).size).toBe(2);
+    const pinned = routePickerLeaves([
+        {
+            ...route('pin-a', 'codex'),
+            account_ref: 'first@example.invalid',
+            account_evidence: 'gateway_account_binding'
+        },
+        {
+            ...route('pin-b', 'codex'),
+            account_ref: 'second@example.invalid',
+            account_evidence: 'gateway_account_binding'
+        }
+    ]);
+    expect(new Set(pinned.map(selectionKey)).size).toBe(4);
+    expect(pinned.find(r => r.routeId === 'pin-a').account).toBe('first@example.invalid（固定绑定）');
+    expect(pinned.find(r => r.routeId === 'pin-b').account).toBe('second@example.invalid（固定绑定）');
+    expect(pinned.find(r => r.routeId === 'pin-a').accountId).toBe('account:first@example.invalid');
 });
 const remoteRoute = (id, provider, namespace, model = 'remote-magpie/openai/same-model') => ({
     ...route(id, provider),

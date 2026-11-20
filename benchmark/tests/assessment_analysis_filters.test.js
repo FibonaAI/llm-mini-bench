@@ -80,3 +80,40 @@ test('request path segments do not invent a shared display model or provider', (
     state.provider.clear();
     expect(matchesAnalysisFilters(record, state)).toBe(true);
 });
+
+test('account facet distinguishes accounts within one channel and isolates identical account IDs across channels', () => {
+    const state = createAnalysisFilterState();
+    state.account.add(JSON.stringify(['channel-a', 'configured:b']));
+    expect(matchIds(state)).toEqual(['other-account']);
+    state.account.add(JSON.stringify(['channel-b', 'configured:a']));
+    expect(matchIds(state)).toEqual(['other-account', 'high', 'baseline']);
+    // Same accountId under channel-a is not matched by channel-b's entry.
+    state.account = new Set([JSON.stringify(['channel-b', 'configured:a'])]);
+    expect(matchIds(state)).toEqual(['high', 'baseline']);
+    state.model.add('beam-free');
+    expect(matchIds(state)).toEqual(['high']);
+});
+
+test('account facet collapses generic gateway-default across channels while keeping bound accounts channel-scoped', () => {
+    const mixed = [
+        observation('gw-a', 'homelab-openai', 'Luna', 'high', {
+            accountId: 'gateway-binding:gateway-default',
+            account: '网关自动分配（账号未记录）',
+            accountShortName: '网关自动分配'
+        }),
+        observation('gw-b', 'homelab-codex', 'Luna', 'high', {
+            accountId: 'gateway-binding:gateway-default',
+            account: '网关自动分配（账号未记录）',
+            accountShortName: '网关自动分配'
+        }),
+        observation('pin-a', 'openai', 'Luna', 'high', { accountId: 'account:a', account: 'a（固定绑定）', accountDisplayId: 'a' })
+    ];
+    const state = createAnalysisFilterState();
+    state.account.add('gateway-binding:gateway-default');
+    expect(mixed.filter(r => matchesAnalysisFilters(r, state)).map(r => r.id)).toEqual(['gw-a', 'gw-b']);
+    state.provider.add('homelab-openai');
+    expect(mixed.filter(r => matchesAnalysisFilters(r, state)).map(r => r.id)).toEqual(['gw-a']);
+    state.provider.clear();
+    state.account = new Set([JSON.stringify(['openai', 'account:a'])]);
+    expect(mixed.filter(r => matchesAnalysisFilters(r, state)).map(r => r.id)).toEqual(['pin-a']);
+});

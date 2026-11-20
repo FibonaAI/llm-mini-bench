@@ -41,6 +41,12 @@
   await openFacet('model');await facetChoice('model','same-model').check();
   require(await page.locator('.score-cost-point').count()===2,'Normalized model facet lost channel instances');
   await facet('model').locator('.af-unrestricted').click();
+  await openFacet('account');
+  require(await facet('account').locator('.af-option').count()===1,'Generic gateway-default accounts should collapse across channels instead of duplicating every channel');
+  await facetChoice('account','gateway-binding:gateway-default').check();
+  require(await page.locator('.score-cost-point').count()===2,'Collapsed gateway-default option did not match both gateway-default records');
+  await facet('account').locator('.af-unrestricted').click();
+  require(await page.locator('.score-cost-point').count()===2,'Unrestricted account facet did not restore both records');
   await page.locator('#analysis-picker .af-search').fill('no-analysis-match');
   require(await page.locator('.score-cost-point').count()===0,'Search must filter the chart directly');
   await page.locator('#analysis-reset').click();

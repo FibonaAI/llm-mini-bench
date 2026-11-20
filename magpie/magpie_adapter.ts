@@ -30,11 +30,13 @@ export class MagpieBenchAdapter implements BenchServiceAdapter {
       this.base_url,
       () => this.api_key,
       concurrency,
-      accounts
+      accounts,
+      () => this.quotas.readLocalAccounts()
     );
   }
   refresh(): void {
     this._models_cache_time = -Infinity;
+    this.quotas.invalidate();
   }
   async gateway(path: string, body?: JsonObject): Promise<JsonObject> {
     let response: Response;

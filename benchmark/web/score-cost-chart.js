@@ -403,7 +403,7 @@ export function createScoreCostChart(container, { onSelect = _id => {}, onOpenRu
     };
     const explicitTheme = document.documentElement.dataset.theme;
     const dark = explicitTheme === 'dark' || (!explicitTheme && window.matchMedia('(prefers-color-scheme: dark)').matches);
-    const colorBy = ['series', 'model', 'family', 'time'].includes(options.colorBy) ? options.colorBy : 'series';
+    const colorBy = ['series', 'account', 'model', 'family', 'time'].includes(options.colorBy) ? options.colorBy : 'series';
     const historyRecords = options.historyRecords ?? records;
     const historyStates = buildAnalysisHistoryStates(historyRecords);
     colors.register(historyRecords, colorBy);
@@ -955,6 +955,19 @@ export function createScoreCostChart(container, { onSelect = _id => {}, onOpenRu
         const stripped = sharedPrefix && raw.startsWith(sharedPrefix) ? raw.slice(sharedPrefix.length) : raw;
         return stripped.length > 14 ? stripped.slice(0, 13) + '…' : stripped;
       };
+      const shortAccount = point => {
+        const raw =
+          point.accountId && String(point.accountId).startsWith('gateway-binding:')
+            ? '默认'
+            : String(point.accountDisplayId ?? point.account ?? '');
+        return raw.length > 14 ? raw.slice(0, 13) + '…' : raw;
+      };
+      const channelAccounts = new Map();
+      for (const point of visible) {
+        const chKey = String(point.providerId ?? point.provider ?? '');
+        if (!channelAccounts.has(chKey)) channelAccounts.set(chKey, new Set());
+        channelAccounts.get(chKey).add(String(point.accountId ?? point.account ?? ''));
+      }
       const shortThink = think => (think === 'default' ? '默认' : think === 'unknown' ? '' : think);
       const modelThinkings = new Map();
       for (const point of visible) {
@@ -966,9 +979,14 @@ export function createScoreCostChart(container, { onSelect = _id => {}, onOpenRu
         const modelName = point.modelDisplayName ?? point.model;
         const th = shortThink(point.think);
         if (distinctModels.size === 1) {
+          const chKey = String(point.providerId ?? point.provider ?? '');
           const ch = shortChannel(point);
-          if (distinctChannels.size > 1 && distinctThinkings.size > 1) return th ? `${ch} · ${th}` : ch;
-          if (distinctChannels.size > 1) return ch;
+          const acc = (channelAccounts.get(chKey)?.size ?? 0) > 1 ? shortAccount(point) : '';
+          if (distinctChannels.size > 1) {
+            const origin = acc ? `${ch}/${acc}` : ch;
+            return distinctThinkings.size > 1 && th ? `${origin} · ${th}` : origin;
+          }
+          if (acc) return distinctThinkings.size > 1 && th ? `${acc} · ${th}` : acc;
           if (distinctThinkings.size > 1) return th || '默认';
           return modelName;
         }

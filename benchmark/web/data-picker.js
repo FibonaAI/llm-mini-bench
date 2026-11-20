@@ -4,7 +4,7 @@ export function selectionKey(record) {
 }
 /** Channel identity preserves recorded instances even when display names coincide. */
 export const providerIdentity = record => record.providerId ?? record.provider;
-const accountIdentity = record => record.accountId ?? record.account;
+export const accountIdentity = record => record.accountId ?? record.account;
 /** Model labels come from supplied display names, never route path parsing. */
 export const modelFilterLabel = record => record.modelDisplayName ?? record.model;
 /** Normalize display model spelling for cross-channel facets, preserving request IDs. */
@@ -82,7 +82,7 @@ export function createDataPicker(container, { records, selectedKeys, mode = 'ana
   const searchWrap = element('div', 'dp-search-wrap');
   const search = element('input', 'dp-search');
   search.type = 'search';
-  search.placeholder = '搜索模型、渠道或账号';
+  search.placeholder = '搜索模型、渠道、账号或 Key';
   search.setAttribute('aria-label', search.placeholder);
   const clearSearch = button('dp-clear-search', '×', () => {
     search.value = '';

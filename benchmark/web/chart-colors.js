@@ -70,8 +70,18 @@ export function chartCategory(record, dimension) {
       : { key: JSON.stringify(['model', model.key]), label: model.label };
   }
   if (dimension === 'provider') return { key: JSON.stringify([providerId]), label: providerLabel };
-  if (dimension === 'account')
-    return { key: JSON.stringify([providerId, record.accountId ?? record.account]), label: `${providerLabel} / ${record.account}` };
+  if (dimension === 'account') {
+    const accountId = record.accountId ?? record.account;
+    const shortAccount =
+      accountId === 'unknown-account'
+        ? '未记录账号'
+        : String(accountId ?? '').startsWith('gateway-binding:')
+          ? (record.accountShortName ?? '网关自动分配')
+          : record.accountDisplayId && record.accountDisplayId !== '实际账号未记录'
+            ? record.accountDisplayId
+            : (record.accountShortName ?? record.account ?? '未记录账号');
+    return { key: JSON.stringify([providerId, accountId]), label: `${providerLabel} / ${shortAccount}` };
+  }
   return { key: JSON.stringify([record[dimension]]), label: String(record[dimension] ?? '未标注') };
 }
 export function createChartColorRegistry(catalog = []) {

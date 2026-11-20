@@ -63,3 +63,29 @@ test('empty quota list is available but is not proof of zero upstream accounts',
   expect((await reader.read()).status).toBe('available');
   expect((await reader.read()).cards).toEqual([]);
 });
+
+test('local account discovery shares quota cache, invalidates on demand, and clears on 403', async () => {
+  let loads = 0;
+  let failure = '';
+  const reader = new BenchQuotaCatalogReader(async () => {
+    loads++;
+    if (failure) throw new Error(failure);
+    return {
+      data: [card, { provider: 'codex', user: 'local@example.invalid', kind: 'subscription', windows: [{ name: '7 days', used: 10 }] }]
+    };
+  });
+  const first = await reader.readLocalAccounts();
+  expect(first).toEqual([{ provider_id: 'codex', account: 'local@example.invalid', account_ref: 'local@example.invalid' }]);
+  expect(loads).toBe(1);
+  // Cached quota read reuses the same fetch.
+  expect((await reader.read()).cards).toHaveLength(2);
+  expect(loads).toBe(1);
+  // Transient outage retains stale local accounts until access is explicitly denied.
+  failure = 'timeout';
+  reader.invalidate();
+  expect(await reader.readLocalAccounts()).toEqual(first);
+  expect(loads).toBe(2);
+  failure = 'gateway HTTP error 403';
+  reader.invalidate();
+  expect(await reader.readLocalAccounts()).toEqual([]);
+});

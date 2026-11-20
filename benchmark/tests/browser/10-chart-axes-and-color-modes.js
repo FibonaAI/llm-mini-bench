@@ -25,5 +25,27 @@
     await page.locator('#chart-color-by').selectOption('model');
   }
   await page.evaluate(()=>document.documentElement.dataset.theme='light');
+  observations.push(
+    {...peer,id:'color-same-acct',provider_id:'color-channel-0',account_ref:'acct-a',account_evidence:'gateway_account_binding',model:'gpt-6.1-sol',model_display_name:'gpt-6.1-sol',estimated_cost_usd:.085},
+    {...peer,id:'color-same-acct-m2',provider_id:'color-channel-0',account_ref:'acct-a',account_evidence:'gateway_account_binding',model:'DeepSeek-V4',model_display_name:'DeepSeek-V4',estimated_cost_usd:.09},
+    {...peer,id:'color-other-acct',provider_id:'color-channel-0',account_ref:'acct-b',account_evidence:'gateway_account_binding',model:'gpt-6.1-sol',model_display_name:'gpt-6.1-sol',estimated_cost_usd:.095}
+  );
+  await refresh();
+  await page.waitForFunction(()=>document.querySelectorAll('.score-cost-point').length===8);
+  await page.locator('#chart-color-by').selectOption('account');
+  require(await page.locator('.score-cost-svg').getAttribute('data-color-by')==='account','Chart SVG must enter account color mode');
+  require(await color('color-same-acct')===await color('color-same-acct-m2'),'Account coloring must give distinct models on the same channel/account the same color');
+  require(await color('color-same-acct')!==await color('color-other-acct'),'Account coloring must distinguish different accounts on the same channel');
+  require((await page.locator('#analysis-method').textContent()).includes('颜色区分渠道与账号 / Key 组合'),'Methodology must describe account/key coloring');
+  const accountLegendTexts=await page.locator('.chart-legend-item').allInnerTexts();
+  require(accountLegendTexts.some(t=>t.includes('color-channel-0 / acct-a')&&!t.includes('（')),'Account legend should use concise channel/account label without verbose suffix');
+  await openFacet('account');
+  const acctSubtitles=await facet('account').locator('.af-option-sub').allInnerTexts();
+  require(acctSubtitles.includes('color-channel-0'),'Bound accounts should show channel as a concise secondary subtitle');
+  await facetChoice('account',JSON.stringify(['provider:color-channel-0','account:acct-a'])).check();
+  require(await point('color-same-acct').count()===1&&await point('color-same-acct-m2').count()===1&&await point('color-other-acct').count()===0,'Account facet did not isolate bound account');
+  await facet('account').locator('.af-unrestricted').click();
+  await facet('account').locator('summary').click();
   await page.locator('#chart-color-by').selectOption('series');
+  require(await color('color-same-acct')!==await color('color-same-acct-m2'),'Series coloring must still separate distinct models on the same account');
   observations.splice(0,observations.length,...Array.from({length:43},(_,i)=>({...peer,id:'dense-'+i,task_id:'dense-task',run_id:'dense-run-'+i,provider_id:'dense-channel-'+Math.floor(i/9),model:'request-model-'+Math.floor(i/9)%3,model_display_name:i===41?'Singleton model':'Model '+Math.floor(i/9)%3,thinking:['unknown','none','minimal','low','medium','high','xhigh','max','ultra'][i%9],status:'completed',estimated_cost_usd:i===42?null:.009+i*.002,usage:{input_tokens:1000+i*10,output_tokens:500+i*5},tasks:tasks.map(task=>({...task,samples:task.samples.map(sample=>({...sample,content_score:i<22?1:.8+(i%5)*.03}))}))})));
