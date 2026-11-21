@@ -119,6 +119,7 @@ adapter.gateway = async (path, body) => {
 };
 const handler = make_handler(service, web);
 const requests = [];
+const sandboxMockTaskId = '0'.repeat(32);
 const backend = Bun.serve({
     hostname: '127.0.0.1',
     port: 0,
@@ -131,6 +132,31 @@ const backend = Bun.serve({
         };
         requests.push(entry);
         // No paid or mutating request can reach the production handler in this acceptance test.
+        // Intercept POST /api/bench/tasks here so we can verify sandboxed submission without starting a real run.
+        if (request.method === 'POST' && entry.path === '/api/bench/tasks' && entry.authenticated) {
+            entry.body = await request.json();
+            entry.status = 202;
+            entry.allowOrigin = 'null';
+            return Response.json(
+                { id: sandboxMockTaskId },
+                { status: 202, headers: { 'access-control-allow-origin': 'null', vary: 'Origin' } }
+            );
+        }
+        if (request.method === 'GET' && entry.path === `/api/bench/tasks/${sandboxMockTaskId}` && entry.authenticated) {
+            entry.status = 200;
+            entry.allowOrigin = 'null';
+            return Response.json(
+                {
+                    id: sandboxMockTaskId,
+                    status: 'completed',
+                    created_at: '2026-11-11T00:00:00Z',
+                    updated_at: '2026-11-11T00:00:00Z',
+                    plan: { bank_version: '1.0', rounds: 3, targets: [], limits: seededLimits },
+                    children: []
+                },
+                { status: 200, headers: { 'access-control-allow-origin': 'null', vary: 'Origin' } }
+            );
+        }
         if (!['GET', 'OPTIONS'].includes(request.method)) return new Response('Mutations disabled by acceptance harness', { status: 405 });
         const response = await handler(request);
         entry.status = response.status;
@@ -191,8 +217,18 @@ writeFileSync(
  remoteState.quotaSanitized=quotaPayload.status==='available'&&quotaPayload.cards.length===1&&!JSON.stringify(quotaPayload).includes('must-not-reach-browser');
  await page.screenshot({path:${JSON.stringify(join(artifacts, 'sandbox-remote-picker.png'))},fullPage:true});try { await popup.getByRole('button',{name:'完成',exact:true}).click(); } catch(error) { const debug=await frame.evaluate(()=>({scrollY,innerHeight,hidden:document.querySelector('.dp-popup')?.hidden,trigger:document.querySelector('#task-picker .dp-trigger')?.getBoundingClientRect().toJSON(),popups:[...document.querySelectorAll('.dp-popup')].map(n=>({hidden:n.hidden,style:n.getAttribute('style')}))}));throw new Error('Picker geometry '+JSON.stringify(debug)+' parent '+JSON.stringify(await page.evaluate(()=>({scrollY,innerHeight})))+' '+error.message); }
  const taskState=await frame.evaluate(()=>({sampleConcurrency:document.querySelector('#sample-concurrency')?.value,runConcurrency:document.querySelector('#run-concurrency')?.value,rounds:document.querySelector('#run-rounds')?.value,planDisabled:!document.querySelector('#bench-plan'),startDisabled:document.querySelector('#start-run')?.disabled,history:document.querySelector('#bench-run-list')?.textContent}));
+ // Verify starting a task works inside sandbox="allow-scripts" (without allow-forms).
+ await frame.locator('#task-picker .dp-trigger').click();
+ const submitPopup=frame.locator('.dp-popup:not([hidden])');
+ await submitPopup.locator('.dp-rail-item').evaluateAll((nodes,id)=>nodes.find(n=>n.dataset.providerId===id)?.click(),JSON.stringify(['remote-A','openai']));
+ await submitPopup.locator('.dp-think[data-think="high"]').click();
+ await submitPopup.getByRole('button',{name:'完成',exact:true}).click();
+ const startEnabledAfterSelect=!(await frame.locator('#start-run').isDisabled());
+ await frame.locator('#start-run').click();
+ await frame.waitForFunction(()=>document.querySelector('#start-run')?.disabled===true&&window.MiniBench.runState.getSelectedTargets().length===0);
+ const sandboxSubmit={startEnabledAfterSelect,clearedAfterSubmit:await frame.evaluate(()=>window.MiniBench.runState.getSelectedTargets().length===0)};
  await page.screenshot({path:${JSON.stringify(join(artifacts, 'sandbox.png'))},fullPage:true});
- return {passed:state.origin==='null'&&state.storageDenied&&state.pickers===1&&state.analysisFilters===4&&Object.values(legendState).every(Boolean)&&Object.values(analysisState).every(Boolean)&&state.chart&&state.points>0&&state.bank.includes('12')&&svg.ok&&svg.svg&&taskState.sampleConcurrency==='6'&&taskState.runConcurrency==='3'&&taskState.rounds==='3'&&taskState.planDisabled&&taskState.startDisabled&&Object.values(remoteState).every(Boolean)&&!errors.length&&!consoleErrors.length&&!failures.length,state,legendState,analysisState,taskState,remoteState,svg,readyError,errors,consoleErrors,failures};
+ return {passed:state.origin==='null'&&state.storageDenied&&state.pickers===1&&state.analysisFilters===4&&Object.values(legendState).every(Boolean)&&Object.values(analysisState).every(Boolean)&&state.chart&&state.points>0&&state.bank.includes('12')&&svg.ok&&svg.svg&&taskState.sampleConcurrency==='6'&&taskState.runConcurrency==='3'&&taskState.rounds==='3'&&taskState.planDisabled&&taskState.startDisabled&&Object.values(remoteState).every(Boolean)&&Object.values(sandboxSubmit).every(Boolean)&&!errors.length&&!consoleErrors.length&&!failures.length,state,legendState,analysisState,taskState,remoteState,sandboxSubmit,svg,readyError,errors,consoleErrors,failures};
 }`
 );
 let opened = false;
@@ -208,8 +244,26 @@ try {
     writeFileSync(join(artifacts, 'http-requests.json'), JSON.stringify(requests, null, 2));
     console.log(stdout);
     assert(
-        requests.every(request => ['GET', 'OPTIONS'].includes(request.method)),
+        requests.every(
+            request => ['GET', 'OPTIONS'].includes(request.method) || (request.method === 'POST' && request.path === '/api/bench/tasks')
+        ),
         'Unexpected mutation attempted'
+    );
+    assert(
+        requests.some(
+            request =>
+                request.path === '/api/bench/tasks' &&
+                request.method === 'POST' &&
+                request.origin === 'null' &&
+                request.authenticated &&
+                request.status === 202 &&
+                Array.isArray(request.body?.targets) &&
+                request.body.targets.length === 1 &&
+                typeof request.body.targets[0].route_id === 'string' &&
+                request.body.targets[0].route_id.startsWith('gateway-') &&
+                request.body.targets[0].thinking === 'high'
+        ),
+        'Sandboxed task submission did not reach backend without allow-forms'
     );
     assert(
         requests.some(

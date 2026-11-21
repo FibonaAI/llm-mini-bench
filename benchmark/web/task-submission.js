@@ -84,8 +84,9 @@ export function createTaskSubmission({
     element('bench-plan-preview').innerHTML =
       `<div class="run-plan-summary"><strong>${escapeHtml(plan.run_count)} 个独立运行 · 共 ${escapeHtml(plan.sample_count)} 个样本</strong><span>每运行 ${escapeHtml(plan.samples_per_run)} 个样本（${escapeHtml(app.taskCount)} 题 × ${escapeHtml(plan.rounds)} 轮）</span><span>同时运行 ${escapeHtml(plan.run_concurrency)} 个 · 每运行最多并发 ${escapeHtml(plan.sample_concurrency)} 个样本</span><span>每题总超时 ${escapeHtml(plan.limits.timeout)} 秒</span><span class="sub">不设置 token、费用、请求数、工具调用及交互轮数上限。临时 API 错误最多重试 3 次，共用该题超时时间。</span></div>`;
   }
-  element('run-form').addEventListener('submit', async event => {
-    event.preventDefault();
+  // Magpie embeds pages in sandbox="allow-scripts" (without allow-forms), so native <form>
+  // submission is blocked by the browser before JS submit listeners run.
+  element('start-run').addEventListener('click', async () => {
     if (state.busy || state.submissionUncertain) return;
     if (!validConfig() || !state.timeoutPolicyReady) {
       notify('请先选择运行目标，并确认轮数、两级并发与执行上限。', true);

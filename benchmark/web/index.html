@@ -228,7 +228,7 @@
             <h2 id="composer-title">新建任务</h2>
             <span class="muted">选择目标后，核对样本数与超时再开始</span>
           </div>
-          <form id="run-form" aria-labelledby="composer-title">
+          <div id="run-form">
             <fieldset class="form-section">
               <legend>独立运行目标</legend>
               <div class="task-selection">
@@ -298,10 +298,10 @@
               <div><p class="field-hint" id="run-request-estimate"></p></div>
               <div class="run-actions">
                 <button class="btn" id="bench-retry-review" type="button" hidden>已核对历史，允许重新开始</button
-                ><button class="btn primary" id="start-run" type="submit" disabled>开始评测</button>
+                ><button class="btn primary" id="start-run" type="button" disabled>开始评测</button>
               </div>
             </div>
-          </form>
+          </div>
         </section>
         <section class="list run-history" aria-labelledby="history-title">
           <div class="section-heading">

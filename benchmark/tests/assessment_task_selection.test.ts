@@ -187,7 +187,7 @@ test('catalog load defaults to no paid targets and no cross-product selection', 
     ]);
     expect(f.calls.filter(c => c.options?.method === 'POST')).toHaveLength(0);
     f.mini.runState.setTaskSelection([]);
-    await f.element('run-form').emit('submit');
+    await f.element('start-run').emit('click');
     expect(f.calls.filter(c => c.options?.method === 'POST')).toHaveLength(0);
 });
 test('long route and Thinking identities retain exact payload with short deterministic local IDs', async () => {
@@ -226,7 +226,7 @@ test('long route and Thinking identities retain exact payload with short determi
     await f.load();
     f.mini.runState.setTaskSelection([...keys].reverse());
     expect(f.mini.runState.getSelectedTargets()).toEqual(first);
-    await f.element('run-form').emit('submit');
+    await f.element('start-run').emit('click');
     const submission = f.calls.find(call => call.path.endsWith('/tasks') && call.options?.method === 'POST');
     expect(JSON.parse(submission.options.body).targets).toEqual(first);
 });
@@ -249,7 +249,7 @@ test('one action starts the latest exact targets; config changes update preview 
     f.mini.runState.setTaskSelection([f.key(f.mini.runState.leaves[1])]);
     expect(f.element('start-run').disabled).toBe(false);
     expect(f.calls.filter(c => c.options?.method === 'POST')).toHaveLength(0);
-    await f.element('run-form').emit('submit');
+    await f.element('start-run').emit('click');
     const posts = f.calls.filter(c => c.options?.method === 'POST');
     expect(posts).toHaveLength(1);
     expect(posts[0].path).toBe('./api/bench/tasks');
@@ -261,10 +261,10 @@ test('submission timeout checks history and requires explicit review before anot
     await f.load();
     f.mini.runState.setTaskSelection([f.key(f.mini.runState.leaves[0])]);
     f.setFailStart(true);
-    await f.element('run-form').emit('submit');
+    await f.element('start-run').emit('click');
     f.element('run-rounds').value = '2';
     await f.element('run-form').emit('input');
-    await f.element('run-form').emit('submit');
+    await f.element('start-run').emit('click');
     const posts = f.calls.filter(c => c.path.endsWith('/tasks') && c.options?.method === 'POST');
     expect(posts).toHaveLength(1);
     expect(f.calls.slice(f.calls.indexOf(posts[0]) + 1).some(c => c.path.endsWith('/tasks') && !c.options)).toBe(true);
@@ -274,7 +274,7 @@ test('submission timeout checks history and requires explicit review before anot
     expect(f.element('start-run').disabled).toBe(false);
     expect(f.calls.filter(c => c.options?.method === 'POST')).toHaveLength(1);
     f.setFailStart(false);
-    await f.element('run-form').emit('submit');
+    await f.element('start-run').emit('click');
     expect(f.calls.filter(c => c.options?.method === 'POST')).toHaveLength(2);
 });
 
@@ -291,7 +291,7 @@ test('invalid budgets, rounds and concurrency cannot start; cancellation remains
     ]) {
         const prior = f.element(id).value;
         f.element(id).value = value;
-        await f.element('run-form').emit('submit');
+        await f.element('start-run').emit('click');
         f.element(id).value = prior;
     }
     expect(f.calls.filter(call => call.path.endsWith('/task-plans'))).toHaveLength(0);
@@ -329,7 +329,7 @@ test('seven exact leaves create seven runs with 42 samples each and two-level co
     expect(f.element('run-request-estimate').textContent).toContain('294');
     expect(f.element('bench-plan-preview').innerHTML).toContain('7 个独立运行');
     expect(f.element('bench-plan-preview').innerHTML).toContain('每运行 42');
-    await f.element('run-form').emit('submit');
+    await f.element('start-run').emit('click');
     const call = f.calls.find(call => call.path.endsWith('/tasks') && call.options?.method === 'POST');
     const input = JSON.parse(call.options.body);
     expect(input.targets).toHaveLength(7);
@@ -425,11 +425,11 @@ test('double submit and config edits during creation cannot submit a second task
     f.mini.runState.setTaskSelection([key]);
     let release;
     f.setSubmissionGate(new Promise(resolve => (release = resolve)));
-    const pending = f.element('run-form').emit('submit');
+    const pending = f.element('start-run').emit('click');
     f.mini.runState.setTaskSelection([]);
     f.mini.runState.setTaskSelection([key]);
     expect(f.element('start-run').disabled).toBe(true);
-    await f.element('run-form').emit('submit');
+    await f.element('start-run').emit('click');
     expect(f.calls.filter(call => call.options?.method === 'POST')).toHaveLength(1);
     release();
     await pending;
@@ -452,7 +452,7 @@ test('concurrency bounds validate independently before any task submission', asy
     ]) {
         const prior = f.element(id).value;
         f.element(id).value = value;
-        await f.element('run-form').emit('submit');
+        await f.element('start-run').emit('click');
         f.element(id).value = prior;
     }
     expect(f.calls.filter(call => call.options?.method === 'POST')).toHaveLength(0);
@@ -507,7 +507,7 @@ test('only per-sample timeout is submitted; no hidden request, token, dollar or 
     f.mini.runState.setTaskSelection([f.key(f.mini.runState.leaves[0])]);
     expect(f.element('bench-plan-preview').innerHTML).toContain('每题总超时 600 秒');
     expect(f.element('bench-plan-preview').innerHTML).toContain('不设置 token');
-    await f.element('run-form').emit('submit');
+    await f.element('start-run').emit('click');
     const call = f.calls.find(c => c.options?.method === 'POST');
     const limits = JSON.parse(call.options.body).limits;
     for (const key of ['max_output_tokens', 'max_cost_usd', 'max_requests', 'max_tool_calls', 'max_turns']) expect(limits[key]).toBeNull();
@@ -637,4 +637,10 @@ test('copy never substitutes a changed account binding on the same route', async
     expect(f.mini.runState.getSelectedTargets()).toEqual([]);
     expect(f.messages.at(-1)[0]).toContain('未替换为其他目标');
     expect(f.calls.filter(call => call.options?.method === 'POST')).toHaveLength(0);
+});
+
+test('web UI avoids native form submission so sandboxed iframes without allow-forms can start tasks', () => {
+    const html = readFileSync(join(import.meta.dir, '../web/index.html'), 'utf8');
+    expect(html).not.toMatch(/<form\b/i);
+    expect(html).not.toMatch(/type=["']submit["']/i);
 });
