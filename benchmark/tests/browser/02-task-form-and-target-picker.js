@@ -12,30 +12,33 @@
   require(!posts.some(post=>post.path==='/api/bench/tasks'||post.path==='/api/bench/runs'),'Opening the task view submitted paid work');
   require((await page.locator('#bench-bank-label').innerText()).includes('12'),'Bank 12 not loaded');
   await page.locator('#task-picker .dp-trigger').click();const popup=page.locator('.dp-popup:not([hidden])');
-  const chooseProvider=async id=>popup.locator('.dp-provider-filter').selectOption(id);
+  const chooseProvider=async id=>{
+    if(!id){await popup.locator('.dp-search').fill('');return;}
+    await popup.locator('.dp-search').fill('');
+    await popup.locator('.dp-rail-item').evaluateAll((nodes,target)=>{
+      const match=nodes.find(node=>node.dataset.providerId===target);
+      if(!match)throw new Error('Missing channel rail item: '+target);
+      match.click();
+    },id);
+  };
   require(await popup.locator('input[type="search"]').count()===1,'Selector needs one search field');
   require(await popup.locator('.dp-account-filter').count()===0,'Standalone account filter must not be shown');
-  require((await popup.locator('.dp-filters select').evaluateAll(nodes=>nodes.map(node=>node.getAttribute('aria-label')).join(',')))==='筛选渠道,筛选模型,筛选思考','Filter order changed');
-  require((await popup.locator('.dp-column-head span').allTextContents()).join(',')==='渠道,模型,思考','Column order changed');
-  await popup.locator('.dp-model-filter').selectOption('same-model');
-  require(await popup.locator('.dp-result-row').count()===7,'Model filter omitted channel instances or included other models');
-  require((await page.evaluate(()=>window.MiniBench.runState.getSelectedTargets())).length===0,'Model filtering selected paid targets');
+  require(await popup.locator('.dp-rail-item').count()>=7,'Channel rail must list all channels');
   await chooseProvider('provider:ordinary-owner');
-  require(await popup.locator('.dp-model-filter').inputValue()==='','Channel change retained an incompatible model');
-  require((await popup.locator('.dp-model-filter option').evaluateAll(nodes=>nodes.map(node=>node.value))).join(',')===',ordinary-owner/openai/not-a-remote','Model options must follow the channel');
-  require(await popup.locator('.dp-result-row').count()===1,'Incompatible model filter hid valid channel routes');
-  await chooseProvider('');await popup.locator('.dp-model-filter').selectOption('same-model');
+  require(await popup.locator('.dp-result-row').count()===1,'Channel rail did not isolate channel routes');
+  require((await page.evaluate(()=>window.MiniBench.runState.getSelectedTargets())).length===0,'Channel switching selected paid targets');
   await chooseProvider('provider:chatgpt-main');
-  require(await popup.locator('.dp-model-filter').inputValue()==='same-model','Compatible model filter was cleared');
-  require(await popup.locator('.dp-model-filter option').count()===2,'Unrelated channel models remain selectable');
-  await chooseProvider('');
+  require(await popup.locator('.dp-result-row').count()===1,'Selected channel must show only its models');
   await popup.locator('.dp-search').fill('same model');
-  require(await popup.locator('.dp-result-row').count()>=2,'Unified search omitted other channels');
+  require(await popup.locator('.dp-result-row').count()===7,'Unified search omitted other channels');
   await popup.locator('.dp-thinking-filter').selectOption('high');
   const matchedRoutes=await popup.locator('.dp-result-row').count();
   await popup.locator('.dp-select-visible').click();
   const searchTargets=await page.evaluate(()=>window.MiniBench.runState.getSelectedTargets());
   require(searchTargets.length===matchedRoutes&&searchTargets.every(target=>target.thinking==='high'),'Search selection formed hidden targets or a Thinking cross product');
+  const firstPressedThink=popup.locator('.dp-think[aria-pressed="true"]').first();
+  const thinkBefore=await firstPressedThink.evaluate(node=>getComputedStyle(node,'::before').content);
+  require(!thinkBefore.includes('✓')&&!(await firstPressedThink.innerText()).includes('✓'),'Selected thinking pill must highlight without checkmark prefix');
   await popup.locator('.dp-search').fill('no-search-results');
   require((await popup.locator('.dp-summary').innerText()).includes(matchedRoutes+' 项在当前筛选之外'),'Search lost hidden targets');
   require(await popup.locator('.dp-selected-toggle').count()===0,'Redundant selected review control remains');
@@ -43,9 +46,14 @@
   require((await page.evaluate(()=>window.MiniBench.runState.getSelectedTargets())).length===matchedRoutes,'Reset filters cleared selected targets');
   await popup.locator('.dp-action').click();
   require(await popup.locator('.dp-think[data-think="default"]').count()===0,'Default effort must be omitted from target picker');
-  await chooseProvider('provider:chatgpt-main');await popup.locator('.dp-think[data-think="high"]').click();
+  await chooseProvider('provider:chatgpt-main');
+  const thinkBoxBefore=await popup.locator('.dp-model-row .dp-thinking-list').first().boundingBox();
+  await popup.locator('.dp-think[data-think="high"]').click();
+  const thinkBoxAfter=await popup.locator('.dp-model-row .dp-thinking-list').first().boundingBox();
+  require(await popup.locator('.dp-row-count').count()===0,'Model row must not append per-row count suffix');
+  require(Math.abs(thinkBoxBefore.x-thinkBoxAfter.x)<0.5&&Math.abs(thinkBoxBefore.width-thinkBoxAfter.width)<0.5,'Selecting a thinking option shifted the model row layout');
   await chooseProvider('provider:chatgpt-lab');require(await popup.locator('.dp-think[data-think="high"]').getAttribute('aria-pressed')==='false','Cross-instance selection leaked');await popup.locator('.dp-think[data-think="low"]').click();
-  await chooseProvider('provider:chatgpt-main');require(await popup.locator('.dp-think[data-think="high"]').getAttribute('aria-pressed')==='true','Filtering cleared selection');
+  await chooseProvider('provider:chatgpt-main');require(await popup.locator('.dp-think[data-think="high"]').getAttribute('aria-pressed')==='true','Channel switch cleared selection');
   for(let i=2;i<7;i++){await chooseProvider('provider:fixture-provider-'+i);await popup.locator('.dp-think[data-think="high"]').click();}
   await popup.getByRole('button',{name:'完成',exact:true}).click();
   for(const [id,bad,good] of [['bench-timeout','0','600'],['run-rounds','4','3'],['sample-concurrency','65','6'],['run-concurrency','11','3']]){await page.locator('#'+id).fill(bad);require(await page.locator('#start-run').isDisabled(),'Invalid config accepted: '+id);await page.locator('#'+id).fill(good);}

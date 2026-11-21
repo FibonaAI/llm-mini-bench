@@ -23,22 +23,39 @@ export function createTaskTargets(app) {
       .map(([, target], index) => ({ id: `target-${index + 1}`, ...target }));
   }
 
+  const shortAccountLabel = leaf =>
+    leaf.route?.account_evidence === 'gateway_binding'
+      ? '自动分配'
+      : leaf.accountDisplayId && leaf.accountDisplayId !== '实际账号未记录'
+        ? leaf.accountDisplayId
+        : leaf.account;
+
   function renderSelection() {
     const selected = new Set(app.targets.selectedKeys);
     const leaves = app.targets.leaves.filter(leaf => selected.has(selectionKey(leaf)));
+    const fixedProviders = new Set(
+      app.targets.leaves.filter(leaf => leaf.route?.account_evidence !== 'gateway_binding').map(leaf => leaf.providerId ?? leaf.provider)
+    );
     element('run-model-count').textContent = `${getSelectedTargets().length} 个独立运行`;
     element('run-selected-targets').innerHTML = leaves.length
       ? leaves
-          .map(
-            leaf =>
-              `<div class="selected-target"><strong>${escapeHtml(leaf.modelDisplayName || leaf.model)}</strong><span>${escapeHtml(leaf.providerName || leaf.providerDisplayId || leaf.provider)} / ${escapeHtml(leaf.account)} · ${escapeHtml(thinkingLabel(leaf.think))}</span></div>`
-          )
+          .map(leaf => {
+            const key = selectionKey(leaf);
+            const provider = leaf.providerName || leaf.providerDisplayId || leaf.provider;
+            const account = shortAccountLabel(leaf);
+            const fullMeta = `${provider} / ${leaf.account} · ${thinkingLabel(leaf.think)}`;
+            return `<div class="selected-target"><div class="selected-target-info"><strong>${escapeHtml(leaf.modelDisplayName || leaf.model)}</strong><span title="${escapeHtml(fullMeta)}">${escapeHtml(provider)} / ${escapeHtml(account)} · ${escapeHtml(thinkingLabel(leaf.think))}</span></div><button class="selected-target-remove" type="button" data-remove-target-key="${escapeHtml(key)}" aria-label="移除 ${escapeHtml(leaf.modelDisplayName || leaf.model)} (${escapeHtml(account)})">×</button></div>`;
+          })
           .join('')
-      : '<p class="empty">尚未选择目标。搜索模型可跨渠道选择，也可按渠道、模型或思考筛选。</p>';
-    const gatewayTargets = leaves.some(leaf => leaf.route?.account_evidence === 'gateway_binding');
+      : '<p class="empty">尚未选择目标。点击上方「选择目标」按渠道、账号与思考档位勾选，或跨渠道搜索。</p>';
+    const gatewayLeaves = leaves.filter(leaf => leaf.route?.account_evidence === 'gateway_binding');
+    const gatewayTargets = gatewayLeaves.length > 0;
+    const hasPinnedAlternative = gatewayLeaves.some(leaf => fixedProviders.has(leaf.providerId ?? leaf.provider));
     element('task-route-warning').hidden = !gatewayTargets;
     element('task-route-warning').textContent = gatewayTargets
-      ? '实际账号由 Magpie 分配；网关内部也可能重试。固定账号对照需显式绑定路由。'
+      ? hasPinnedAlternative
+        ? '实际账号由 Magpie 分配；网关内部也可能重试。本机多账号渠道可在「选择目标」中勾选具体账号，固定账号对照需显式绑定路由。'
+        : '实际账号由 Magpie 分配；网关内部也可能重试。固定账号对照需显式绑定路由。'
       : '';
     updateEstimate();
   }
@@ -84,6 +101,12 @@ export function createTaskTargets(app) {
     app.emit('mini-bench:targets-changed');
   }
 
+  element('run-selected-targets').addEventListener?.('click', event => {
+    const removeBtn = event.target?.closest?.('[data-remove-target-key]');
+    if (!removeBtn) return;
+    const targetKey = removeBtn.dataset.removeTargetKey;
+    setTaskSelection(app.targets.selectedKeys.filter(key => key !== targetKey));
+  });
   element('run-rounds').addEventListener('input', updateEstimate);
   app.on('mini-bench:select-targets', event => {
     if (Array.isArray(event.detail?.keys)) setTaskSelection(event.detail.keys, true);

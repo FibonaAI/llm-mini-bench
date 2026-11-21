@@ -196,11 +196,17 @@ function renderHistoryPicker() {
     return;
   }
   historyPickerInputs = inputs;
+  const conciseAccount = record =>
+    String(record.accountId ?? '').startsWith('gateway-binding:')
+      ? '自动分配'
+      : record.accountDisplayId && record.accountDisplayId !== '实际账号未记录'
+        ? record.accountDisplayId
+        : record.account;
   element('analysis-history-options').innerHTML = candidates.length
     ? candidates
         .map(
           record =>
-            `<label class="analysis-history-option"><input type="checkbox" data-history-record="${escapeHtml(record.id)}" ${state.historyIds.has(record.id) ? 'checked' : ''}><span><strong>${escapeHtml(record.modelDisplayName || record.model)} · ${escapeHtml(thinkingLabel(record.think))}</strong><span>${escapeHtml(formatDate(record.created_at))} · ${escapeHtml(record.providerName || record.provider)} / ${escapeHtml(record.account)}</span><small>${escapeHtml(record.id)} · ${sourceText(record)}</small></span></label>`
+            `<label class="analysis-history-option"><input type="checkbox" data-history-record="${escapeHtml(record.id)}" ${state.historyIds.has(record.id) ? 'checked' : ''}><span><strong>${escapeHtml(record.modelDisplayName || record.model)} · ${escapeHtml(thinkingLabel(record.think))}</strong><span>${escapeHtml(formatDate(record.created_at))} · ${escapeHtml(record.providerName || record.provider)} / ${escapeHtml(conciseAccount(record))}</span><small>${escapeHtml(record.id)} · ${sourceText(record)}</small></span></label>`
         )
         .join('')
     : '<p class="field-hint">没有匹配的历史记录，请调整筛选或日期范围。</p>';

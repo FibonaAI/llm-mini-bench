@@ -106,17 +106,28 @@ export function createAnalysisFilters(container, { onChange = () => {} } = {}) {
     });
     actions.append(unrestricted, close);
     heading.append(node('strong', '', facet.heading ?? facet.label), actions);
+    const facetSearch = node('input', 'field af-facet-search');
+    facetSearch.type = 'text';
+    facetSearch.placeholder = `筛选${facet.heading ?? facet.label}…`;
+    facetSearch.setAttribute('aria-label', `筛选${facet.heading ?? facet.label}选项`);
+    facetSearch.setAttribute('spellcheck', 'false');
+    facetSearch.setAttribute('autocapitalize', 'none');
+    facetSearch.hidden = true;
+    facetSearch.addEventListener('input', () => render());
     const list = node('div', 'af-option-list');
-    popup.append(heading, list);
+    popup.append(heading, facetSearch, list);
     details.append(summary, popup);
     details.addEventListener('toggle', () => {
       if (details.open) {
         for (const control of controls) if (control.details !== details) control.details.open = false;
         positionOpenFacet();
+      } else if (facetSearch.value) {
+        facetSearch.value = '';
+        render();
       }
     });
     container.append(details);
-    return { facet, details, summary, list, popup };
+    return { facet, details, summary, facetSearch, list, popup };
   });
   function positionOpenFacet() {
     for (const { facet, details, summary, popup } of controls) {
@@ -153,7 +164,7 @@ export function createAnalysisFilters(container, { onChange = () => {} } = {}) {
           search.focus();
         })
       );
-    for (const { facet, summary, list } of controls) {
+    for (const { facet, summary, facetSearch, list } of controls) {
       const values = new Map();
       for (const record of records) {
         const key = facet.value(record);
@@ -184,7 +195,16 @@ export function createAnalysisFilters(container, { onChange = () => {} } = {}) {
       // Keep temporarily absent selections visible so refreshes never silently broaden a filter.
       for (const value of state[facet.id]) if (!values.has(value)) values.set(value, { text: value, primary: value, secondary: '' });
       const ordered = facet.sort ? [...values.entries()].sort(facet.sort) : [...values.entries()];
-      for (const [value, entry] of ordered) {
+      const showFacetSearch = ordered.length > 8;
+      facetSearch.hidden = !showFacetSearch;
+      if (!showFacetSearch && facetSearch.value) facetSearch.value = '';
+      const facetQuery = showFacetSearch ? facetSearch.value.trim().toLocaleLowerCase() : '';
+      const shown = facetQuery
+        ? ordered.filter(([value, entry]) =>
+            `${entry.primary} ${entry.secondary} ${entry.text} ${value}`.toLocaleLowerCase().includes(facetQuery)
+          )
+        : ordered;
+      for (const [value, entry] of shown) {
         const count = records.filter(record => matchesAnalysisFilters(record, state, facet.id) && facet.value(record) === value).length;
         const row = node('div', 'af-option');
         const label = node('label', '');
@@ -211,6 +231,7 @@ export function createAnalysisFilters(container, { onChange = () => {} } = {}) {
         list.append(row);
       }
       if (!values.size) list.append(node('p', 'muted', '暂无选项'));
+      else if (!shown.length) list.append(node('p', 'muted af-empty', '没有匹配选项'));
     }
     conditions.hidden = !conditions.children.length;
     if (focusFacet && focusValue !== undefined) {
@@ -255,7 +276,10 @@ export function createAnalysisFilters(container, { onChange = () => {} } = {}) {
     reset() {
       Object.assign(state, createAnalysisFilterState());
       search.value = '';
-      for (const { details } of controls) details.open = false;
+      for (const { details, facetSearch } of controls) {
+        details.open = false;
+        facetSearch.value = '';
+      }
       update();
     },
     focus() {

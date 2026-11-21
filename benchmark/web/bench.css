@@ -343,6 +343,17 @@ input::placeholder {
   align-items: center;
   gap: 2px;
 }
+.af-facet-search {
+  width: 100%;
+  margin-bottom: 6px;
+  min-height: 28px;
+  font-size: 12px;
+  background: var(--pill);
+}
+.af-empty {
+  padding: 10px 6px;
+  text-align: center;
+}
 .af-option-list {
   max-height: min(350px, 50vh);
   padding: 2px 0 4px;
@@ -1409,12 +1420,26 @@ th {
   font-size: 12px;
   line-height: 1.6;
 }
+#run-selected-targets {
+  max-height: 220px;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  scrollbar-width: thin;
+}
 .selected-target {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px 12px;
+  padding: 7px 0;
+  border-bottom: 1px solid var(--line-2);
+}
+.selected-target-info {
   display: flex;
   flex-wrap: wrap;
   gap: 4px 12px;
-  padding: 7px 0;
-  border-bottom: 1px solid var(--line-2);
+  min-width: 0;
+  flex: 1;
 }
 .selected-target strong {
   font-weight: 500;
@@ -1422,6 +1447,20 @@ th {
 .selected-target span {
   color: var(--muted);
   overflow-wrap: anywhere;
+}
+.selected-target-remove {
+  flex: 0 0 auto;
+  border: 0;
+  background: transparent;
+  color: var(--muted);
+  font-size: 15px;
+  line-height: 1;
+  padding: 2px 6px;
+  min-height: 24px;
+}
+.selected-target-remove:hover {
+  color: var(--fg);
+  background: var(--pill-hover);
 }
 .history-entry + .history-entry {
   border-top: 1px solid var(--line);

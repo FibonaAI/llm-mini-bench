@@ -563,4 +563,77 @@ test('task preview distinguishes multiple accounts on the same channel and model
     expect(html).toContain('<span class="task-preview-chip-label">alpha · low</span>');
     expect(html).toContain('<span class="task-preview-chip-label">alpha · high</span>');
     expect(html).toContain('<span class="task-preview-chip-label">beta · high</span>');
+    const listHtml = nodes.get('bench-run-list').innerHTML;
+    expect(listHtml).toContain('GPT-6 Luna · bench-mock（2 个账号）');
+});
+
+test('task preview labels gateway-binding accounts as 自动分配 and single-pinned tasks show account in headline', () => {
+    const { state, view, nodes } = fixture();
+    const pinnedTask = {
+        id: 'task-single-pin',
+        status: 'completed',
+        plan: { run_count: 1, rounds: 1 },
+        children: [
+            {
+                run_id: 'r-pin',
+                target: {
+                    provider_id: 'openai',
+                    model: 'openai/gpt-5.4',
+                    model_display_name: 'GPT-5.4',
+                    route_id: 'r-pin',
+                    account_ref: 'team-a',
+                    account_evidence: 'gateway_account_binding',
+                    thinking: 'high'
+                },
+                status: 'completed',
+                sample_count: 12,
+                sample_status_counts: { completed: 12 }
+            }
+        ]
+    };
+    const mixedDefaultTask = {
+        id: 'task-mixed-auto',
+        status: 'completed',
+        plan: { run_count: 2, rounds: 1 },
+        children: [
+            {
+                run_id: 'r-auto',
+                target: {
+                    provider_id: 'openai',
+                    model: 'openai/gpt-5.4',
+                    model_display_name: 'GPT-5.4',
+                    route_id: 'r-auto',
+                    account_ref: 'gateway-default',
+                    account_evidence: 'gateway_binding',
+                    thinking: 'default'
+                },
+                status: 'completed',
+                sample_count: 12,
+                sample_status_counts: { completed: 12 }
+            },
+            {
+                run_id: 'r-fixed',
+                target: {
+                    provider_id: 'openai',
+                    model: 'openai/gpt-5.4',
+                    model_display_name: 'GPT-5.4',
+                    route_id: 'r-fixed',
+                    account_ref: 'team-a',
+                    account_evidence: 'gateway_account_binding',
+                    thinking: 'default'
+                },
+                status: 'completed',
+                sample_count: 12,
+                sample_status_counts: { completed: 12 }
+            }
+        ]
+    };
+    state.tasks = [pinnedTask, mixedDefaultTask];
+    state.selectedTaskId = 'task-mixed-auto';
+    state.selectedRunId = null;
+    state.taskDetail = mixedDefaultTask;
+    view.renderDetails();
+    expect(nodes.get('bench-run-list').innerHTML).toContain('GPT-5.4 · openai / team-a');
+    expect(nodes.get('bench-task-detail').innerHTML).toContain('<span class="task-preview-chip-label">自动分配</span>');
+    expect(nodes.get('bench-task-detail').innerHTML).toContain('<span class="task-preview-chip-label">team-a</span>');
 });

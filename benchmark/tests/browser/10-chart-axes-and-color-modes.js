@@ -40,12 +40,26 @@
   const accountLegendTexts=await page.locator('.chart-legend-item').allInnerTexts();
   require(accountLegendTexts.some(t=>t.includes('color-channel-0 / acct-a')&&!t.includes('（')),'Account legend should use concise channel/account label without verbose suffix');
   await openFacet('account');
+  require(await facet('account').locator('.af-facet-search').isHidden(),'Account facet search should stay hidden when <=8 accounts');
   const acctSubtitles=await facet('account').locator('.af-option-sub').allInnerTexts();
   require(acctSubtitles.includes('color-channel-0'),'Bound accounts should show channel as a concise secondary subtitle');
   await facetChoice('account',JSON.stringify(['provider:color-channel-0','account:acct-a'])).check();
   require(await point('color-same-acct').count()===1&&await point('color-same-acct-m2').count()===1&&await point('color-other-acct').count()===0,'Account facet did not isolate bound account');
   await facet('account').locator('.af-unrestricted').click();
   await facet('account').locator('summary').click();
+  // Verify inline search appears in account facet when >8 distinct accounts exist.
+  const extraAccounts=Array.from({length:8},(_,i)=>({...peer,id:'color-extra-acct-'+i,provider_id:'color-channel-0',account_ref:'batch-key-'+i,account_evidence:'gateway_account_binding',model:'gpt-6.1-sol',model_display_name:'gpt-6.1-sol',estimated_cost_usd:.096+i*.001}));
+  observations.push(...extraAccounts);
+  await refresh();
+  await page.waitForFunction(()=>document.querySelectorAll('.score-cost-point').length===16);
+  await openFacet('account');
+  require(await facet('account').locator('.af-facet-search').isVisible(),'Account facet should show inline filter when >8 accounts');
+  await facet('account').locator('.af-facet-search').fill('batch-key-3');
+  require(await facet('account').locator('.af-option').count()===1,'Account facet inline filter did not narrow options');
+  await facet('account').locator('summary').click();
+  observations.splice(observations.length-extraAccounts.length,extraAccounts.length);
+  await refresh();
+  await page.waitForFunction(()=>document.querySelectorAll('.score-cost-point').length===8);
   await page.locator('#chart-color-by').selectOption('series');
   require(await color('color-same-acct')!==await color('color-same-acct-m2'),'Series coloring must still separate distinct models on the same account');
   observations.splice(0,observations.length,...Array.from({length:43},(_,i)=>({...peer,id:'dense-'+i,task_id:'dense-task',run_id:'dense-run-'+i,provider_id:'dense-channel-'+Math.floor(i/9),model:'request-model-'+Math.floor(i/9)%3,model_display_name:i===41?'Singleton model':'Model '+Math.floor(i/9)%3,thinking:['unknown','none','minimal','low','medium','high','xhigh','max','ultra'][i%9],status:'completed',estimated_cost_usd:i===42?null:.009+i*.002,usage:{input_tokens:1000+i*10,output_tokens:500+i*5},tasks:tasks.map(task=>({...task,samples:task.samples.map(sample=>({...sample,content_score:i<22?1:.8+(i%5)*.03}))}))})));

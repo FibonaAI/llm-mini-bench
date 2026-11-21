@@ -161,6 +161,21 @@ export function createTaskHistoryView({ app, state, retryRequests, retrying }) {
         modelCount: 0
       };
     if (models.length === 1) {
+      if (channels.length === 1) {
+        const pinnedAccounts = [
+          ...new Set(entries.filter(t => t?.account_ref && t?.account_evidence !== 'gateway_binding').map(t => t.account_ref))
+        ];
+        const hasGateway = entries.some(t => !t?.account_ref || t?.account_evidence === 'gateway_binding');
+        const distinctCount = pinnedAccounts.length + (hasGateway ? 1 : 0);
+        if (pinnedAccounts.length === 1 && !hasGateway) {
+          const text = `${models[0]} · ${channels[0]} / ${pinnedAccounts[0]}`;
+          return { text, title: text, modelCount: 1 };
+        }
+        if (distinctCount > 1) {
+          const text = `${models[0]} · ${channels[0]}（${distinctCount} 个账号）`;
+          return { text, title: text, modelCount: 1 };
+        }
+      }
       const channelHint = channels.length >= 1 && channels.length <= 2 ? ` · ${channels.join(' / ')}` : '';
       return { text: `${models[0]}${channelHint}`, title: `${models[0]}${channelHint}`, modelCount: 1 };
     }
@@ -442,7 +457,7 @@ export function createTaskHistoryView({ app, state, retryRequests, retrying }) {
       return prefix && raw.startsWith(prefix) && raw.length > prefix.length ? raw.slice(prefix.length) : raw;
     };
     const shortThink = target => (target?.thinking === 'default' ? '默认' : target?.thinking || '未记录');
-    const shortAccount = target => (target?.account_evidence === 'gateway_binding' ? '默认' : target?.account_ref || '未记录');
+    const shortAccount = target => (target?.account_evidence === 'gateway_binding' ? '自动分配' : target?.account_ref || '未记录');
     const isPinnedAccount = target => Boolean(target?.account_ref) && target?.account_evidence !== 'gateway_binding';
     const presentTones = new Set(visibleChildren.map(childPreviewTone));
     const rows = groups

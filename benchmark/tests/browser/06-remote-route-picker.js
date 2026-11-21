@@ -7,17 +7,17 @@
   require(await popup.locator('.dp-search').inputValue()===''&&await popup.locator('.dp-result-row').count()>0,'Reset did not restore candidate rows');
   for(const provider of ['remote-A','remote-B']){
     const id=JSON.stringify([provider,'openai']);
-    require(await popup.locator('.dp-provider-filter option').evaluateAll((nodes,id)=>nodes.some(node=>node.value===id),id),'Remote namespaces merged across instances');
+    require(await popup.locator('.dp-rail-item').evaluateAll((nodes,id)=>nodes.some(node=>node.dataset.providerId===id),id),'Remote namespaces merged across instances');
     await chooseProvider(id);
     require(await popup.locator('.dp-result-row img').count()===0,'Remote namespace inferred a brand icon');
-    require((await popup.locator('.dp-route').innerText()).includes('网关自动分配')&&(await popup.locator('.dp-route').innerText()).includes('实际账号未记录'),'Remote path invented account pinning');
+    require((await popup.locator('.dp-acc-static-value').innerText()).includes('网关自动分配')&&(await popup.locator('.dp-acc-static-value').innerText()).includes('实际账号未记录'),'Remote path invented account pinning');
     require(await popup.locator('.dp-quota-cards, .dp-quota-card').count()===0,'Target list must not display quota cards');
     const leaf=popup.locator('.dp-think[data-think="high"]');require(await leaf.getAttribute('aria-pressed')==='false','Remote instance selection leaked');require(await leaf.getAttribute('data-model')===provider+'/openai/exact/model-v1','Remote model ID was rewritten');await leaf.click();
   }
-  await chooseProvider(JSON.stringify(['remote-A','openai']));require(await popup.locator('.dp-think[data-think="high"]').getAttribute('aria-pressed')==='true','Remote A selection lost after filtering B');
-  for(const [namespace,label] of [['auto','自动路由'],['group','路由组']]){await chooseProvider(JSON.stringify(['remote-A',namespace]));require((await popup.locator('.dp-route').innerText()).includes(label),'Remote routing namespace mislabeled');require(await popup.locator('.dp-quota-cards').count()===0,'Inferred group member accounts');}
+  await chooseProvider(JSON.stringify(['remote-A','openai']));require(await popup.locator('.dp-think[data-think="high"]').getAttribute('aria-pressed')==='true','Remote A selection lost after switching to B');
+  for(const [namespace,label] of [['auto','自动路由'],['group','路由组']]){await chooseProvider(JSON.stringify(['remote-A',namespace]));require((await popup.locator('.dp-models-title').innerText()).includes(label),'Remote routing namespace mislabeled');require(await popup.locator('.dp-quota-cards').count()===0,'Inferred group member accounts');}
   await chooseProvider('provider:ordinary-owner');require(await popup.locator('.dp-think[data-think="high"]').getAttribute('data-model')==='ordinary-owner/openai/not-a-remote','Ordinary slash model changed');await popup.locator('.dp-think[data-think="high"]').click();
-  require(!await popup.locator('.dp-provider-filter option').evaluateAll(nodes=>nodes.some(node=>node.textContent==='ordinary-owner / openai')),'Ordinary slash model falsely expanded');
+  require(!await popup.locator('.dp-rail-name').evaluateAll(nodes=>nodes.some(node=>node.textContent==='ordinary-owner / openai')),'Ordinary slash model falsely expanded');
   await page.screenshot({path:(ARTIFACTS + '/remote-picker.png'),fullPage:true});await popup.getByRole('button',{name:'完成',exact:true}).click();
   await page.waitForFunction(()=>!document.querySelector('#start-run').disabled);
   plan={targets:await page.evaluate(()=>window.MiniBench.runState.getSelectedTargets())};
