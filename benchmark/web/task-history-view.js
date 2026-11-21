@@ -185,9 +185,16 @@ export function createTaskHistoryView({ app, state, retryRequests, retrying }) {
   const targetLabel = target => `${target.model || target.route_id || '模型未记录'} · ${target.thinking || 'Thinking 未记录'}`;
   const targetIdentity = target => {
     const namespace = remoteRouteNamespace(target);
+    const localProvider =
+      target.provider_name ||
+      (target.provider_id === 'auto'
+        ? 'auto（自动路由）'
+        : target.provider_id === 'group'
+          ? 'group（路由组）'
+          : target.provider_id || '未记录');
     const path = namespace
       ? `远端路由 ${target.provider_id} / ${namespace}${namespace === 'auto' ? '（自动路由）' : namespace === 'group' ? '（路由组）' : ''}（仅路由路径）`
-      : `渠道 ${target.provider_name || target.provider_id || '未记录'}`;
+      : `渠道 ${localProvider}`;
     return `${path} / 账号 ${target.account_evidence === 'gateway_binding' ? '网关自动分配（实际账号未记录）' : target.account_ref || '未记录'} · 路由 ${target.route_id || '未记录'}`;
   };
   const taskSection = element('bench-task-section'),

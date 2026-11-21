@@ -689,6 +689,13 @@
   color: var(--fg);
   overflow-wrap: anywhere;
 }
+.dp-model-id {
+  min-width: 0;
+  font-family: var(--code, ui-monospace, monospace);
+  font-size: 11px;
+  color: var(--muted);
+  overflow-wrap: anywhere;
+}
 .dp-model-warn {
   font-size: 11px;
   color: var(--amber);
@@ -747,7 +754,7 @@
   line-height: 1.45;
   overflow-wrap: anywhere;
 }
-.dp-search-row .dp-model-name {
+.dp-search-row .dp-model-col {
   grid-column: 3;
 }
 .dp-search-row .dp-thinking-list {
@@ -940,11 +947,11 @@
     margin-top: 3px;
   }
   .dp-search-row .dp-route,
-  .dp-search-row .dp-model-name,
+  .dp-search-row .dp-model-col,
   .dp-search-row .dp-thinking-list {
     grid-column: 2;
   }
-  .dp-search-row .dp-model-name {
+  .dp-search-row .dp-model-col {
     margin-top: 3px;
   }
   .dp-search-row .dp-thinking-list {

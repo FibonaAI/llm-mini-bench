@@ -204,6 +204,31 @@ describe('Magpie catalog routes', () => {
     const rows = await routes.public_routes();
     expect(rows).toHaveLength(catalog.length);
     for (const row of rows) expect(row).not.toHaveProperty('remote_route');
+    expect(rows.slice(0, 4).map(row => row.provider_id)).toEqual(['group', 'auto', 'group', 'auto']);
+  });
+  test('local auto and group routes separate from primary owned_by channels and skip account bindings', async () => {
+    const routes = new BenchGatewayRoutes(
+      () => [
+        model({ id: 'group/claude-sonnet-5-5', owned_by: 'claude', display_name: 'Claude Sonnet 5.5' }),
+        model({ id: 'auto/claude-sonnet-5-5', owned_by: 'homelab', display_name: 'Claude Sonnet 5.5', magpie_via: ['peer', 'local'] }),
+        model({ id: 'claude/claude-sonnet-5-5', owned_by: 'claude', display_name: 'Claude Sonnet 5.5' }),
+        model({ id: 'group/', owned_by: 'claude', display_name: 'Empty group suffix' }),
+        model({ id: 'auto/ padded', owned_by: 'claude', display_name: 'Padded auto suffix' })
+      ],
+      'https://example.com',
+      () => 'key',
+      2,
+      [{ provider_id: 'claude', account: 'claude/acct-1', account_ref: 'acct-1' }]
+    );
+    const rows = await routes.public_routes();
+    expect(rows.map(row => [row.model, row.provider_id, row.account_ref, row.remote_route])).toEqual([
+      ['group/claude-sonnet-5-5', 'group', 'gateway-default', undefined],
+      ['auto/claude-sonnet-5-5', 'auto', 'gateway-default', undefined],
+      ['claude/claude-sonnet-5-5', 'claude', 'gateway-default', undefined],
+      ['claude/claude-sonnet-5-5', 'claude', 'acct-1', undefined],
+      ['group/', 'claude', 'gateway-default', undefined],
+      ['auto/ padded', 'claude', 'gateway-default', undefined]
+    ]);
   });
   test('remote discovery ignores all explicitly non-chat catalog kinds, including duplicate image IDs', async () => {
     const routes = new BenchGatewayRoutes(

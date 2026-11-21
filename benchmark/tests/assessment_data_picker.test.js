@@ -527,3 +527,80 @@ test('target rows show channel, account and model without quota disclosures', ()
     expect(picker.getSelection()).toEqual(records.map(selectionKey));
     expect(changes).toEqual([]);
 });
+
+test('local routing groups follow direct local channels and duplicate model display names show raw model IDs', () => {
+    const records = [
+        {
+            providerId: 'provider:auto',
+            providerName: 'auto（自动路由）',
+            provider: '网关目录归属',
+            accountId: 'gateway-binding:gateway-default',
+            account: '网关自动分配（账号未记录）',
+            model: 'auto/claude-sonnet-5-5',
+            modelDisplayName: 'Claude Sonnet 5.5',
+            think: 'high',
+            route: { provider_id: 'auto', account_evidence: 'gateway_binding' }
+        },
+        {
+            providerId: '["homelab","claude"]',
+            providerName: 'homelab / claude',
+            providerSubtitle: 'homelab',
+            provider: '远端路由目录',
+            accountId: 'gateway-binding:gateway-default',
+            account: '网关自动分配（账号未记录）',
+            model: 'homelab/claude/claude-sonnet-5-5',
+            modelDisplayName: 'Claude Sonnet 5.5',
+            think: 'high',
+            route: {
+                provider_id: 'homelab',
+                account_evidence: 'gateway_binding',
+                remote_route: { namespace: 'claude', evidence: 'magpie_via_catalog' }
+            }
+        },
+        {
+            providerId: 'provider:claude',
+            providerName: 'claude',
+            provider: '网关目录归属',
+            accountId: 'gateway-binding:gateway-default',
+            account: '网关自动分配（账号未记录）',
+            model: 'claude/claude-sonnet-4-5',
+            modelDisplayName: 'Claude Sonnet 4.5',
+            think: 'high',
+            route: { provider_id: 'claude', account_evidence: 'gateway_binding' }
+        },
+        {
+            providerId: 'provider:claude',
+            providerName: 'claude',
+            provider: '网关目录归属',
+            accountId: 'gateway-binding:gateway-default',
+            account: '网关自动分配（账号未记录）',
+            model: 'claude/claude-sonnet-4-5-20250929',
+            modelDisplayName: 'Claude Sonnet 4.5',
+            think: 'high',
+            route: { provider_id: 'claude', account_evidence: 'gateway_binding' }
+        },
+        {
+            providerId: 'provider:claude',
+            providerName: 'claude',
+            provider: '网关目录归属',
+            accountId: 'gateway-binding:gateway-default',
+            account: '网关自动分配（账号未记录）',
+            model: 'claude/claude-haiku-5-5',
+            modelDisplayName: 'Claude Haiku 5.5',
+            think: 'high',
+            route: { provider_id: 'claude', account_evidence: 'gateway_binding' }
+        }
+    ];
+    const { findAll, search } = fixture({ records, selectedKeys: [], mode: 'tasks' });
+    // Rail orders direct local channel before local routing group and remote node.
+    expect(findAll('dp-rail-item').map(node => node.dataset.providerId)).toEqual([
+        'provider:claude',
+        'provider:auto',
+        '["homelab","claude"]'
+    ]);
+    // Inside claude, the two colliding display names show their raw model IDs, while the unique model does not.
+    expect(findAll('dp-model-id').map(node => node.textContent)).toEqual(['claude/claude-sonnet-4-5', 'claude/claude-sonnet-4-5-20250929']);
+    // Cross-channel search also shows raw model IDs for colliding display names.
+    search('Claude Sonnet 4.5');
+    expect(findAll('dp-model-id').map(node => node.textContent)).toEqual(['claude/claude-sonnet-4-5', 'claude/claude-sonnet-4-5-20250929']);
+});

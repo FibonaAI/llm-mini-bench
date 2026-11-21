@@ -26,6 +26,8 @@ export function remoteRouteNamespace(record) {
     : null;
 }
 
+const routingConstructLabel = name => (name === 'auto' ? 'auto（自动路由）' : name === 'group' ? 'group（路由组）' : name);
+
 function pickerIdentity(record, routeId, fallbackId) {
   const provider = text(record.provider_id);
   const binding = text(record.account_ref);
@@ -35,12 +37,13 @@ function pickerIdentity(record, routeId, fallbackId) {
   const model = text(record.model) ?? text(record.label) ?? '未记录模型';
   const namespace = remoteRouteNamespace(record);
   const path = namespace ? `${provider} / ${namespace}` : null;
-  const namespaceLabel = namespace === 'auto' ? 'auto（自动路由）' : namespace === 'group' ? 'group（路由组）' : namespace;
+  const namespaceLabel = namespace ? routingConstructLabel(namespace) : null;
+  const localProviderLabel = provider ? routingConstructLabel(provider) : null;
   return {
     providerId: namespace ? JSON.stringify([provider, namespace]) : provider ? `provider:${provider}` : `route:${routeId ?? fallbackId}`,
     providerShortName: namespaceLabel ?? undefined,
     providerSubtitle: namespace ? provider : undefined,
-    providerName: namespace ? `${provider} / ${namespaceLabel}` : (provider ?? '未记录渠道'),
+    providerName: namespace ? `${provider} / ${namespaceLabel}` : (localProviderLabel ?? '未记录渠道'),
     provider: namespace ? '远端路由目录' : provider ? '网关目录归属' : '渠道归属未记录',
     providerDisplayId: path ?? provider ?? routeId ?? '未记录',
     providerType: '', // The public model API does not expose provider preset/icon.

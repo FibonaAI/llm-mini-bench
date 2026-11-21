@@ -122,6 +122,22 @@ test('inner auto and group are labeled as routing constructs, unknown namespaces
     expect(records.find(record => record.routeId === 'c').providerName).toBe('remote / unfamiliar');
     expect(records.every(record => record.providerType === '')).toBe(true);
 });
+test('local auto and group providers are labeled as routing constructs without remote metadata', () => {
+    const records = routePickerLeaves([
+        { ...route('local-auto', 'auto'), model: 'auto/claude-sonnet-5-5', model_display_name: 'Claude Sonnet 5.5' },
+        { ...route('local-group', 'group'), model: 'group/claude-sonnet-5-5', model_display_name: 'Claude Sonnet 5.5' }
+    ]);
+    const localAuto = records.find(record => record.routeId === 'local-auto');
+    const localGroup = records.find(record => record.routeId === 'local-group');
+    expect(localAuto.providerId).toBe('provider:auto');
+    expect(localAuto.providerName).toBe('auto（自动路由）');
+    expect(localAuto.providerDisplayId).toBe('auto');
+    expect(localAuto.providerSubtitle).toBeUndefined();
+    expect(localGroup.providerId).toBe('provider:group');
+    expect(localGroup.providerName).toBe('group（路由组）');
+    expect(localGroup.providerDisplayId).toBe('group');
+    expect(localGroup.providerSubtitle).toBeUndefined();
+});
 test('invalid remote evidence never expands a nested model name into provider identity', () => {
     for (const remote_route of [
         null,

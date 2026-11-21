@@ -16,6 +16,11 @@ import { calibration_price } from '../benchmark/src/assessment_response.ts';
 function record(value: unknown): value is Record<string, unknown> {
   return value !== null && typeof value === 'object' && !Array.isArray(value);
 }
+/** Local Magpie routing groups (`auto/...`, `group/...`) report `owned_by` as their primary upstream; keep them under their own routing group instead of mixing them into a direct provider channel. */
+function local_routing_group(model_id: string): 'auto' | 'group' | undefined {
+  const match = /^(auto|group)\/(.+)$/.exec(model_id);
+  return match && _route_text(match[2]) ? (match[1] as 'auto' | 'group') : undefined;
+}
 /** Magpie v0.1.3078 viaOf also includes remote members of local groups; those are not remote entries. */
 function remote_route_metadata(model: Record<string, unknown>): BenchRouteMetadata['remote_route'] {
   const via = model.magpie_via;
@@ -114,6 +119,7 @@ export class MagpieBenchRoutes {
         continue;
       }
       const remote_route = remote_route_metadata(model);
+      const provider_id = local_routing_group(model.id) ?? (_route_text(model.owned_by) ? model.owned_by : undefined);
       const baseRoute: BenchPublicRoute = {
         id: 'gateway-' + createHash('sha256').update(model.id).digest('hex').slice(0, 24),
         label: model.id,
@@ -123,7 +129,7 @@ export class MagpieBenchRoutes {
         thinking_levels: advertised_thinking_levels(model).filter(level => _route_text(level, 64)),
         pricing,
         account_concurrency: this.concurrency,
-        ...(_route_text(model.owned_by) ? { provider_id: model.owned_by, provider_evidence: 'gateway_catalog' as const } : {}),
+        ...(provider_id ? { provider_id, provider_evidence: 'gateway_catalog' as const } : {}),
         ...(_route_text(model.display_name) ? { model_display_name: model.display_name } : {}),
         ...(remote_route ? { remote_route } : {})
       };

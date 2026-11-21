@@ -139,10 +139,23 @@ function buildChannels(leaves) {
       const sig = `${acc.primary}\0${acc.badgeId}`;
       if ((accLabelCounts.get(sig) ?? 0) > 1) acc.badgeId = acc.badgeId ? `${acc.badgeId} · ${acc.id}` : String(acc.id);
     }
-    for (const modelEntry of ch.models) modelEntry.thinks = sortEfforts(modelEntry.thinkSet);
+    const modelDisplayCounts = new Map();
+    for (const modelEntry of ch.models) {
+      modelDisplayCounts.set(modelEntry.displayName, (modelDisplayCounts.get(modelEntry.displayName) ?? 0) + 1);
+    }
+    for (const modelEntry of ch.models) {
+      modelEntry.thinks = sortEfforts(modelEntry.thinkSet);
+      modelEntry.duplicateDisplayName =
+        (modelDisplayCounts.get(modelEntry.displayName) ?? 0) > 1 && modelEntry.model !== modelEntry.displayName;
+    }
   }
-  // Present local channels first, then remote nodes, preserving catalog order within each group.
-  return [...all.filter(ch => !ch.remote), ...all.filter(ch => ch.remote)];
+  // Present direct local channels first, then local routing groups, then remote nodes, preserving catalog order within each group.
+  const isLocalRoutingGroup = ch => !ch.remote && (ch.id === 'provider:auto' || ch.id === 'provider:group');
+  return [
+    ...all.filter(ch => !ch.remote && !isLocalRoutingGroup(ch)),
+    ...all.filter(ch => isLocalRoutingGroup(ch)),
+    ...all.filter(ch => ch.remote)
+  ];
 }
 
 let pickerSequence = 0;
@@ -815,7 +828,11 @@ export function createDataPicker(container, { records, selectedKeys, mode = 'ana
       const customList = element('div', 'dp-custom-chips');
       for (const leaf of customLeaves.slice(0, 8)) {
         const acc = activeCh.accountById.get(accountIdentity(leaf));
-        const chipLabel = `${acc?.primary ?? leaf.account} · ${leaf.modelDisplayName ?? leaf.model} · ${thinkingLabel(leaf.think)} ×`;
+        const modelEntry = activeCh.modelById.get(leaf.model);
+        const modelLabel = modelEntry?.duplicateDisplayName
+          ? `${modelEntry.displayName} (${leaf.model})`
+          : (leaf.modelDisplayName ?? leaf.model);
+        const chipLabel = `${acc?.primary ?? leaf.account} · ${modelLabel} · ${thinkingLabel(leaf.think)} ×`;
         const chip = button('dp-acc-chip', chipLabel, () => {
           selected.delete(leaf.key);
           syncChannelFromSelected(activeCh);
@@ -866,7 +883,10 @@ export function createDataPicker(container, { records, selectedKeys, mode = 'ana
 
       const check = element('input', 'dp-check');
       check.type = 'checkbox';
-      check.setAttribute('aria-label', `选择 ${modelEntry.displayName}`);
+      check.setAttribute(
+        'aria-label',
+        modelEntry.duplicateDisplayName ? `选择 ${modelEntry.displayName} (${modelEntry.model})` : `选择 ${modelEntry.displayName}`
+      );
       check.dataset.focusId = `model-check:${activeCh.id}:${modelEntry.model}`;
 
       let activeThinkCount = 0;
@@ -908,6 +928,9 @@ export function createDataPicker(container, { records, selectedKeys, mode = 'ana
 
       const modelCol = element('div', 'dp-model-col');
       modelCol.append(element('span', 'dp-model-name', modelEntry.displayName));
+      if (modelEntry.duplicateDisplayName) {
+        modelCol.append(element('span', 'dp-model-id', modelEntry.model));
+      }
       if (cs.activeAccounts.size > 1 && supportedAccounts.length < cs.activeAccounts.size) {
         modelCol.append(
           element(
@@ -974,12 +997,16 @@ export function createDataPicker(container, { records, selectedKeys, mode = 'ana
       const acc = ch?.accountById.get(accountIdentity(first));
       const row = element('div', 'dp-result-row dp-search-row');
 
+      const modelEntry = ch?.modelById.get(first.model);
+      const displayName = first.modelDisplayName ?? first.model;
+      const showModelId = Boolean(modelEntry?.duplicateDisplayName) && first.model !== displayName;
+
       const check = element('input', 'dp-check');
       check.type = 'checkbox';
       const checkedCount = group.filter(leaf => selected.has(leaf.key)).length;
       check.checked = checkedCount === group.length;
       check.indeterminate = checkedCount > 0 && checkedCount < group.length;
-      check.setAttribute('aria-label', `选择 ${first.modelDisplayName ?? first.model}`);
+      check.setAttribute('aria-label', showModelId ? `选择 ${displayName} (${first.model})` : `选择 ${displayName}`);
       check.dataset.focusId = `search-row:${first.key}`;
       check.addEventListener('change', () => changeDirectLeaves(group, check.checked));
 
@@ -993,7 +1020,9 @@ export function createDataPicker(container, { records, selectedKeys, mode = 'ana
         )
       );
 
-      const modelNode = element('span', 'dp-model-name', first.modelDisplayName ?? first.model);
+      const modelCol = element('div', 'dp-model-col');
+      modelCol.append(element('span', 'dp-model-name', displayName));
+      if (showModelId) modelCol.append(element('span', 'dp-model-id', first.model));
       const thinkWrap = element('div', 'dp-thinking-list');
       for (const leaf of group) {
         const opt = button('dp-think', thinkingLabel(leaf.think), () => changeDirectLeaves([leaf], !selected.has(leaf.key)));
@@ -1003,7 +1032,7 @@ export function createDataPicker(container, { records, selectedKeys, mode = 'ana
         opt.setAttribute('aria-pressed', String(selected.has(leaf.key)));
         thinkWrap.append(opt);
       }
-      row.append(check, route, modelNode, thinkWrap);
+      row.append(check, route, modelCol, thinkWrap);
       list.append(row);
     }
     if (!rows.length) list.append(element('p', 'dp-empty', '没有匹配结果，试试缩短关键词或重置条件。'));
