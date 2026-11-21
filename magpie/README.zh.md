@@ -43,9 +43,9 @@ npm 和 GitHub 安装方式见[项目首页](../README.zh.md)。本地开发时�
 
 ## 本地多账号与多 Key 绑定
 
-Magpie 对订阅多账号与 API 多 Key（同一渠道下配置了 2 个及以上启用 Key）使用同一套 `X-Magpie-Account` 固定机制。对于接收请求的本机 Magpie 上的非远端渠道，适配器会自动读取 `/v1/magpie/quotas/cards` 中具名的本地订阅账号以及带余额/套餐额度卡片的多 Key 条目，并在每个模型的默认路由旁展开为 `gateway_account_binding` 固定绑定目标。远端卡片（带 `from`、`gatewayKey`、多跳 `via` 或 `provider` 含 `/`）、无名单个 Key，以及同渠道同类型下的重名 Key 会被跳过；额度接口不可用时自动降级为默认路由。
+Magpie 通过 `X-Magpie-Account` 请求头将请求固定到本机供应商的单个订阅账号或 API Key：不路由、不切换，失败时原样返回厂商错误。在 Magpie `v0.1.4621+` 上，适配器会自动读取 `GET /v1/magpie/accounts`（仅含标识符、不含明文密钥，且覆盖无额度信息的 API Key 渠道），将所有已启用的本机账号与 Key 展开在每个模型的默认路由旁作为 `gateway_account_binding` 固定绑定目标，并按网关返回的 `pin`（`<provider>/<id>`）原样固定请求。重名或占位标签会自动附加非敏感 `id` 区分，停用条目和远端路由会被排除，遇到 `401`/`403` 时清空自动发现目标。在尚未提供 `/v1/magpie/accounts` 的旧版 Magpie 上，适配器会自动回退读取 `/v1/magpie/quotas/cards` 中的具名本地卡片，接口不可用时降级为默认路由。
 
-若本地多 Key 渠道未在 Magpie 中配置余额检测或预算估算，Magpie 网关接口不会为其生成额度卡片，无法自动发现；此时可在 Magpie 中配置余额估算，或在插件选项中通过可选的 `accounts` 数组显式绑定（填写 Key 名称、脱敏 Key 或路由轨迹 ID 如 `openai#<keyID>`）。该配置也可用于自定义 `account_ref`、限定模型列表或区分重名账号/Key（保留已自动保存的连接设置；同一渠道/账号下显式配置优先于自动发现）：
+也可在插件选项中通过可选的 `accounts` 数组显式绑定（填写 `pin`、账号名或 ID），用于自定义 `account_ref` 或限定模型列表（保留已自动保存的连接设置；同一本机渠道/账号下显式 `accounts` 优先于自动发现）：
 
 ```json
 {

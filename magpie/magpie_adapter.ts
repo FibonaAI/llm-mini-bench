@@ -3,7 +3,7 @@ import { readBenchLimitedBody } from '../benchmark/src/bench_http_body.ts';
 import { _validate_route_url } from '../benchmark/src/bench_routes.ts';
 import type { BenchServiceAdapter } from '../benchmark/src/bench_adapter.ts';
 import { MagpieBenchRoutes } from './magpie_routes.ts';
-import type { MagpieAccountBinding } from './magpie_accounts.ts';
+import { MagpieAccountsReader, type MagpieAccountBinding } from './magpie_accounts.ts';
 import { MagpieQuotaCatalogReader } from './magpie_quotas.ts';
 
 type JsonObject = Record<string, unknown>;
@@ -12,6 +12,7 @@ const object = (value: unknown): value is JsonObject => value !== null && typeof
 export class MagpieBenchAdapter implements BenchServiceAdapter {
   readonly routes: MagpieBenchRoutes;
   readonly quotas = new MagpieQuotaCatalogReader(() => this.gateway('/magpie/quotas/cards'));
+  private readonly accounts_catalog = new MagpieAccountsReader(() => this.gateway('/magpie/accounts'));
   _models_cache: JsonObject[] | null = null;
   _models_cache_time = 0;
   private models_inflight: Promise<JsonObject[]> | null = null;
@@ -31,12 +32,18 @@ export class MagpieBenchAdapter implements BenchServiceAdapter {
       () => this.api_key,
       concurrency,
       accounts,
-      () => this.quotas.readLocalAccounts()
+      () => this.discover_local_accounts()
     );
+  }
+  private async discover_local_accounts(): Promise<MagpieAccountBinding[]> {
+    const listed = await this.accounts_catalog.read();
+    if (listed !== null) return listed;
+    return this.quotas.readLocalAccounts().catch(() => [] as MagpieAccountBinding[]);
   }
   refresh(): void {
     this._models_cache_time = -Infinity;
     this.quotas.invalidate();
+    this.accounts_catalog.invalidate();
   }
   async gateway(path: string, body?: JsonObject): Promise<JsonObject> {
     let response: Response;

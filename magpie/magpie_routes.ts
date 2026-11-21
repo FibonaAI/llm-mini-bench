@@ -62,8 +62,18 @@ export class MagpieBenchRoutes {
     }
   }
   private merged_accounts(discoveredRaw: unknown): BoundAccount[] {
-    const manualAccounts = new Set(this.accounts.map(binding => JSON.stringify([binding.provider_id, binding.account.toLowerCase()])));
-    const manualRefs = new Set(this.accounts.map(binding => JSON.stringify([binding.provider_id, binding.account_ref.toLowerCase()])));
+    const manualAccounts = new Set<string>();
+    const manualRefs = new Set<string>();
+    const bareAccount = (provider_id: string, account: string) => {
+      const lower = account.toLowerCase();
+      const prefix = provider_id.toLowerCase();
+      return lower.startsWith(prefix + '/') || lower.startsWith(prefix + '#') ? lower.slice(prefix.length + 1) : lower;
+    };
+    for (const binding of this.accounts) {
+      manualAccounts.add(JSON.stringify([binding.provider_id, binding.account.toLowerCase()]));
+      manualAccounts.add(JSON.stringify([binding.provider_id, bareAccount(binding.provider_id, binding.account)]));
+      manualRefs.add(JSON.stringify([binding.provider_id, binding.account_ref.toLowerCase()]));
+    }
     const merged: BoundAccount[] = this.accounts.map(binding => ({ ...binding, evidence: 'configured_binding' }));
     let discovered: MagpieAccountBinding[] = [];
     try {
@@ -73,8 +83,9 @@ export class MagpieBenchRoutes {
     }
     for (const binding of discovered) {
       const accountKey = JSON.stringify([binding.provider_id, binding.account.toLowerCase()]);
+      const bareKey = JSON.stringify([binding.provider_id, bareAccount(binding.provider_id, binding.account)]);
       const refKey = JSON.stringify([binding.provider_id, binding.account_ref.toLowerCase()]);
-      if (manualAccounts.has(accountKey) || manualRefs.has(refKey)) continue;
+      if (manualAccounts.has(accountKey) || manualAccounts.has(bareKey) || manualAccounts.has(refKey) || manualRefs.has(refKey)) continue;
       merged.push({ ...binding, evidence: 'gateway_account_binding' });
     }
     return merged;
