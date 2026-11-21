@@ -57,14 +57,17 @@ export class MagpieBenchRoutes {
     if (!_validate_route_url(base_url)) throw new TypeError('Bench gateway must use HTTPS or loopback HTTP without URL credentials');
   }
   /** Coalesce reads; freshness belongs to the catalog loader, not a permanent route snapshot. */
-  async public_routes(): Promise<BenchPublicRoute[]> {
+  private async load_routes_shared(): Promise<BenchPublicRoute[]> {
     if (!this.loading) this.loading = this.load_catalog_routes();
     const loading = this.loading;
     try {
-      return structuredClone(await loading);
+      return await loading;
     } finally {
       if (this.loading === loading) this.loading = null;
     }
+  }
+  async public_routes(): Promise<BenchPublicRoute[]> {
+    return structuredClone(await this.load_routes_shared());
   }
   private merged_accounts(discoveredRaw: unknown): BoundAccount[] {
     const manualAccounts = new Set<string>();
@@ -187,23 +190,38 @@ export class MagpieBenchRoutes {
       ])
     );
   }
-  /** Credentials are refreshed only on resolution and never appear in public catalog entries. */
-  async resolve(route_id: string): Promise<BenchResolvedRoute> {
-    const route = (await this.public_routes()).find(row => row.id === route_id);
-    if (!route) throw new TypeError('Bench gateway route is unavailable or has no valid pricing');
-    if (route.binding_ref) {
-      const binding = this.active_bindings.get(route.binding_ref);
-      if (binding) {
-        if (this.resolved_bindings.size >= 5000 && !this.resolved_bindings.has(route.binding_ref)) {
-          const oldest = this.resolved_bindings.keys().next().value;
-          if (oldest !== undefined) this.resolved_bindings.delete(oldest);
-        }
-        this.resolved_bindings.set(route.binding_ref, binding);
-      }
+  /** Resolve a batch of route IDs against one coalesced catalog read instead of rebuilding routes per target. */
+  async resolve_many(route_ids: string[]): Promise<Map<string, BenchResolvedRoute>> {
+    const unique = [...new Set(route_ids)];
+    const routes = await this.load_routes_shared();
+    const byId = new Map(routes.map(row => [row.id, row]));
+    const matched: BenchPublicRoute[] = [];
+    for (const route_id of unique) {
+      const route = byId.get(route_id);
+      if (!route) throw new TypeError('Bench gateway route is unavailable or has no valid pricing');
+      matched.push(route);
     }
     const credential = this.credential_loader();
     if (typeof credential !== 'string' || !credential || /[\s\x00-\x1f\x7f]/u.test(credential))
       throw new TypeError('Bench gateway credential is missing or invalid');
-    return { ...route, base_url: this.base_url, api_key: credential };
+    const resolved = new Map<string, BenchResolvedRoute>();
+    for (const route of matched) {
+      if (route.binding_ref) {
+        const binding = this.active_bindings.get(route.binding_ref);
+        if (binding) {
+          if (this.resolved_bindings.size >= 5000 && !this.resolved_bindings.has(route.binding_ref)) {
+            const oldest = this.resolved_bindings.keys().next().value;
+            if (oldest !== undefined) this.resolved_bindings.delete(oldest);
+          }
+          this.resolved_bindings.set(route.binding_ref, binding);
+        }
+      }
+      resolved.set(route.id, { ...structuredClone(route), base_url: this.base_url, api_key: credential });
+    }
+    return resolved;
+  }
+  /** Credentials are refreshed only on resolution and never appear in public catalog entries. */
+  async resolve(route_id: string): Promise<BenchResolvedRoute> {
+    return (await this.resolve_many([route_id])).get(route_id)!;
   }
 }

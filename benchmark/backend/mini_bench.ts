@@ -161,8 +161,9 @@ export class BenchService {
         const key = `${sourceSig}\u0000${baselineSig}\u0000${execution.revision}`;
         if (this._observations_cache?.key === key) return this._observations_cache;
         const observations = this.observations();
-        const etag = createHash('sha256').update(JSON.stringify(observations)).digest('hex').slice(0, 32);
-        const body = JSON.stringify({ etag, observations });
+        const observationsJson = JSON.stringify(observations);
+        const etag = createHash('sha256').update(observationsJson).digest('hex').slice(0, 32);
+        const body = `{"etag":${JSON.stringify(etag)},"observations":${observationsJson}}`;
         this._observations_cache = { key, etag, body, gzip: null };
         return this._observations_cache;
     }
@@ -194,7 +195,7 @@ export class BenchService {
             return { body: JSON.stringify({ tasks: execution.list_tasks() }), gzip: null };
         const revision = execution.revision;
         if (this._tasks_cache?.revision === revision) return this._tasks_cache;
-        const body = JSON.stringify({ tasks: execution.list_tasks() });
+        const body = execution.serialize_tasks_payload();
         this._tasks_cache = { revision, body, gzip: null };
         return this._tasks_cache;
     }
@@ -203,7 +204,7 @@ export class BenchService {
             return { body: JSON.stringify({ runs: execution.list_runs() }), gzip: null };
         const revision = execution.revision;
         if (this._runs_cache?.revision === revision) return this._runs_cache;
-        const body = JSON.stringify({ runs: execution.list_runs() });
+        const body = execution.serialize_runs_payload();
         this._runs_cache = { revision, body, gzip: null };
         return this._runs_cache;
     }

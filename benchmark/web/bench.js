@@ -26,6 +26,7 @@ import { createTaskSubmission } from './task-submission.js';
   const retryRequests = new Map(),
     retrying = new Set();
   let pendingRevealRunId = null;
+  let pendingForceFresh = false;
   const { element, historyEntries, renderDetails, inProgress, canCancel, fixedTargets, taskSection, runSection } = createTaskHistoryView({
     app,
     state,
@@ -78,8 +79,12 @@ import { createTaskSubmission } from './task-submission.js';
     );
   async function refreshHistory(forceFresh = false) {
     if (state.refreshing) {
+      if (forceFresh) pendingForceFresh = true;
       await state.refreshing;
-      if (forceFresh) return refreshHistory(true);
+      if (pendingForceFresh) {
+        pendingForceFresh = false;
+        return refreshHistory(true);
+      }
       return;
     }
     state.refreshing = (async () => {

@@ -74,7 +74,7 @@ export function execution_result_quality(run: ExecutionRun) {
 }
 
 /** Run summaries exclude raw evidence and use the caller's current budget snapshot. */
-export function execution_run_summary(run: ExecutionRun, budget: RecordValue = run.budget) {
+export function execution_run_summary(run: ExecutionRun, budget: RecordValue = run.budget, cloneOutput = true) {
     const counts: Record<string, number> = {};
     for (const sample of run.samples) {
         const status = is_timeout_sample(sample) ? 'timeout' : sample.status;
@@ -88,27 +88,31 @@ export function execution_run_summary(run: ExecutionRun, budget: RecordValue = r
         stop_reason: run.stop_reason,
         ...(run.task_id ? { task_id: run.task_id } : {}),
         ...(run.execution_kind ? { execution_kind: run.execution_kind } : {}),
-        targets: clone(run.plan.targets),
+        targets: cloneOutput ? clone(run.plan.targets) : run.plan.targets,
         bank_version: run.plan.bank_version,
         sample_count: run.samples.length,
         sample_status_counts: counts,
         retryable_samples: execution_retryable_samples(run),
         result_quality: execution_result_quality(run),
-        budget: clone(budget)
+        budget: cloneOutput ? clone(budget) : budget
     };
 }
 
 /** Task summaries aggregate committed child membership without copying every raw sample. */
-export function execution_task_summary(task: ExecutionTaskState, runs: readonly ReturnType<typeof execution_run_summary>[]): RecordValue {
+export function execution_task_summary(
+    task: ExecutionTaskState,
+    runs: readonly ReturnType<typeof execution_run_summary>[],
+    cloneOutput = true
+): RecordValue {
     const children = runs.map(run => ({
         run_id: run.id,
-        target: clone(run.targets[0]!),
+        target: cloneOutput ? clone(run.targets[0]!) : run.targets[0]!,
         status: run.status,
         created_at: run.created_at,
         updated_at: run.updated_at,
         sample_count: run.sample_count,
         sample_status_counts: run.sample_status_counts,
-        result_quality: clone(run.result_quality),
+        result_quality: cloneOutput ? clone(run.result_quality) : run.result_quality,
         budget: run.budget,
         stop_reason: run.stop_reason,
         retryable_samples: run.retryable_samples
@@ -120,5 +124,5 @@ export function execution_task_summary(task: ExecutionTaskState, runs: readonly 
         for (const [status, count] of Object.entries(child.sample_status_counts))
             sample_status_counts[status] = (sample_status_counts[status] ?? 0) + count;
     }
-    return { ...clone(task), children, run_status_counts, sample_status_counts };
+    return { ...(cloneOutput ? clone(task) : task), children, run_status_counts, sample_status_counts };
 }

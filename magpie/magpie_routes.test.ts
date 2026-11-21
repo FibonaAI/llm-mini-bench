@@ -287,4 +287,23 @@ describe('Magpie catalog routes', () => {
     await expect(routes.resolve('unknown')).rejects.toThrow('unavailable');
     await expect(routes.resolve((await routes.public_routes())[0]!.id)).rejects.toThrow('credential');
   });
+  test('resolve_many resolves distinct routes with a single catalog read', async () => {
+    let loads = 0;
+    const routes = new BenchGatewayRoutes(
+      () => {
+        loads++;
+        return [model({ id: 'model-a' }), model({ id: 'model-b' })];
+      },
+      'https://example.com',
+      () => 'key',
+      2
+    );
+    const listed = await routes.public_routes();
+    expect(loads).toBe(1);
+    const resolved = await routes.resolve_many([listed[0]!.id, listed[1]!.id, listed[0]!.id]);
+    expect(loads).toBe(2);
+    expect(resolved.size).toBe(2);
+    expect(resolved.get(listed[0]!.id)?.model).toBe('model-a');
+    expect(resolved.get(listed[1]!.id)?.model).toBe('model-b');
+  });
 });

@@ -560,7 +560,10 @@ document.addEventListener('keydown', event => {
   }
 });
 app.on('mini-bench:refresh', loadObservations);
-app.on('mini-bench:observations-changed', loadObservations);
+app.on('mini-bench:observations-changed', () => {
+  if (element('analysis-view')?.hidden) return;
+  return loadObservations();
+});
 app.on('mini-bench:banks-changed', event => {
   model.setBank(event.detail);
   rebuildAnalysisRecords();

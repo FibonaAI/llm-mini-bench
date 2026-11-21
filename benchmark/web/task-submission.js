@@ -96,17 +96,17 @@ export function createTaskSubmission({
     state.busy = true;
     updateTaskPreview();
     notify('正在启动评测。');
+    let created = false;
     try {
       const result = await request('./api/bench/tasks', { method: 'POST', body: JSON.stringify(submission) });
       if (!result?.id) throw new Error('服务未返回任务 ID');
+      created = true;
       state.selectionVersion++;
       state.selectedTaskId = result.id;
       state.selectedRunId = null;
       state.taskDetail = null;
       state.runDetail = null;
       app.setTaskSelection([]);
-      await refreshHistory(true);
-      notify('评测已启动，各运行独立保存样本与预算状态。');
     } catch (error) {
       state.submissionUncertain = true;
       await refreshHistory(true);
@@ -114,6 +114,10 @@ export function createTaskSubmission({
     } finally {
       state.busy = false;
       updateTaskPreview();
+    }
+    if (created) {
+      notify('评测已启动，各运行独立保存样本与预算状态。');
+      void refreshHistory(true);
     }
   });
   element('bench-retry-review').addEventListener('click', () => {

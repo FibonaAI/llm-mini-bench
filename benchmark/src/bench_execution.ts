@@ -69,6 +69,7 @@ export interface ExecutionRoute extends BenchRouteMetadata {
 /** Both configured and gateway routes can resolve without changing scheduler semantics. */
 export interface ExecutionRoutes {
     resolve(id: string): ExecutionRoute | Promise<ExecutionRoute>;
+    resolve_many?(ids: string[]): Map<string, ExecutionRoute> | Promise<Map<string, ExecutionRoute>>;
     public_routes(): unknown | Promise<unknown>;
     create_client?(route: ExecutionRoute): SampleClient;
     execution_sources?(): Record<string, Uint8Array>;
@@ -151,6 +152,19 @@ interface RunRuntime {
     target_active: Set<string>;
     last_target_id: string | null;
     journal: RunJournal;
+    dirty: boolean;
+}
+interface SampleDispatch {
+    run_id: string;
+    sample_id: string;
+    attempt_id: string;
+    target_id: string;
+    route_id: string;
+    account_ref: string;
+    account_evidence: string;
+    task: string;
+    round: number;
+    retry_limits?: unknown;
 }
 type SampleClient = Parameters<typeof run_assessment_sample>[0];
 type ClientFactory = (base_url: string, api_key: string) => SampleClient;
@@ -340,10 +354,11 @@ export class BenchExecutionService {
     private run_status(id: string): string | null {
         return this._runs.get(id)?.status ?? this._run_index.get(id)?.status ?? null;
     }
-    private run_summary(id: string): ReturnType<typeof execution_run_summary> {
+    private run_summary(id: string, cloneOutput = true): ReturnType<typeof execution_run_summary> {
         const active = this._runs.get(id);
-        if (active) return execution_run_summary(active, this._runtime.get(id)?.budget.snapshot());
-        return clone(this._run_index.get(id)!.summary);
+        if (active) return execution_run_summary(active, this._runtime.get(id)?.budget.snapshot(), cloneOutput);
+        const summary = this._run_index.get(id)!.summary;
+        return cloneOutput ? clone(summary) : summary;
     }
     private index_run(run: ExecutionRun, context: AssessmentSourceContext, legacy_overlay?: LegacyRunOverlay): IndexedRun {
         return {
@@ -769,18 +784,22 @@ export class BenchExecutionService {
         };
         try {
             private_directory(dirname(this.task_path(id)));
+            const sharedTaskMap = new Map(prepared.tasks.map(item => [item.id, item]));
             for (const target of prepared.plan.targets) {
                 const childId = uuid();
+                // Share immutable bank/task provenance snapshots across sibling children to limit active RSS.
                 const childPlan: ExecutionPlan = {
-                    ...clone(prepared.plan),
+                    ...prepared.plan,
                     targets: [clone(target)],
                     concurrency: plan.sample_concurrency,
-                    sample_count: plan.samples_per_run
+                    sample_count: plan.samples_per_run,
+                    limits: clone(prepared.plan.limits)
                 };
                 const child = this.stage_run(
                     { ...prepared, plan: childPlan, bindings: new Map([[target.id, prepared.bindings.get(target.id)!]]) },
                     childId,
-                    id
+                    id,
+                    sharedTaskMap
                 );
                 staged.push(child);
                 task.child_run_ids.push(childId);
@@ -798,8 +817,8 @@ export class BenchExecutionService {
             this.fail_storage();
             throw error;
         }
-        this._tasks.set(id, task);
-        this.slim_tasks.delete(id);
+        this._tasks.set(id, slim_task_state(task));
+        this.slim_tasks.add(id);
         this.task_active_runs.set(id, new Set());
         this.task_last_admitted_run.delete(id);
         for (const { run, runtime } of staged) {
@@ -844,18 +863,13 @@ export class BenchExecutionService {
                 ? 'running'
                 : 'queued';
         if (task.status === status) return;
-        const targetTask = this.slim_tasks.has(id) ? this.load_full_task_from_disk(id) : task;
-        targetTask.status = status;
-        if (finished && status === 'failed' && !targetTask.stop_reason) targetTask.stop_reason = 'child_failure';
         try {
+            const targetTask = this.slim_tasks.has(id) ? this.load_full_task_from_disk(id) : task;
+            targetTask.status = status;
+            if (finished && status === 'failed' && !targetTask.stop_reason) targetTask.stop_reason = 'child_failure';
             this._persist_task(targetTask);
-            if (finished) {
-                this._tasks.set(id, slim_task_state(targetTask));
-                this.slim_tasks.add(id);
-            } else {
-                this._tasks.set(id, targetTask);
-                this.slim_tasks.delete(id);
-            }
+            this._tasks.set(id, slim_task_state(targetTask));
+            this.slim_tasks.add(id);
         } catch {
             this.fail_storage();
         }
@@ -870,36 +884,44 @@ export class BenchExecutionService {
             task.child_run_ids.map(run_id => this.run_summary(run_id))
         );
     }
-    /** List independently persisted batches without duplicating raw child evidence. */
-    /** History polling omits bulky frozen provenance; get_task keeps the complete plan. */
-    list_tasks(): RecordValue[] {
+    private collect_task_summaries(cloneOutput: boolean): RecordValue[] {
         return [...this._tasks.keys()].reverse().map(id => {
             const task = this._tasks.get(id)!;
             const summary = execution_task_summary(
                 task,
-                task.child_run_ids.map(run_id => this.run_summary(run_id))
+                task.child_run_ids.map(run_id => this.run_summary(run_id, cloneOutput)),
+                cloneOutput
             );
             const { task_snapshots: _snapshots, bank_snapshot: _bank, source_sha256: _sources, ...plan } = summary.plan as RecordValue;
             return { ...summary, plan: { ...plan, provenance_omitted: true } };
         });
+    }
+    /** List independently persisted batches without duplicating raw child evidence. */
+    /** History polling omits bulky frozen provenance; get_task keeps the complete plan. */
+    list_tasks(): RecordValue[] {
+        return this.collect_task_summaries(true);
+    }
+    /** Serialize task summaries directly for HTTP caches without cloning every historical record. */
+    serialize_tasks_payload(): string {
+        return JSON.stringify({ tasks: this.collect_task_summaries(false) });
     }
     /** Persist cancellation intent before cancelling any child; never resume queued work. */
     cancel_task(id: string): boolean {
         const cached = this._tasks.get(id);
         if (!cached) return false;
         if (TERMINAL_RUN_STATUSES.has(cached.status)) return true;
-        const task = this.slim_tasks.has(id) ? this.load_full_task_from_disk(id) : cached;
-        task.status = 'cancelling';
-        if (task.stop_reason !== 'storage_error') task.stop_reason = 'cancelled';
-        this._tasks.set(id, task);
-        this.slim_tasks.delete(id);
         try {
+            const task = this.slim_tasks.has(id) ? this.load_full_task_from_disk(id) : cached;
+            task.status = 'cancelling';
+            if (task.stop_reason !== 'storage_error') task.stop_reason = 'cancelled';
             this._persist_task(task);
+            this._tasks.set(id, slim_task_state(task));
+            this.slim_tasks.add(id);
         } catch {
             this.fail_storage();
             return true;
         }
-        for (const child of task.child_run_ids) this.cancel_run(child);
+        for (const child of cached.child_run_ids) this.cancel_run(child);
         this.schedule();
         return true;
     }
@@ -952,7 +974,11 @@ export class BenchExecutionService {
             throw new TypeError('A bench run may contain at most 500 samples');
         const targets: ExecutionTarget[] = [],
             bindings = new Map<string, ExecutionRoute>(),
-            combinations = new Set<string>();
+            combinations = new Set<string>(),
+            seenIds = new Set<string>(),
+            parsedSpecs: Array<{ id: string; route_id: string; thinking: string }> = [],
+            uniqueRouteIds: string[] = [],
+            seenRoutes = new Set<string>();
         for (const [index, specValue] of specs.entries()) {
             const spec = knownKeys(specValue, ['id', 'route_id', 'thinking'], 'target');
             const id = spec.id === undefined ? 'target-' + (index + 1) : spec.id,
@@ -968,8 +994,23 @@ export class BenchExecutionService {
             )
                 throw new TypeError('Target id, route_id and thinking must be nonempty strings');
             const combination = JSON.stringify([route_id, thinking]);
-            if (bindings.has(id) || combinations.has(combination)) throw new TypeError('Duplicate target id or route/thinking combination');
-            const route = clone(await this.routes.resolve(route_id));
+            if (seenIds.has(id) || combinations.has(combination)) throw new TypeError('Duplicate target id or route/thinking combination');
+            seenIds.add(id);
+            combinations.add(combination);
+            parsedSpecs.push({ id, route_id, thinking });
+            if (!seenRoutes.has(route_id)) {
+                seenRoutes.add(route_id);
+                uniqueRouteIds.push(route_id);
+            }
+        }
+        const canBatchResolve =
+            typeof this.routes.resolve_many === 'function' &&
+            this.routes.resolve === (Object.getPrototypeOf(this.routes) as ExecutionRoutes | null)?.resolve;
+        const resolvedRoutes = canBatchResolve
+            ? await this.routes.resolve_many!(uniqueRouteIds)
+            : new Map(await Promise.all(uniqueRouteIds.map(async route_id => [route_id, await this.routes.resolve(route_id)] as const)));
+        for (const { id, route_id, thinking } of parsedSpecs) {
+            const route = clone(resolvedRoutes.get(route_id)!);
             if (!object(route)) throw new TypeError('Unknown bench route');
             if (
                 route.remote_route !== undefined &&
@@ -999,7 +1040,6 @@ export class BenchExecutionService {
                 [pricing.prompt, pricing.completion].some(value => typeof value !== 'number' || !Number.isFinite(value) || value < 0)
             )
                 throw new TypeError('Route token pricing must be finite and nonnegative');
-            combinations.add(combination);
             targets.push({
                 id,
                 route_id,
@@ -1079,18 +1119,23 @@ export class BenchExecutionService {
     private stage_run(
         prepared: Awaited<ReturnType<BenchExecutionService['prepare']>>,
         id: string,
-        task_id?: string
+        task_id?: string,
+        sharedTaskMap?: Map<string, AssessmentTask>
     ): { run: ExecutionRun; runtime: RunRuntime } {
         const { plan, tasks, bindings, sources } = prepared;
         const directory = join(this.data_dir, id);
         private_directory(directory);
+        const createdDirs = new Set<string>([directory]);
         for (const [source, content] of sources) {
             const destination = join(directory, 'source', source);
-            private_directory(dirname(destination));
+            const dir = dirname(destination);
+            if (!createdDirs.has(dir)) {
+                private_directory(dir);
+                createdDirs.add(dir);
+            }
             const fd = openSync(destination, 'wx', 0o600);
             try {
                 writeFileSync(fd, content);
-                fsyncSync(fd);
             } finally {
                 closeSync(fd);
             }
@@ -1129,7 +1174,7 @@ export class BenchExecutionService {
         };
         const runtime: RunRuntime = {
             bindings,
-            tasks: new Map(tasks.map(task => [task.id, task])),
+            tasks: sharedTaskMap ?? new Map(tasks.map(task => [task.id, task])),
             targets: new Map(plan.targets.map(target => [target.id, target])),
             cancel,
             budget,
@@ -1139,7 +1184,8 @@ export class BenchExecutionService {
             journal: new RunJournal(
                 join(directory, 'journal.jsonl'),
                 [...bindings.values()].flatMap(route => [route.api_key, route.base_url.replace(/\/+$/, ''), route.api_key_env ?? ''])
-            )
+            ),
+            dirty: false
         };
         return { run, runtime };
     }
@@ -1252,6 +1298,10 @@ export class BenchExecutionService {
     }
     list_runs(): RecordValue[] {
         return [...this._run_index.keys()].reverse().map(id => this.run_summary(id));
+    }
+    /** Serialize run summaries directly for HTTP caches without cloning every historical record. */
+    serialize_runs_payload(): string {
+        return JSON.stringify({ runs: [...this._run_index.keys()].reverse().map(id => this.run_summary(id, false)) });
     }
     /** Batch retries reuse one idempotency key and report partial publication without resending successes. */
     async retry_task(id: string, request_id: string): Promise<{ ids: string[]; rejected: string[] }> {
@@ -1393,13 +1443,17 @@ export class BenchExecutionService {
             } finally {
                 closeSync(archive);
             }
+            const createdDirs = new Set<string>([join(directory, generation)]);
             for (const [source, bytes] of prepared.sources) {
                 const destination = join(directory, generation, 'source', source);
-                private_directory(dirname(destination));
+                const dir = dirname(destination);
+                if (!createdDirs.has(dir)) {
+                    private_directory(dir);
+                    createdDirs.add(dir);
+                }
                 const fd = openSync(destination, 'wx', 0o600);
                 try {
                     writeFileSync(fd, bytes);
-                    fsyncSync(fd);
                 } finally {
                     closeSync(fd);
                 }
@@ -1458,7 +1512,8 @@ export class BenchExecutionService {
                 active: 0,
                 target_active: new Set(),
                 last_target_id: null,
-                journal
+                journal,
+                dirty: false
             };
             run.budget = budget.snapshot();
             this._runs.set(id, run);
@@ -1472,9 +1527,9 @@ export class BenchExecutionService {
                 });
                 task.status = anyActive ? 'running' : 'queued';
                 task.stop_reason = null;
-                this._tasks.set(run.task_id, task);
-                this.slim_tasks.delete(run.task_id);
                 this._persist_task(task);
+                this._tasks.set(run.task_id, slim_task_state(task));
+                this.slim_tasks.add(run.task_id);
                 if (!this.task_active_runs.has(task.id)) this.task_active_runs.set(task.id, new Set());
             }
             this._runtime.set(id, runtime);
@@ -1498,8 +1553,10 @@ export class BenchExecutionService {
         const run = this._runs.get(id);
         if (!run) return this._run_index.has(id);
         if (!TERMINAL_RUN_STATUSES.has(run.status)) {
-            this._runtime.get(id)!.cancel.value = true;
+            const runtime = this._runtime.get(id)!;
+            runtime.cancel.value = true;
             run.status = 'cancelling';
+            runtime.dirty = false;
             this.persist_safe(run);
             this.schedule();
         }
@@ -1532,7 +1589,7 @@ export class BenchExecutionService {
     private schedule(): void {
         if (this.scheduled) return;
         this.scheduled = true;
-        queueMicrotask(() => {
+        setImmediate(() => {
             this.scheduled = false;
             this.dispatch();
         });
@@ -1652,6 +1709,7 @@ export class BenchExecutionService {
                               ? null
                               : stop ||
                                 (run.status === 'failed' ? 'api_failure' : run.status === 'incomplete' ? 'capability_or_limit' : null);
+                    runtime.dirty = false;
                     let persisted = this.persist_safe(run);
                     try {
                         runtime.journal.close();
@@ -1672,58 +1730,128 @@ export class BenchExecutionService {
                     this.waiters.delete(id);
                     continue;
                 }
+                if (!pending.length) {
+                    if (runtime.dirty) {
+                        runtime.dirty = false;
+                        this.persist_safe(run);
+                    }
+                    continue;
+                }
                 const taskId = typeof run.task_id === 'string' ? run.task_id : null;
                 const parent = taskId ? this._tasks.get(taskId) : null;
                 const activeChildren = taskId ? this.task_active_runs.get(taskId) : null;
                 const taskChild = run.execution_kind === 'task-child-v1' && !!parent && !!activeChildren;
                 if (taskChild && !activeChildren.has(id)) {
-                    if (activeChildren.size >= parent.plan.run_concurrency || this.next_task_child_to_admit(parent, activeChildren) !== id)
+                    if (
+                        activeChildren.size >= parent.plan.run_concurrency ||
+                        this.next_task_child_to_admit(parent, activeChildren) !== id
+                    ) {
+                        if (runtime.dirty) {
+                            runtime.dirty = false;
+                            this.persist_safe(run);
+                        }
                         continue;
+                    }
+                }
+                if (taskChild) {
+                    const slots = run.plan.concurrency - runtime.active;
+                    if (slots <= 0) {
+                        if (runtime.dirty) {
+                            runtime.dirty = false;
+                            this.persist_safe(run);
+                        }
+                        continue;
+                    }
+                    const batch = pending.slice(0, slots);
+                    const startedAt = now();
+                    for (const sample of batch) {
+                        sample.status = 'running';
+                        sample.started_at = startedAt;
+                    }
+                    run.status = 'running';
+                    runtime.dirty = false;
+                    if (!this.persist_safe(run)) {
+                        for (const sample of batch) sample.status = 'storage_error';
+                        continue;
+                    }
+                    if (!activeChildren.has(id)) this.task_last_admitted_run.set(taskId!, id);
+                    activeChildren.add(id);
+                    this.update_task(taskId!);
+                    if (this._closing) {
+                        for (const sample of batch) sample.status = 'storage_error';
+                        continue;
+                    }
+                    for (const sample of batch) {
+                        const account = runtime.bindings.get(sample.target_id)!.account_ref;
+                        runtime.active++;
+                        runtime.last_target_id = sample.target_id;
+                        this.last_run_id = id;
+                        this._active++;
+                        this._account_active.set(account, (this._account_active.get(account) ?? 0) + 1);
+                        void this.execute(run, runtime, this.sample_dispatch(sample)).then(
+                            observation => this.complete(id, sample.sample_id, account, observation),
+                            error => this.complete(id, sample.sample_id, account, null, error)
+                        );
+                    }
+                    dispatched = true;
+                    continue;
                 }
                 const targetOrder = this.rotate([...runtime.targets.keys()], runtime.last_target_id);
                 pending.sort((a, b) => targetOrder.indexOf(a.target_id) - targetOrder.indexOf(b.target_id));
+                let admittedDirect = false;
                 for (const sample of pending) {
-                    if ((!taskChild && this._active >= this.concurrency) || runtime.active >= run.plan.concurrency) break;
+                    if (this._active >= this.concurrency || runtime.active >= run.plan.concurrency) break;
                     const account = runtime.bindings.get(sample.target_id)!.account_ref;
                     if (
-                        !taskChild &&
-                        (runtime.target_active.has(sample.target_id) ||
-                            (this._account_active.get(account) ?? 0) >= this._account_limits.get(account)!)
+                        runtime.target_active.has(sample.target_id) ||
+                        (this._account_active.get(account) ?? 0) >= this._account_limits.get(account)!
                     )
                         continue;
                     sample.status = 'running';
                     sample.started_at = now();
                     run.status = 'running';
+                    runtime.dirty = false;
                     if (!this.persist_safe(run)) {
                         sample.status = 'storage_error';
+                        admittedDirect = true;
                         break;
                     }
-                    if (taskChild) {
-                        if (!activeChildren.has(id)) this.task_last_admitted_run.set(taskId!, id);
-                        activeChildren.add(id);
-                        this.update_task(taskId!);
-                        if (this._closing) {
-                            sample.status = 'storage_error';
-                            break;
-                        }
-                    }
                     runtime.active++;
-                    if (!taskChild) runtime.target_active.add(sample.target_id);
+                    runtime.target_active.add(sample.target_id);
                     runtime.last_target_id = sample.target_id;
                     this.last_run_id = id;
                     this._active++;
                     this._account_active.set(account, (this._account_active.get(account) ?? 0) + 1);
-                    void this.execute(run, runtime, clone(sample)).then(
+                    void this.execute(run, runtime, this.sample_dispatch(sample)).then(
                         observation => this.complete(id, sample.sample_id, account, observation),
                         error => this.complete(id, sample.sample_id, account, null, error)
                     );
+                    admittedDirect = true;
                     dispatched = true;
                     break;
+                }
+                if (!admittedDirect && runtime.dirty) {
+                    runtime.dirty = false;
+                    this.persist_safe(run);
                 }
             }
         } while (dispatched);
     }
-    private async execute(run: ExecutionRun, runtime: RunRuntime, sample: ExecutionSample): Promise<RecordValue | null> {
+    private sample_dispatch(sample: ExecutionSample): SampleDispatch {
+        return {
+            run_id: sample.run_id,
+            sample_id: sample.sample_id,
+            attempt_id: sample.attempt_id,
+            target_id: sample.target_id,
+            route_id: sample.route_id,
+            account_ref: sample.account_ref,
+            account_evidence: sample.account_evidence,
+            task: sample.task,
+            round: sample.round,
+            ...(object(sample.retry_limits) ? { retry_limits: clone(sample.retry_limits) } : {})
+        };
+    }
+    private async execute(run: ExecutionRun, runtime: RunRuntime, sample: SampleDispatch): Promise<RecordValue | null> {
         const target = runtime.targets.get(sample.target_id)!,
             route = runtime.bindings.get(sample.target_id)!,
             client = this.routes.create_client
@@ -1786,7 +1914,9 @@ export class BenchExecutionService {
             runtime.target_active.delete(sample.target_id);
             this._active--;
             this._account_active.set(account, this._account_active.get(account)! - 1);
-            this.persist_safe(run);
+            runtime.dirty = true;
+            this.update_active_index(run);
+            this._revision++;
             this.schedule();
         }
     }

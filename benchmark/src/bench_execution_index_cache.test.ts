@@ -149,11 +149,56 @@ describe('terminal run eviction and persistent index cache', () => {
             const tasks1 = service.cached_tasks_payload(execution);
             const tasks2 = service.cached_tasks_payload(execution);
             expect(tasks2).toBe(tasks1);
+            expect(tasks1.body).toBe(JSON.stringify({ tasks: execution.list_tasks() }));
             const runs1 = service.cached_runs_payload(execution);
             const runs2 = service.cached_runs_payload(execution);
             expect(runs2).toBe(runs1);
+            expect(runs1.body).toBe(JSON.stringify({ runs: execution.list_runs() }));
         } finally {
             await service.close();
+            rmSync(dir, { recursive: true, force: true });
+        }
+    });
+
+    test('coalesced persistence and slim active tasks preserve full provenance and avoid spinning on partial slots', async () => {
+        const dir = mkdtempSync(join(tmpdir(), 'mini-bench-coalesce-'));
+        try {
+            let calls = 0;
+            const clientFactory = () => ({
+                post_responses_stream: async () => {
+                    calls++;
+                    await new Promise(resolve => setTimeout(resolve, 2));
+                    return [200, 0.01, {}, completedResponse()] as const;
+                }
+            });
+            const service = new BenchExecutionService(dir, routes(), 6, clientFactory as never);
+            let persists = 0;
+            const origPersist = service._persist.bind(service);
+            service._persist = run => {
+                persists++;
+                return origPersist(run);
+            };
+            const taskId = await service.start_task({
+                targets: [{ route_id: 'route-a', thinking: 'high' }],
+                rounds: 1,
+                sample_concurrency: 5,
+                limits: { timeout: 60 }
+            });
+            // Active task in _tasks is already slimmed while get_task loads full task_snapshots from disk.
+            expect(service._tasks.get(taskId)!.plan).not.toHaveProperty('task_snapshots');
+            expect(Array.isArray((service.get_task(taskId)!.plan as Record<string, unknown>).task_snapshots)).toBe(true);
+            expect(service.serialize_tasks_payload()).toBe(JSON.stringify({ tasks: service.list_tasks() }));
+            expect(service.serialize_runs_payload()).toBe(JSON.stringify({ runs: service.list_runs() }));
+
+            const childId = (service.get_task(taskId)!.children as { run_id: string }[])[0]!.run_id;
+            expect(await service.wait_for_run(childId, 5)).toBe(true);
+            expect(calls).toBe(12);
+            // 12 samples with sample_concurrency=5: 1 staging + <= 12 coalesced transitions (far below 25+ uncoalesced writes).
+            expect(persists).toBeLessThanOrEqual(14);
+            expect(service.serialize_tasks_payload()).toBe(JSON.stringify({ tasks: service.list_tasks() }));
+            expect(service.serialize_runs_payload()).toBe(JSON.stringify({ runs: service.list_runs() }));
+            await service.close();
+        } finally {
             rmSync(dir, { recursive: true, force: true });
         }
     });
