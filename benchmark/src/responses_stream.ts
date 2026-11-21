@@ -38,41 +38,70 @@ const object = (value: unknown): value is Record<string, unknown> => value !== n
 export class ResponsesStreamDecoder {
     response: Record<string, unknown> | null = null;
     terminal_event_data: string | null = null;
-    private line = '';
+    private lineParts: string[] = [];
     private skipLF = false;
     private firstCharacter = true;
     private data: string[] = [];
     private event = '';
-    private rawFrame = '';
+    private rawFrameParts: string[] = [];
     constructor(
         readonly telemetry: ResponsesStreamTelemetry,
         private readonly elapsed: () => number,
         private readonly on_frame?: (text: string, elapsed_seconds: number) => void
     ) {}
     flush_pending(): void {
-        if (!this.rawFrame) return;
-        const text = this.rawFrame;
-        this.rawFrame = '';
+        if (!this.rawFrameParts.length) return;
+        const text = this.rawFrameParts.length === 1 ? this.rawFrameParts[0]! : this.rawFrameParts.join('');
+        this.rawFrameParts.length = 0;
         this.on_frame?.(text, this.elapsed());
     }
     push(text: string): void {
-        for (const character of text) {
-            this.rawFrame += character;
+        let index = 0;
+        const length = text.length;
+        while (index < length && this.response === null) {
             if (this.firstCharacter) {
                 this.firstCharacter = false;
-                if (character === '\uFEFF') continue;
+                if (text.charCodeAt(index) === 0xfeff) {
+                    if (this.on_frame) this.rawFrameParts.push('\uFEFF');
+                    index++;
+                    continue;
+                }
             }
             if (this.skipLF) {
                 this.skipLF = false;
-                if (character === '\n') continue;
+                if (text.charCodeAt(index) === 0x0a) {
+                    if (this.on_frame) this.rawFrameParts.push('\n');
+                    index++;
+                    continue;
+                }
             }
-            if (character === '\r' || character === '\n') {
-                const line = this.line;
-                this.line = '';
-                this.skipLF = character === '\r';
+            let end = index;
+            while (end < length) {
+                const code = text.charCodeAt(end);
+                if (code === 0x0d || code === 0x0a) break;
+                end++;
+            }
+            if (end > index) {
+                const segment = index === 0 && end === length ? text : text.slice(index, end);
+                if (this.on_frame) this.rawFrameParts.push(segment);
+                this.lineParts.push(segment);
+                index = end;
+            }
+            if (index < length) {
+                const isCR = text.charCodeAt(index) === 0x0d;
+                if (isCR && index + 1 < length && text.charCodeAt(index + 1) === 0x0a) {
+                    if (this.on_frame) this.rawFrameParts.push('\r\n');
+                    index += 2;
+                    this.skipLF = false;
+                } else {
+                    if (this.on_frame) this.rawFrameParts.push(isCR ? '\r' : '\n');
+                    index++;
+                    this.skipLF = isCR;
+                }
+                const line = this.lineParts.length === 0 ? '' : this.lineParts.length === 1 ? this.lineParts[0]! : this.lineParts.join('');
+                this.lineParts.length = 0;
                 this.acceptLine(line);
-            } else this.line += character;
-            if (this.response !== null) return;
+            }
         }
     }
     finish(): void {

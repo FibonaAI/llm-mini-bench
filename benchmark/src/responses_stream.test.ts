@@ -1,4 +1,5 @@
-import { journal_raw_response_text } from './assessment_runner.ts';
+import { createHash } from 'node:crypto';
+import { journal_raw_response_text, raw_text_evidence, type StreamChunkDigest } from './assessment_runner.ts';
 import { describe, expect, test } from 'bun:test';
 import { GatewayClient } from './client.ts';
 import { ResponsesStreamDecoder, responses_stream_telemetry } from './responses_stream.ts';
@@ -447,5 +448,81 @@ describe('Responses SSE HTTP and runner integration', () => {
         } finally {
             server.stop(true);
         }
+    });
+    test('streaming with on_chunk avoids retaining raw stream text and avoids duplicating calls with CRLF or trailing DONE', async () => {
+        const body = (event('response.output_text.delta', { delta: '42世界😀' }) + complete + 'data: [DONE]\n\n').replaceAll('\n', '\r\n');
+        const server = Bun.serve({
+            hostname: '127.0.0.1',
+            port: 0,
+            fetch() {
+                return sse(body);
+            }
+        });
+        try {
+            const client = new GatewayClient(`http://127.0.0.1:${server.port}`, 'key');
+            // Without on_chunk, direct callers still receive the accumulated raw stream text.
+            const direct = await client.post_responses_stream({});
+            expect(direct[0]).toBe(200);
+            expect(direct[4]).toBe(body);
+
+            // With on_chunk, frames stream directly without retaining a full-stream copy in memory.
+            const chunks: string[] = [];
+            const streamed = await client.post_responses_stream({}, undefined, {
+                on_chunk(text) {
+                    chunks.push(text);
+                }
+            });
+            expect(streamed[0]).toBe(200);
+            expect(streamed[4]).toBeUndefined();
+            expect(chunks).toHaveLength(2);
+            expect(chunks[0]!.endsWith('\r\n\r\n')).toBe(true);
+            expect(chunks[1]!.endsWith('\r\n\r\n')).toBe(true);
+            expect(chunks.join('')).toContain('42世界😀');
+
+            // Runner references journaled chunks instead of duplicating raw_response_text on the call line.
+            const records: any[] = [];
+            const result = await run_assessment_sample(
+                client,
+                task,
+                { model: 'm', thinking: 'high' },
+                1,
+                config,
+                pricing,
+                new AssessmentBudget(null, null),
+                {
+                    write(row) {
+                        records.push(row);
+                    }
+                }
+            );
+            expect(result.status).toBe('completed');
+            const call = records.find(row => row.type === 'call');
+            expect(call.raw_response_text).toBeUndefined();
+            expect(call.raw_stream_chunks).toBe(2);
+            expect(journal_raw_response_text(call, records)).toBe(chunks.join(''));
+        } finally {
+            server.stop(true);
+        }
+    });
+    test('raw_text_evidence verifies streaming chunk digests in constant memory', () => {
+        const makeDigest = (parts: string[]): StreamChunkDigest => {
+            const hash = createHash('sha256');
+            let length = 0;
+            for (const part of parts) {
+                hash.update(part);
+                length += part.length;
+            }
+            let hex: string | null = null;
+            return {
+                count: parts.length,
+                length,
+                sha256: () => (hex ??= hash.digest('hex'))
+            };
+        };
+        expect(raw_text_evidence(undefined, makeDigest([]))).toEqual({});
+        expect(raw_text_evidence(undefined, makeDigest(['a\n\n', 'b\n\n']))).toEqual({ raw_stream_chunks: 2 });
+        expect(raw_text_evidence('a\n\nb\n\n', makeDigest(['a\n\n', 'b\n\n']))).toEqual({ raw_stream_chunks: 2 });
+        expect(raw_text_evidence('a\n\nc\n\n', makeDigest(['a\n\n', 'b\n\n']))).toEqual({ raw_response_text: 'a\n\nc\n\n' });
+        expect(raw_text_evidence('error body', makeDigest([]))).toEqual({ raw_response_text: 'error body' });
     });
 });

@@ -1,4 +1,5 @@
 /** Single-sample execution uses fixed simulators and persists raw evidence before grading. */
+import { createHash } from 'node:crypto';
 import { fsyncSync, writeSync } from 'node:fs';
 import { calibration_visible_text } from './assessment_response.ts';
 import type { GatewayResponse, GatewayStreamOptions } from './client.ts';
@@ -131,12 +132,32 @@ function assessment_usage(payload: unknown): AssessmentUsage | null {
         return null;
     return { input_tokens, output_tokens };
 }
+/** Streaming digest verifies raw_response_text parity without retaining every frame in memory. */
+export interface StreamChunkDigest {
+    readonly count: number;
+    readonly length: number;
+    sha256(): string;
+}
 /**
  * The complete stream text is already journaled frame by frame. Store it again on the call only
- * when the journaled chunks do not reproduce it byte for byte (aborted streams, HTTP error bodies).
+ * when a returned response body is not reproduced byte for byte by the journaled chunks
+ * (HTTP error bodies, non-stream responses, or mismatched raw text).
  */
-export function raw_text_evidence(raw_response_text: string | undefined, chunks: readonly string[]): Record<string, unknown> {
-    if (raw_response_text === undefined) return {};
+export function raw_text_evidence(
+    raw_response_text: string | undefined,
+    chunks: readonly string[] | StreamChunkDigest
+): Record<string, unknown> {
+    if ('sha256' in chunks) {
+        if (raw_response_text === undefined) return chunks.count ? { raw_stream_chunks: chunks.count } : {};
+        if (
+            chunks.count > 0 &&
+            chunks.length === raw_response_text.length &&
+            createHash('sha256').update(raw_response_text).digest('hex') === chunks.sha256()
+        )
+            return { raw_stream_chunks: chunks.count };
+        return { raw_response_text };
+    }
+    if (raw_response_text === undefined) return chunks.length ? { raw_stream_chunks: chunks.length } : {};
     if (chunks.length && chunks.join('') === raw_response_text) return { raw_stream_chunks: chunks.length };
     return { raw_response_text };
 }
@@ -373,9 +394,22 @@ export async function run_assessment_sample(
             const controller = new AbortController(),
                 stream = responses_stream_telemetry();
             let chunk_index = 0,
+                chunkLength = 0,
                 acceptingChunks = true,
-                journalFailed = false;
-            const journaledChunks: string[] = [];
+                journalFailed = false,
+                chunkDigestHex: string | null = null;
+            const chunkHash = createHash('sha256');
+            const chunkDigest: StreamChunkDigest = {
+                get count() {
+                    return chunk_index;
+                },
+                get length() {
+                    return chunkLength;
+                },
+                sha256() {
+                    return (chunkDigestHex ??= chunkHash.digest('hex'));
+                }
+            };
             const started = Date.now();
             try {
                 const remaining = deadline - Date.now();
@@ -393,11 +427,13 @@ export async function run_assessment_sample(
                                     call_id,
                                     turn,
                                     ...(retryPolicy ? { api_attempt: retry + 1 } : {}),
-                                    chunk_index: chunk_index++,
+                                    chunk_index,
                                     elapsed_seconds,
                                     raw_stream_text
                                 });
-                                journaledChunks.push(raw_stream_text);
+                                chunk_index++;
+                                chunkLength += raw_stream_text.length;
+                                chunkHash.update(raw_stream_text);
                             } catch (error) {
                                 journalFailed = true;
                                 throw error;
@@ -448,7 +484,7 @@ export async function run_assessment_sample(
                 estimated_uncached_cost_usd: cost,
                 raw_response: payload,
                 stream: structuredClone(stream),
-                ...raw_text_evidence(raw_response_text, journaledChunks)
+                ...raw_text_evidence(raw_response_text, chunkDigest)
             });
             calls.push(call_id);
             elapsed += duration;

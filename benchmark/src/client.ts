@@ -73,16 +73,19 @@ export class GatewayClient {
         const signal = options.signal ? AbortSignal.any([timeoutSignal, options.signal]) : timeoutSignal;
         let reader: ReadableStreamDefaultReader<Uint8Array> | undefined;
         let headers: Record<string, string> = {};
-        let raw = '',
-            journalError: unknown;
-        const decoder = new ResponsesStreamDecoder(telemetry, duration, (text, time) => {
-            try {
-                options.on_chunk?.(text, time);
-            } catch (error) {
-                journalError = error;
-                throw error;
-            }
-        });
+        let raw: string | undefined = options.on_chunk ? undefined : '';
+        let journalError: unknown;
+        const onFrame = options.on_chunk
+            ? (text: string, time: number) => {
+                  try {
+                      options.on_chunk!(text, time);
+                  } catch (error) {
+                      journalError = error;
+                      throw error;
+                  }
+              }
+            : undefined;
+        const decoder = new ResponsesStreamDecoder(telemetry, duration, onFrame);
         try {
             const response = await fetch(`${this.base_url}/responses`, {
                 method: 'POST',
@@ -95,14 +98,14 @@ export class GatewayClient {
             telemetry.http_status = response.status;
             if (!response.ok) {
                 telemetry.termination = 'http_error';
-                raw = await response.text();
+                const errorRaw = await response.text();
                 let payload: unknown;
                 try {
-                    payload = parseAssessmentJson(raw);
+                    payload = parseAssessmentJson(errorRaw);
                 } catch {
-                    payload = { raw_error: raw.slice(0, 400) };
+                    payload = { raw_error: errorRaw.slice(0, 400) };
                 }
-                return [response.status, duration(), headers, payload, raw];
+                return [response.status, duration(), headers, payload, errorRaw];
             }
             if (response.headers.get('content-type')?.split(';')[0]?.trim().toLowerCase() !== 'text/event-stream' || !response.body) {
                 await response.body?.cancel();
@@ -113,7 +116,9 @@ export class GatewayClient {
             while (decoder.response === null) {
                 const { value, done } = await reader.read();
                 if (done) {
-                    decoder.push(utf8.decode());
+                    const tail = utf8.decode();
+                    if (raw !== undefined) raw += tail;
+                    decoder.push(tail);
                     decoder.finish();
                     break;
                 }
@@ -121,7 +126,7 @@ export class GatewayClient {
                 telemetry.first_byte_seconds ??= time;
                 telemetry.last_byte_seconds = time;
                 const text = utf8.decode(value, { stream: true });
-                raw += text;
+                if (raw !== undefined) raw += text;
                 decoder.push(text);
             }
             // A terminal event is sufficient; do not wait for a gateway to close a keep-alive body.

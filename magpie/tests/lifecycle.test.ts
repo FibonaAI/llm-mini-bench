@@ -92,12 +92,16 @@ describe('Magpie in-process service lifecycle', () => {
 describe('busy port recovery', () => {
   const busy = () => Object.assign(new Error('Failed to start server. Is port in use?'), { code: 'EADDRINUSE' });
   const manualSleep = () => {
-    const waits: (() => void)[] = [];
+    const waits: { ms: number; signal?: AbortSignal; resolve: () => void }[] = [];
     return {
       waits,
-      sleep: () => new Promise<void>(resolve => waits.push(resolve)),
+      sleep: (ms: number, signal?: AbortSignal) =>
+        new Promise<void>(resolve => {
+          waits.push({ ms, signal, resolve });
+          signal?.addEventListener('abort', () => resolve(), { once: true });
+        }),
       tick: async () => {
-        waits.shift()?.();
+        waits.shift()?.resolve();
         for (let i = 0; i < 5; i++) await Promise.resolve();
         await new Promise(r => setTimeout(r, 0));
       }
@@ -125,6 +129,73 @@ describe('busy port recovery', () => {
     expect(attempts).toBe(3);
     await clock.tick();
     expect(attempts).toBe(3);
+  });
+
+  test('continues polling at low frequency after initial backoff when an old host drains slowly', async () => {
+    let attempts = 0;
+    const observedDelays: number[] = [];
+    const warnings: string[] = [];
+    const originalWarn = console.warn;
+    console.warn = (...args: unknown[]) => warnings.push(args.map(String).join(' '));
+    const clock = manualSleep();
+    try {
+      const lifecycle = createMagpieBenchPlugin(
+        async ({ port }) => {
+          if (++attempts < 6) throw busy();
+          return { port, stop() {} };
+        },
+        {
+          sleep: (ms, signal) => {
+            observedDelays.push(ms);
+            return clock.sleep(ms, signal);
+          },
+          delays: [10, 20],
+          pollDelayMs: 30000
+        }
+      );
+      await lifecycle.plugin.server({}, { token, port: 3499 });
+      expect(attempts).toBe(1);
+      for (let i = 0; i < 4; i++) await clock.tick();
+      expect(attempts).toBe(5);
+      // Repeated identical server() calls during slow polling do not start a second loop.
+      await lifecycle.plugin.server({}, { token, port: 3499 });
+      expect(attempts).toBe(5);
+      await clock.tick();
+      expect(attempts).toBe(6);
+      expect(observedDelays).toEqual([10, 20, 30000, 30000, 30000]);
+      expect(warnings).toHaveLength(1);
+      expect(warnings[0]).toContain('3499');
+      await lifecycle.stop();
+    } finally {
+      console.warn = originalWarn;
+    }
+  });
+
+  test('stop aborts an in-flight slow-poll wait immediately without further attempts', async () => {
+    let attempts = 0;
+    let lastSignal: AbortSignal | undefined;
+    const clock = manualSleep();
+    const lifecycle = createMagpieBenchPlugin(
+      async () => {
+        attempts++;
+        throw busy();
+      },
+      {
+        sleep: (ms, signal) => {
+          lastSignal = signal;
+          return clock.sleep(ms, signal);
+        },
+        delays: [10],
+        pollDelayMs: 30000
+      }
+    );
+    await lifecycle.plugin.server({}, { token, port: 3499 });
+    expect(attempts).toBe(1);
+    expect(lastSignal?.aborted).toBe(false);
+    await lifecycle.stop();
+    expect(lastSignal?.aborted).toBe(true);
+    await clock.tick();
+    expect(attempts).toBe(1);
   });
 
   test('a newer configuration or stop cancels the pending retry; other errors still fail', async () => {
