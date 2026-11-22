@@ -21,6 +21,7 @@ import { readBenchLimitedBody } from '../src/bench_http_body.ts';
 export { readBenchLimitedBody } from '../src/bench_http_body.ts';
 import { BENCH_DB_FILENAME, BenchDatabase } from '../src/bench_db.ts';
 import { BenchExecutionService, private_directory } from '../src/bench_execution.ts';
+import { has_legacy_workspace, migrate_legacy_workspace, type MigrationReport } from '../src/bench_legacy_migration.ts';
 import { BenchRouteRegistry } from '../src/bench_routes.ts';
 import type { BenchServiceAdapter, BenchQuotaCatalog } from '../src/bench_adapter.ts';
 
@@ -56,6 +57,9 @@ export class BenchService {
 
     private closed = false;
     private close_promise: Promise<void> | null = null;
+    private _migration_promise: Promise<MigrationReport | null> | null = null;
+    private _migration_done = false;
+    private _migration_error: unknown = null;
     constructor(options: Partial<MiniBenchOptions> = {}) {
         this.token = options.token ?? process.env.MAGPIE_BENCH_TOKEN ?? '';
         if (Array.from(this.token).length < 32) throw new TypeError('MAGPIE_BENCH_TOKEN must be at least 32 characters');
@@ -86,11 +90,65 @@ export class BenchService {
         }
         return this._bench_execution;
     }
+    /** Automatically migrate legacy file-per-run directories into SQLite and clean up verified files. */
+    ensure_ready(): Promise<MigrationReport | null> {
+        if (this.closed) return Promise.reject(new BenchUnavailableError('Assessment service is closed'));
+        if (this._migration_error)
+            return Promise.reject(new BenchUnavailableError('legacy storage migration failed; inspect storage and restart'));
+        if (this._migration_done) return Promise.resolve(null);
+        if (!this._migration_promise) {
+            if (!has_legacy_workspace(this.data_dir)) {
+                this._migration_done = true;
+                return Promise.resolve(null);
+            }
+            this._migration_promise = migrate_legacy_workspace(this.data_dir, {
+                db: this.db,
+                cleanup: true,
+                shouldAbort: () => this.closed
+            })
+                .then(report => {
+                    if (!report.aborted) this._migration_done = true;
+                    this._baselines_cache = null;
+                    this._observations_cache = null;
+                    this._tasks_cache = null;
+                    this._runs_cache = null;
+                    if (
+                        report.runs_migrated > 0 ||
+                        report.tasks_migrated > 0 ||
+                        report.baselines_migrated > 0 ||
+                        report.cleaned_runs > 0 ||
+                        report.cleaned_tasks > 0 ||
+                        report.cleaned_baselines > 0 ||
+                        report.removed_dirs.length > 0
+                    ) {
+                        console.log(
+                            `LLM Mini Bench migrated legacy storage into ${BENCH_DB_FILENAME}: ` +
+                                `${report.runs_migrated} runs, ${report.tasks_migrated} tasks, ${report.baselines_migrated} baselines migrated; ` +
+                                `${report.cleaned_runs} runs, ${report.cleaned_tasks} tasks, ${report.cleaned_baselines} baselines cleaned.`
+                        );
+                    }
+                    if (report.runs_failed > 0 || report.tasks_failed > 0 || report.baselines_failed > 0) {
+                        console.warn(
+                            `LLM Mini Bench kept unreadable legacy items on disk: ` +
+                                `${report.runs_failed} runs, ${report.tasks_failed} tasks, ${report.baselines_failed} baselines.`
+                        );
+                    }
+                    return report;
+                })
+                .catch(error => {
+                    this._migration_error = error;
+                    console.error('LLM Mini Bench automatic legacy migration failed; legacy files were preserved.');
+                    throw new BenchUnavailableError('legacy storage migration failed; inspect storage and restart');
+                });
+        }
+        return this._migration_promise;
+    }
     async close(): Promise<void> {
         if (this.close_promise) return this.close_promise;
         this.closed = true;
         this.close_promise = (async () => {
             try {
+                await this._migration_promise?.catch(() => undefined);
                 await this._bench_execution?.close();
             } finally {
                 this.db.close();
@@ -317,6 +375,7 @@ export function make_handler(service: BenchService, web_dir?: string): (request:
         try {
             if (path.startsWith('/api/bench/')) {
                 if (request.method === 'GET' && path === '/api/bench/banks') return jsonCached(200, service.cached_banks_payload());
+                await service.ensure_ready();
                 if (request.method === 'GET' && path === '/api/bench/baselines') return json(200, { baselines: service.baselines() });
                 if (request.method === 'GET' && path === '/api/bench/observations') {
                     // `known` lets a client that already holds this exact list skip the download.
@@ -471,6 +530,11 @@ export async function startMiniBenchService(
     } catch (error) {
         await service.close();
         throw error;
+    }
+    // Start one-time legacy migration & cleanup in the background only after the port is claimed
+    // so an older draining service on the same port never loses its files mid-flight.
+    if (has_legacy_workspace(service.data_dir)) {
+        void service.ensure_ready().catch(() => {});
     }
     let stopping: Promise<void> | null = null;
     return {

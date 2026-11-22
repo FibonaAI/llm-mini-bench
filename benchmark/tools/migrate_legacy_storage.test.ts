@@ -5,7 +5,8 @@ import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { BENCH_DB_FILENAME, BenchDatabase } from '../src/bench_db.ts';
 import { BenchExecutionService } from '../src/bench_execution.ts';
-import { migrate_legacy_workspace, main } from './migrate_legacy_storage.ts';
+import { startMiniBenchService } from '../backend/mini_bench.ts';
+import { has_legacy_workspace, migrate_legacy_workspace, main } from './migrate_legacy_storage.ts';
 
 const dirs: string[] = [];
 afterEach(() => {
@@ -278,5 +279,386 @@ describe('legacy workspace migration to SQLite', () => {
             baselines_migrated: 0,
             baselines_skipped: 1
         });
+    });
+
+    test('cleanup removes verified legacy runs, tasks, baselines, cache files, and empty dirs while preserving unrelated files', async () => {
+        const root = tempDir();
+        const runId = '1'.repeat(32);
+        const taskId = '2'.repeat(32);
+        const runDir = join(root, 'assessment', runId);
+        const taskDir = join(root, 'assessment', 'tasks', taskId);
+        const baselinesDir = join(root, 'assessment-baselines');
+        const retiredDir = join(root, 'runs');
+        mkdirSync(runDir, { recursive: true });
+        mkdirSync(taskDir, { recursive: true });
+        mkdirSync(baselinesDir, { recursive: true });
+        mkdirSync(retiredDir, { recursive: true });
+
+        writeFileSync(join(root, 'routes.json'), JSON.stringify({ routes: [] }));
+        writeFileSync(join(retiredDir, 'old.txt'), 'retired');
+        writeFileSync(join(root, 'assessment', '.run-index-cache.json'), '{}');
+        writeFileSync(join(root, 'assessment', '.tmp-' + '3'.repeat(32)), '{}');
+        writeFileSync(join(root, 'assessment', '.DS_Store'), 'junk');
+        writeFileSync(join(baselinesDir, '.tmp-' + '4'.repeat(32)), '{}');
+
+        const legacyRun = {
+            id: runId,
+            task_id: taskId,
+            execution_kind: 'task-child-v1',
+            status: 'completed',
+            created_at: '2026-11-20T00:00:00.000Z',
+            updated_at: '2026-11-20T00:05:00.000Z',
+            stop_reason: null,
+            plan: {
+                bank_version: '1.0',
+                bank_scope: 'subset',
+                bank_snapshot: { version: '1.0', task_ids: ['T1'] },
+                targets: [
+                    {
+                        id: 'target-1',
+                        route_id: 'r1',
+                        model: 'm1',
+                        account_ref: 'a1',
+                        thinking: 'high',
+                        pricing: { prompt: 0, completion: 0 }
+                    }
+                ],
+                task_ids: ['T1'],
+                task_snapshots: [{ id: 'T1' }],
+                rounds: 1,
+                concurrency: 1,
+                limits: { timeout: 600, max_api_retries: 3 },
+                source_sha256: {},
+                sample_count: 1
+            },
+            samples: [
+                {
+                    sample_id: 's1',
+                    attempt_id: 'att-1',
+                    run_id: runId,
+                    target_id: 'target-1',
+                    route_id: 'r1',
+                    account_ref: 'a1',
+                    account_evidence: 'gateway_binding',
+                    task: 'T1',
+                    model: 'm1',
+                    thinking: 'high',
+                    round: 1,
+                    status: 'completed',
+                    ok: true,
+                    grade: { content_score: 1, outcome: 'correct' },
+                    calls: []
+                }
+            ],
+            budget: { requests: 0, known_cost_lower_bound_usd: 0 }
+        };
+        writeFileSync(join(runDir, 'run.json'), JSON.stringify(legacyRun));
+        writeFileSync(
+            join(taskDir, 'task.json'),
+            JSON.stringify({
+                id: taskId,
+                status: 'completed',
+                created_at: '2026-11-20T00:00:00.000Z',
+                updated_at: '2026-11-20T00:05:00.000Z',
+                stop_reason: null,
+                child_run_ids: [runId],
+                plan: {
+                    ...legacyRun.plan,
+                    sample_concurrency: 1,
+                    run_concurrency: 1,
+                    run_count: 1,
+                    samples_per_run: 1,
+                    total_max_cost_usd: null
+                }
+            })
+        );
+        writeFileSync(
+            join(baselinesDir, 'b1.json'),
+            JSON.stringify({ id: '5'.repeat(64), schema: 'assessment-baseline-v1', bank_version: '1.0', run_id: runId })
+        );
+
+        expect(has_legacy_workspace(root)).toBe(true);
+        const report = await migrate_legacy_workspace(root, { cleanup: true });
+        expect(report).toMatchObject({
+            cleanup: true,
+            aborted: false,
+            runs_migrated: 1,
+            tasks_migrated: 1,
+            baselines_migrated: 1,
+            runs_failed: 0,
+            tasks_failed: 0,
+            baselines_failed: 0,
+            cleaned_runs: 1,
+            cleaned_tasks: 1,
+            cleaned_baselines: 1,
+            cleaned_cache_files: 3
+        });
+
+        expect(has_legacy_workspace(root)).toBe(false);
+        expect(existsSync(join(root, 'assessment'))).toBe(false);
+        expect(existsSync(join(root, 'assessment-baselines'))).toBe(false);
+        expect(existsSync(join(root, BENCH_DB_FILENAME))).toBe(true);
+        // Unrelated configuration and retired directories are never touched.
+        expect(existsSync(join(root, 'routes.json'))).toBe(true);
+        expect(existsSync(join(retiredDir, 'old.txt'))).toBe(true);
+    });
+
+    test('cleanup preserves corrupted runs, invalid baselines, and unknown user files', async () => {
+        const root = tempDir();
+        const goodId = '6'.repeat(32);
+        const badId = '7'.repeat(32);
+        const goodDir = join(root, 'assessment', goodId);
+        const badDir = join(root, 'assessment', badId);
+        const baselinesDir = join(root, 'assessment-baselines');
+        mkdirSync(goodDir, { recursive: true });
+        mkdirSync(badDir, { recursive: true });
+        mkdirSync(baselinesDir, { recursive: true });
+
+        writeFileSync(
+            join(goodDir, 'run.json'),
+            JSON.stringify({
+                id: goodId,
+                status: 'completed',
+                created_at: '2026-11-20T00:00:00.000Z',
+                updated_at: '2026-11-20T00:01:00.000Z',
+                stop_reason: null,
+                plan: {
+                    bank_version: '1.0',
+                    bank_scope: 'subset',
+                    bank_snapshot: {},
+                    targets: [],
+                    task_ids: [],
+                    task_snapshots: [],
+                    rounds: 1,
+                    concurrency: 1,
+                    limits: {},
+                    source_sha256: {},
+                    sample_count: 0
+                },
+                samples: [],
+                budget: {}
+            })
+        );
+        writeFileSync(join(badDir, 'run.json'), '{not-valid-json');
+        writeFileSync(join(root, 'assessment', 'user-note.txt'), 'keep me');
+        writeFileSync(join(baselinesDir, 'corrupt.json'), '{bad');
+
+        const report = await migrate_legacy_workspace(root, { cleanup: true });
+        expect(report).toMatchObject({
+            runs_migrated: 1,
+            runs_failed: 1,
+            baselines_failed: 1,
+            cleaned_runs: 1,
+            cleaned_baselines: 0
+        });
+        expect(existsSync(goodDir)).toBe(false);
+        expect(existsSync(badDir)).toBe(true);
+        expect(existsSync(join(root, 'assessment', 'user-note.txt'))).toBe(true);
+        expect(existsSync(join(baselinesDir, 'corrupt.json'))).toBe(true);
+    });
+
+    test('aborting mid-migration skips cleanup so unmigrated files are never deleted', async () => {
+        const root = tempDir();
+        const runA = '8'.repeat(32);
+        const runB = '9'.repeat(32);
+        for (const runId of [runA, runB]) {
+            const runDir = join(root, 'assessment', runId);
+            mkdirSync(runDir, { recursive: true });
+            writeFileSync(
+                join(runDir, 'run.json'),
+                JSON.stringify({
+                    id: runId,
+                    status: 'completed',
+                    created_at: '2026-11-20T00:00:00.000Z',
+                    updated_at: '2026-11-20T00:01:00.000Z',
+                    stop_reason: null,
+                    plan: {
+                        bank_version: '1.0',
+                        bank_scope: 'subset',
+                        bank_snapshot: {},
+                        targets: [],
+                        task_ids: [],
+                        task_snapshots: [],
+                        rounds: 1,
+                        concurrency: 1,
+                        limits: {},
+                        source_sha256: {},
+                        sample_count: 0
+                    },
+                    samples: [],
+                    budget: {}
+                })
+            );
+        }
+
+        // Immediate abort before lock.
+        const immediate = await migrate_legacy_workspace(root, { cleanup: true, shouldAbort: () => true });
+        expect(immediate.aborted).toBe(true);
+        expect(immediate.runs_migrated).toBe(0);
+        expect(immediate.cleaned_runs).toBe(0);
+        expect(existsSync(join(root, 'assessment', runA))).toBe(true);
+
+        // Mid-migration abort after first run: first run is persisted in SQLite, cleanup is skipped until full completion.
+        let checks = 0;
+        const partial = await migrate_legacy_workspace(root, { cleanup: true, shouldAbort: () => ++checks > 3 });
+        expect(partial.aborted).toBe(true);
+        expect(partial.runs_migrated).toBe(1);
+        expect(partial.cleaned_runs).toBe(0);
+        expect(existsSync(join(root, 'assessment', runA))).toBe(true);
+        expect(existsSync(join(root, 'assessment', runB))).toBe(true);
+
+        // Resuming finishes the remaining run and cleans up both verified legacy run dirs.
+        const resumed = await migrate_legacy_workspace(root, { cleanup: true });
+        expect(resumed).toMatchObject({ aborted: false, runs_skipped: 1, runs_migrated: 1, cleaned_runs: 2 });
+        expect(existsSync(join(root, 'assessment'))).toBe(false);
+    });
+
+    test('startMiniBenchService automatically migrates legacy workspaces on startup and cleans up verified files', async () => {
+        const root = tempDir();
+        const token = 't'.repeat(32);
+        const runId = '9'.repeat(32);
+        const taskId = 'a'.repeat(32);
+        const runDir = join(root, 'assessment', runId);
+        const taskDir = join(root, 'assessment', 'tasks', taskId);
+        const baselinesDir = join(root, 'assessment-baselines');
+        mkdirSync(runDir, { recursive: true });
+        mkdirSync(taskDir, { recursive: true });
+        mkdirSync(baselinesDir, { recursive: true });
+        writeFileSync(join(root, 'routes.json'), JSON.stringify({ routes: [] }));
+        writeFileSync(join(root, 'assessment', '.run-index-cache.json'), '{}');
+
+        const legacyRun = {
+            id: runId,
+            task_id: taskId,
+            execution_kind: 'task-child-v1',
+            status: 'completed',
+            created_at: '2026-11-20T00:00:00.000Z',
+            updated_at: '2026-11-20T00:05:00.000Z',
+            stop_reason: null,
+            plan: {
+                bank_version: '1.0',
+                bank_scope: 'subset',
+                bank_snapshot: { version: '1.0', task_ids: ['T1'] },
+                targets: [
+                    {
+                        id: 'target-1',
+                        route_id: 'r1',
+                        model: 'm1',
+                        account_ref: 'a1',
+                        thinking: 'high',
+                        pricing: { prompt: 0, completion: 0 }
+                    }
+                ],
+                task_ids: ['T1'],
+                task_snapshots: [{ id: 'T1' }],
+                rounds: 1,
+                concurrency: 1,
+                limits: { timeout: 600, max_api_retries: 3 },
+                source_sha256: {},
+                sample_count: 1
+            },
+            samples: [
+                {
+                    sample_id: 's1',
+                    attempt_id: 'att-1',
+                    run_id: runId,
+                    target_id: 'target-1',
+                    route_id: 'r1',
+                    account_ref: 'a1',
+                    account_evidence: 'gateway_binding',
+                    task: 'T1',
+                    model: 'm1',
+                    thinking: 'high',
+                    round: 1,
+                    status: 'completed',
+                    ok: true,
+                    grade: { content_score: 1, outcome: 'correct' },
+                    calls: []
+                }
+            ],
+            budget: { requests: 0, known_cost_lower_bound_usd: 0 }
+        };
+        writeFileSync(join(runDir, 'run.json'), JSON.stringify(legacyRun));
+        writeFileSync(
+            join(taskDir, 'task.json'),
+            JSON.stringify({
+                id: taskId,
+                status: 'completed',
+                created_at: '2026-11-20T00:00:00.000Z',
+                updated_at: '2026-11-20T00:05:00.000Z',
+                stop_reason: null,
+                child_run_ids: [runId],
+                plan: {
+                    ...legacyRun.plan,
+                    sample_concurrency: 1,
+                    run_concurrency: 1,
+                    run_count: 1,
+                    samples_per_run: 1,
+                    total_max_cost_usd: null
+                }
+            })
+        );
+
+        const started = await startMiniBenchService({ port: 0, token, data_dir: root });
+        try {
+            const headers = { 'X-Mini-Bench-Token': token };
+            const tasksRes = await fetch(`http://127.0.0.1:${started.port}/api/bench/tasks`, { headers });
+            expect(tasksRes.status).toBe(200);
+            const tasksBody = (await tasksRes.json()) as { tasks: Array<{ id: string }> };
+            expect(tasksBody.tasks.map(item => item.id)).toEqual([taskId]);
+
+            const runsRes = await fetch(`http://127.0.0.1:${started.port}/api/bench/runs`, { headers });
+            expect(runsRes.status).toBe(200);
+            const runsBody = (await runsRes.json()) as { runs: Array<{ id: string }> };
+            expect(runsBody.runs.map(item => item.id)).toEqual([runId]);
+
+            expect(existsSync(join(root, 'assessment'))).toBe(false);
+            expect(existsSync(join(root, 'assessment-baselines'))).toBe(false);
+            expect(existsSync(join(root, 'routes.json'))).toBe(true);
+            expect(existsSync(join(root, BENCH_DB_FILENAME))).toBe(true);
+        } finally {
+            await started.stop();
+        }
+    });
+
+    test('startMiniBenchService never migrates or deletes legacy files when the port is already occupied', async () => {
+        const root = tempDir();
+        const token = 't'.repeat(32);
+        const runId = 'f'.repeat(32);
+        const runDir = join(root, 'assessment', runId);
+        mkdirSync(runDir, { recursive: true });
+        writeFileSync(
+            join(runDir, 'run.json'),
+            JSON.stringify({
+                id: runId,
+                status: 'completed',
+                created_at: '2026-11-20T00:00:00.000Z',
+                updated_at: '2026-11-20T00:01:00.000Z',
+                stop_reason: null,
+                plan: {
+                    bank_version: '1.0',
+                    bank_scope: 'subset',
+                    bank_snapshot: {},
+                    targets: [],
+                    task_ids: [],
+                    task_snapshots: [],
+                    rounds: 1,
+                    concurrency: 1,
+                    limits: {},
+                    source_sha256: {},
+                    sample_count: 0
+                },
+                samples: [],
+                budget: {}
+            })
+        );
+
+        const blocker = Bun.serve({ hostname: '127.0.0.1', port: 0, fetch: () => new Response('busy') });
+        try {
+            await expect(startMiniBenchService({ port: blocker.port!, token, data_dir: root })).rejects.toThrow();
+            expect(existsSync(join(runDir, 'run.json'))).toBe(true);
+        } finally {
+            await blocker.stop();
+        }
     });
 });

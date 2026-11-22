@@ -37,10 +37,10 @@ Losslessly gzips `journal.jsonl` of every terminal run and retry generation in t
 ## Migrate a legacy file workspace into SQLite
 
 ```sh
-bun benchmark/tools/migrate_legacy_storage.ts [--data-dir DIR] [--dry-run]
+bun benchmark/tools/migrate_legacy_storage.ts [--data-dir DIR] [--dry-run] [--cleanup]
 ```
 
-Migrates legacy file-per-run workspaces (`<data-dir>/assessment/` and `<data-dir>/assessment-baselines/`) into `<data-dir>/mini-bench.sqlite`. Preserves all runs, tasks, samples, immutable attempt histories, compact Pi Session-style events (calls, tool results, retries, grades), and baselines while discarding raw SSE stream chunks, duplicated `source/*.ts` copies, `run-before.json` archives, and `.run-index-cache.json`. Legacy files are never modified or deleted, and re-running is idempotent.
+Migrates legacy file-per-run workspaces (`<data-dir>/assessment/` and `<data-dir>/assessment-baselines/`) into `<data-dir>/mini-bench.sqlite`. The Mini Bench service also performs this migration and cleanup automatically on startup once it claims its port. Preserves all runs, tasks, samples, immutable attempt histories, compact Pi Session-style events (calls, tool results, retries, grades), and baselines while discarding raw SSE stream chunks, duplicated `source/*.ts` copies, `run-before.json` archives, and `.run-index-cache.json`. Pass `--cleanup` to delete verified legacy entries, derived cache/temp files, and newly empty legacy directories after WAL checkpointing; corrupted or unreadable items and unrelated files are preserved untouched, and re-running is idempotent.
 
 ## Show a calibration in the workspace
 

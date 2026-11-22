@@ -36,10 +36,10 @@ bun benchmark/tools/compress_journals.ts [--data-dir DIR] [--dry-run] [--decompr
 ## 将旧版文件工作区迁移到 SQLite
 
 ```sh
-bun benchmark/tools/migrate_legacy_storage.ts [--data-dir DIR] [--dry-run]
+bun benchmark/tools/migrate_legacy_storage.ts [--data-dir DIR] [--dry-run] [--cleanup]
 ```
 
-将旧版逐运行目录存储（`<data-dir>/assessment/` 与 `<data-dir>/assessment-baselines/`）迁移到单个 `<data-dir>/mini-bench.sqlite`。完整保留所有运行、任务、样本、不可变 attempt 历史、Pi Session 风格事件流（调用、工具结果、重试、评分）与基线，丢弃原始 SSE 流切片、重复复制的 `source/*.ts`、`run-before.json` 与 `.run-index-cache.json`。工具不会修改或删除任何旧文件，重复执行幂等安全。
+将旧版逐运行目录存储（`<data-dir>/assessment/` 与 `<data-dir>/assessment-baselines/`）迁移到单个 `<data-dir>/mini-bench.sqlite`。服务在成功绑定监听端口后也会自动完成同样的迁移与清理。迁移会完整保留所有运行、任务、样本、不可变 attempt 历史、Pi Session 风格事件流（调用、工具结果、重试、评分）与基线，丢弃原始 SSE 流切片、重复复制的 `source/*.ts`、`run-before.json` 与 `.run-index-cache.json`。传入 `--cleanup` 会在 WAL checkpoint 并核对入库后清理已迁移的旧条目、派生缓存/临时文件及空目录；损坏或不可读的旧文件与无关文件会保持原样，重复执行幂等安全。
 
 ## 在工作区查看校准结果
 

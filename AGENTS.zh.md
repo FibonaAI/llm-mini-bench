@@ -100,7 +100,7 @@ bun benchmark/tools/import_assessment_baseline.ts --help
 - `bank_scope=subset` 不可提升为完整基线。缺失来源、不可评分和旧 schema 不能靠补默认值或改版本号升级。
 - 原始调用、失败尝试和工具轨迹先落盘，再评分。Token 和费用缺失保持 `null`；汇总包括工具后续请求，估算不是账单。
 - 个人工作区初始为空，不自动将外部基线加载到服务或分析界面。需要观察记录的浏览器测试应显式填充自己的临时数据目录。
-- 个人运行、任务、不可变 attempt 历史、Pi Session 风格事件流与个人基线统一保存在数据目录下的单个私有 SQLite 数据库（`mini-bench.sqlite`，WAL 模式，`0o600`）。题库、任务与源码哈希快照按内容去重存储，不再逐次复制 `source/*.ts` 或落盘原始 SSE `stream_chunk`。旧版 `assessment/` 与 `assessment-baselines/` 目录可用 `benchmark/tools/migrate_legacy_storage.ts` 无损迁移。不读写已退役的个人 `runs/`、`baselines/` 或自定义旧题库文件；删除项目外个人数据需单独授权。
+- 个人运行、任务、不可变 attempt 历史、Pi Session 风格事件流与个人基线统一保存在数据目录下的单个私有 SQLite 数据库（`mini-bench.sqlite`，WAL 模式，`0o600`）。题库、任务与源码哈希快照按内容去重存储，不再逐次复制 `source/*.ts` 或落盘原始 SSE `stream_chunk`。服务在成功绑定监听端口后会自动检测并将旧版 `assessment/` 与 `assessment-baselines/` 目录迁移入 SQLite（`benchmark/src/bench_legacy_migration.ts`），在 WAL checkpoint 落盘并核对入库后清理已迁移的遗留条目、派生缓存及空目录，同时保留损坏/不可读项与无关文件；`benchmark/tools/migrate_legacy_storage.ts` 提供离线 CLI（支持 `--dry-run` 与 `--cleanup`）。不读写已退役的个人 `runs/`、`baselines/` 或自定义旧题库文件；删除项目外个人数据需单独授权。
 - 目录中的 `provider_id` 是 `owned_by` 声明的精确实例 ID，不是已核验的实际服务商或供应商类型。远端路由展开必须有经过边界校验的 `magpie_via` 目录证据及正式的 owner 前缀路径，排除本地 `auto/`、`group/` 条目，只展开一级命名空间，完整请求模型名不变。新快照保留 `remote_route` 元数据，不为历史推导补全，也不把随机 hop ID 保存为身份。目录握手会附带非对话模型，必须过滤。快照只保留当时记录的元数据，不用当前目录回填历史身份。`gateway-default` 是并发池，不是上游账号。未知供应商类型和图标使用中性展示，不编造异常标签或检测器。
 - 题库内容相同还不够，Thinking、输出预算、工具轮次等执行配置也必须可比。引擎层 `thinking` 可选：省略或 `default` 时不发送 `reasoning`，不等于显式 `none`；`mixed`、`unknown` 为保留值。任务界面对未声明档位的路由只提供 `default`，对声明了档位的路由只提供这些显式档位。
 
