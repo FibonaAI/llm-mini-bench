@@ -93,7 +93,9 @@ function fixture() {
         }
         if (path.endsWith('/tasks')) return { tasks: historyTasks };
         if (path.endsWith('/runs')) return { runs: historyRuns };
+        const basePath = path.split('?')[0];
         if (details.has(path)) return details.get(path);
+        if (details.has(basePath)) return details.get(basePath);
         return { id: 'created', status: 'completed', targets: [], samples: [] };
     };
     const mini = {

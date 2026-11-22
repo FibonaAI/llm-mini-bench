@@ -203,6 +203,17 @@ describe('BenchDatabase single-file SQLite storage', () => {
             expect(hydrated.samples[0].retry_source_sha256).toEqual({ 'src/bench_execution.ts': 'a'.repeat(64) });
             expect(hydrated.retry_batches[0].source_sha256).toEqual({ 'src/bench_execution.ts': 'a'.repeat(64) });
 
+            const slim = db.load_run(runId, false) as any;
+            expect(slim.plan.provenance_omitted).toBe(true);
+            expect(slim.plan.bank_snapshot).toBeUndefined();
+            expect(slim.plan.task_snapshots).toBeUndefined();
+            expect(slim.plan.source_sha256).toBeUndefined();
+            expect(slim.samples[0].attempt_id).toBe('att-2');
+            expect(slim.samples[0].attempts).toHaveLength(1);
+            expect(slim.samples[0].retry_source_sha256).toBeUndefined();
+            expect(slim.retry_batches[0].request_id).toBe('1'.repeat(32));
+            expect(slim.retry_batches[0].source_sha256).toBeUndefined();
+
             const summaries = db.read_run_call_summaries(runId);
             expect(summaries).toHaveLength(2);
             expect(summaries[0]).toMatchObject({ call_id: 'att-1:1:1', http_status: 503, error_code: 'server_error', usage_known: false });

@@ -788,29 +788,29 @@ export class BenchDatabase {
         return row ? row.id : null;
     }
 
-    /** Hydrate a full ExecutionRun including deduplicated plan snapshots, samples, and attempt history. */
-    load_run(id: string): RecordValue | null {
+    /** Hydrate an ExecutionRun from SQLite; omit bulky immutable provenance snapshots when callers only need samples and state. */
+    load_run(id: string, includeProvenance = true): RecordValue | null {
         const row = this.db.query('SELECT * FROM runs WHERE id = ?').get(id) as RecordValue | null;
         if (!row) return null;
-
-        const bankSnapshot = this.get_snapshot<RecordValue>(row.bank_hash as string) ?? {};
-        const taskSnapshots = this.get_snapshot<RecordValue[]>(row.tasks_hash as string) ?? [];
-        const sourceSha256 = this.get_snapshot<Record<string, string>>(row.sources_hash as string) ?? {};
 
         const plan: RecordValue = {
             bank_version: row.bank_version,
             bank_scope: row.bank_scope,
-            bank_snapshot: bankSnapshot,
             targets: JSON.parse(row.targets_json as string),
             task_ids: JSON.parse(row.task_ids_json as string),
-            task_snapshots: taskSnapshots,
             rounds: row.rounds,
             ...(row.round_start !== null && row.round_start !== undefined ? { round_start: row.round_start } : {}),
             ...(row.concurrency !== null && row.concurrency !== undefined ? { concurrency: row.concurrency } : {}),
             limits: JSON.parse(row.limits_json as string),
-            source_sha256: sourceSha256,
             sample_count: row.sample_count
         };
+        if (includeProvenance) {
+            plan.bank_snapshot = this.get_snapshot<RecordValue>(row.bank_hash as string) ?? {};
+            plan.task_snapshots = this.get_snapshot<RecordValue[]>(row.tasks_hash as string) ?? [];
+            plan.source_sha256 = this.get_snapshot<Record<string, string>>(row.sources_hash as string) ?? {};
+        } else {
+            plan.provenance_omitted = true;
+        }
 
         const sampleRows = this.db
             .query('SELECT sample_id, latest_attempt_id FROM samples WHERE run_id = ? ORDER BY seq ASC')
@@ -828,7 +828,7 @@ export class BenchDatabase {
                 bySample.set(a.sample_id, list);
             }
             const detail = JSON.parse(a.detail_json) as RecordValue;
-            if (a.sources_hash) {
+            if (includeProvenance && a.sources_hash) {
                 const retrySources = this.get_snapshot<Record<string, string>>(a.sources_hash);
                 if (retrySources) detail.retry_source_sha256 = retrySources;
             }
@@ -867,7 +867,7 @@ export class BenchDatabase {
                 if (!object(batch)) return batch;
                 if (typeof batch.sources_hash === 'string') {
                     const { sources_hash, ...rest } = batch;
-                    return { ...rest, source_sha256: this.get_snapshot(sources_hash) ?? {} };
+                    return includeProvenance ? { ...rest, source_sha256: this.get_snapshot(sources_hash) ?? {} } : rest;
                 }
                 return batch;
             });

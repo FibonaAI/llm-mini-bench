@@ -255,6 +255,32 @@ function slim_task_state(task: ExecutionTaskState): ExecutionTaskState {
     };
 }
 
+function slim_run_snapshot(run: ExecutionRun): ExecutionRun {
+    const { task_snapshots: _snapshots, bank_snapshot: _bank, source_sha256: _sources, ...plan } = run.plan as unknown as RecordValue;
+    const slimSamples = run.samples.map(sample => {
+        const cloned = clone(sample);
+        delete cloned.retry_source_sha256;
+        if (Array.isArray(cloned.attempts)) {
+            for (const attempt of cloned.attempts) {
+                if (object(attempt)) delete attempt.retry_source_sha256;
+            }
+        }
+        return cloned;
+    });
+    const result = {
+        ...clone({ ...run, plan: { ...plan, provenance_omitted: true }, samples: [] }),
+        samples: slimSamples
+    } as unknown as ExecutionRun;
+    if (Array.isArray(result.retry_batches)) {
+        result.retry_batches = result.retry_batches.map(batch => {
+            if (!object(batch)) return batch;
+            const { source_sha256: _batchSources, ...rest } = batch;
+            return rest;
+        });
+    }
+    return result;
+}
+
 /** Event-driven scheduler serializes admission; only network requests run concurrently. */
 export class BenchExecutionService {
     readonly concurrency: number;
@@ -388,8 +414,8 @@ export class BenchExecutionService {
                 run.budget.known_cost_lower_bound_usd = overlay.known_cost_lower_bound_usd;
         }
     }
-    private load_run_from_db(id: string): ExecutionRun | null {
-        const run = this.with_db_read(db => db.load_run(id)) as ExecutionRun | null;
+    private load_run_from_db(id: string, includeProvenance = true): ExecutionRun | null {
+        const run = this.with_db_read(db => db.load_run(id, includeProvenance)) as ExecutionRun | null;
         if (!run) return null;
         if (!object(run) || run.id !== id || !Array.isArray(run.samples) || !object(run.plan))
             throw new TypeError('Saved bench run identity mismatch');
@@ -774,10 +800,16 @@ export class BenchExecutionService {
         }
     }
     /** Task summaries expose child run IDs; raw samples and evidence remain at get_run. */
-    get_task(id: string): RecordValue | null {
+    get_task(id: string, options?: { omit_provenance?: boolean }): RecordValue | null {
         const cached = this._tasks.get(id);
         if (!cached) return null;
-        const task = this.slim_tasks.has(id) ? this.load_full_task_from_db(id) : cached;
+        const task = options?.omit_provenance
+            ? this.slim_tasks.has(id)
+                ? cached
+                : slim_task_state(cached)
+            : this.slim_tasks.has(id)
+              ? this.load_full_task_from_db(id)
+              : cached;
         return execution_task_summary(
             task,
             task.child_run_ids.map(run_id => this.run_summary(run_id))
@@ -1123,17 +1155,25 @@ export class BenchExecutionService {
             return false;
         }
     }
-    get_run(id: string): ExecutionRun | null {
+    /** Return cache validation metadata for immutable terminal runs currently backed by SQLite. */
+    get_run_cache_key(id: string): { status: string; updated_at: string } | null {
+        if (this._runs.has(id)) return null;
+        const entry = this._run_index.get(id);
+        if (!entry || !TERMINAL_RUN_STATUSES.has(entry.status)) return null;
+        return { status: entry.status, updated_at: entry.updated_at };
+    }
+    get_run(id: string, options?: { omit_provenance?: boolean }): ExecutionRun | null {
+        const omitProvenance = Boolean(options?.omit_provenance);
         const active = this._runs.get(id);
         if (active) {
-            const result = clone(active),
+            const result = omitProvenance ? slim_run_snapshot(active) : clone(active),
                 runtime = this._runtime.get(id);
             if (runtime) result.budget = runtime.budget.snapshot();
             result.retryable_samples = execution_retryable_samples(active);
             return result;
         }
         if (!this._run_index.has(id)) return null;
-        const run = this.load_run_from_db(id);
+        const run = this.load_run_from_db(id, !omitProvenance);
         if (!run) return null;
         run.retryable_samples = execution_retryable_samples(run);
         return run;

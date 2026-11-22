@@ -151,6 +151,7 @@ export class BenchService {
                 await this._migration_promise?.catch(() => undefined);
                 await this._bench_execution?.close();
             } finally {
+                this._run_detail_cache.clear();
                 this.db.close();
             }
         })();
@@ -168,6 +169,11 @@ export class BenchService {
     private _banks_cache: { key: string; body: string; gzip: Uint8Array<ArrayBuffer> | null } | null = null;
     private _tasks_cache: { revision: number; etag: string; body: string; gzip: Uint8Array<ArrayBuffer> | null } | null = null;
     private _runs_cache: { revision: number; etag: string; body: string; gzip: Uint8Array<ArrayBuffer> | null } | null = null;
+    private static readonly RUN_DETAIL_CACHE_MAX = 64;
+    private readonly _run_detail_cache = new Map<
+        string,
+        { status: string; updated_at: string; body: string; gzip: Uint8Array<ArrayBuffer> | null }
+    >();
     private baselines_signature(): string {
         if (this.db.is_closed) return 'closed';
         const rows = this.db.list_baseline_metadata();
@@ -272,6 +278,38 @@ export class BenchService {
         const body = `{"etag":${JSON.stringify(etag)},${raw.slice(1)}`;
         this._runs_cache = { revision, etag, body, gzip: null };
         return this._runs_cache;
+    }
+    cached_run_detail_payload(
+        execution: BenchExecutionService,
+        id: string,
+        omitProvenance: boolean
+    ): { body: string; gzip: Uint8Array<ArrayBuffer> | null } | null {
+        if (execution.get_run !== BenchExecutionService.prototype.get_run) {
+            const run = omitProvenance ? execution.get_run(id, { omit_provenance: true }) : execution.get_run(id);
+            return run ? { body: JSON.stringify(run), gzip: null } : null;
+        }
+        const meta = execution.get_run_cache_key(id);
+        const cacheKey = `${id}:${omitProvenance ? 'slim' : 'full'}`;
+        if (meta) {
+            const hit = this._run_detail_cache.get(cacheKey);
+            if (hit && hit.status === meta.status && hit.updated_at === meta.updated_at) {
+                this._run_detail_cache.delete(cacheKey);
+                this._run_detail_cache.set(cacheKey, hit);
+                return hit;
+            }
+        }
+        const run = execution.get_run(id, omitProvenance ? { omit_provenance: true } : undefined);
+        if (!run) return null;
+        const entry = { status: run.status, updated_at: run.updated_at, body: JSON.stringify(run), gzip: null };
+        if (meta && run.status === meta.status && run.updated_at === meta.updated_at) {
+            this._run_detail_cache.delete(cacheKey);
+            this._run_detail_cache.set(cacheKey, entry);
+            if (this._run_detail_cache.size > BenchService.RUN_DETAIL_CACHE_MAX) {
+                const oldest = this._run_detail_cache.keys().next().value;
+                if (oldest !== undefined) this._run_detail_cache.delete(oldest);
+            }
+        }
+        return entry;
     }
 }
 function secureRequest(request: Request): boolean {
@@ -404,7 +442,10 @@ export function make_handler(service: BenchService, web_dir?: string): (request:
                 const taskMatch = path.match(/^\/api\/bench\/tasks\/([0-9a-f]{32})(\/cancel|\/retry)?$/);
                 if (taskMatch) {
                     if (request.method === 'GET' && !taskMatch[2]) {
-                        const task = execution.get_task(taskMatch[1]!);
+                        const omitProvenance = new URL(request.url).searchParams.get('omit_provenance') === '1';
+                        const task = omitProvenance
+                            ? execution.get_task(taskMatch[1]!, { omit_provenance: true })
+                            : execution.get_task(taskMatch[1]!);
                         return task ? json(200, task) : json(404, { error: 'task not found' });
                     }
                     if (request.method === 'POST' && taskMatch[2] === '/retry') {
@@ -438,8 +479,9 @@ export function make_handler(service: BenchService, web_dir?: string): (request:
                         return json(200, { calls: execution.read_run_call_summaries(id) ?? [] });
                     }
                     if (request.method === 'GET' && !match[2]) {
-                        const run = execution.get_run(id);
-                        return run ? json(200, run) : json(404, { error: 'run not found' });
+                        const omitProvenance = new URL(request.url).searchParams.get('omit_provenance') === '1';
+                        const cached = service.cached_run_detail_payload(execution, id, omitProvenance);
+                        return cached ? jsonCached(200, cached) : json(404, { error: 'run not found' });
                     }
                     if (request.method === 'POST' && match[2] === '/retry') {
                         const body = await requestBody(request);

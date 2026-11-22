@@ -709,3 +709,143 @@ test('large JSON responses are gzip-encoded and unchanged observations are not r
     expect(await (await request('/api/bench/observations?known=' + first.etag)).json()).toEqual({ etag: first.etag, unchanged: true });
     expect((await (await request('/api/bench/observations?known=stale')).json()).observations).toEqual(first.observations);
 });
+
+test('task and run detail endpoints support omit_provenance=1 and cache terminal runs with invalidation', async () => {
+    const { service, request } = fixture();
+    // Seed one terminal task and child run directly in SQLite before bench_execution() loads the index.
+    const runId = 'a'.repeat(32);
+    const taskId = 'b'.repeat(32);
+    const bankSnapshot = { version: '1.0', title: 'Mini Bench', large_payload: 'x'.repeat(4000) };
+    const taskSnapshots = [{ id: 't1', prompt: 'y'.repeat(4000) }];
+    const sourceSha256 = { 'src/assessment_tasks.ts': 'c'.repeat(64) };
+    const basePlan = {
+        bank_version: '1.0',
+        bank_scope: 'subset',
+        bank_snapshot: bankSnapshot,
+        targets: [
+            {
+                target_id: 'route-cache:high',
+                route_id: 'route-cache',
+                provider: 'Demo',
+                provider_id: 'demo',
+                account_ref: 'main',
+                account_evidence: 'explicit_route',
+                model: 'demo-model',
+                thinking: 'high'
+            }
+        ],
+        task_ids: ['t1'],
+        task_snapshots: taskSnapshots,
+        rounds: 1,
+        limits: { timeout: 600, timeout_scope: 'sample', max_api_retries: 3 },
+        source_sha256: sourceSha256,
+        sample_count: 1
+    };
+    service.db.save_run({
+        id: runId,
+        task_id: taskId,
+        status: 'completed',
+        created_at: '2026-11-22T00:00:00.000Z',
+        updated_at: '2026-11-22T00:01:00.000Z',
+        stop_reason: null,
+        plan: basePlan,
+        samples: [
+            {
+                sample_id: 's1',
+                attempt_id: 'att-1',
+                run_id: runId,
+                target_id: 'route-cache:high',
+                route_id: 'route-cache',
+                account_ref: 'main',
+                account_evidence: 'explicit_route',
+                task: 't1',
+                model: 'demo-model',
+                thinking: 'high',
+                round: 1,
+                status: 'completed',
+                grade: { content_score: 1 },
+                text: 'ok '.repeat(900)
+            }
+        ],
+        budget: { requests: 1 }
+    });
+    service.db.save_task({
+        id: taskId,
+        status: 'completed',
+        created_at: '2026-11-22T00:00:00.000Z',
+        updated_at: '2026-11-22T00:01:00.000Z',
+        stop_reason: null,
+        plan: {
+            ...basePlan,
+            sample_concurrency: 6,
+            run_concurrency: 3,
+            run_count: 1,
+            samples_per_run: 1,
+            total_max_cost_usd: null
+        },
+        child_run_ids: [runId]
+    });
+    // Reload execution index from the seeded SQLite rows.
+    service._bench_execution = undefined;
+
+    // Default endpoints retain full provenance.
+    const fullTaskResp = await request(`/api/bench/tasks/${taskId}`);
+    expect(fullTaskResp.status).toBe(200);
+    const fullTask = await fullTaskResp.json();
+    expect(fullTask.plan.bank_snapshot).toEqual(bankSnapshot);
+    expect(fullTask.plan.task_snapshots).toEqual(taskSnapshots);
+    expect(fullTask.plan.source_sha256).toEqual(sourceSha256);
+
+    const fullRunResp = await request(`/api/bench/runs/${runId}`);
+    expect(fullRunResp.status).toBe(200);
+    const fullRun = await fullRunResp.json();
+    expect(fullRun.plan.bank_snapshot).toEqual(bankSnapshot);
+    expect(fullRun.plan.task_snapshots).toEqual(taskSnapshots);
+    expect(fullRun.plan.source_sha256).toEqual(sourceSha256);
+
+    // omit_provenance=1 strips immutable provenance snapshots while keeping samples and children.
+    const slimTask = await (await request(`/api/bench/tasks/${taskId}?omit_provenance=1`)).json();
+    expect(slimTask.plan.provenance_omitted).toBe(true);
+    expect(slimTask.plan.bank_snapshot).toBeUndefined();
+    expect(slimTask.plan.task_snapshots).toBeUndefined();
+    expect(slimTask.plan.source_sha256).toBeUndefined();
+    expect(slimTask.children).toHaveLength(1);
+
+    let loadCalls = 0;
+    const origLoadRun = service.db.load_run.bind(service.db);
+    service.db.load_run = (...args: Parameters<typeof service.db.load_run>) => {
+        loadCalls++;
+        return origLoadRun(...args);
+    };
+
+    const slimRunResp1 = await request(`/api/bench/runs/${runId}?omit_provenance=1`, 'GET', undefined, {
+        'Accept-Encoding': 'gzip'
+    });
+    expect(slimRunResp1.headers.get('content-encoding')).toBe('gzip');
+    const slimRun1 = JSON.parse(new TextDecoder().decode(Bun.gunzipSync(new Uint8Array(await slimRunResp1.arrayBuffer()))));
+    expect(slimRun1.plan.provenance_omitted).toBe(true);
+    expect(slimRun1.plan.bank_snapshot).toBeUndefined();
+    expect(slimRun1.plan.task_snapshots).toBeUndefined();
+    expect(slimRun1.plan.source_sha256).toBeUndefined();
+    expect(slimRun1.samples).toHaveLength(1);
+    expect(loadCalls).toBe(1);
+
+    // Second request for the unchanged terminal run hits the server-side cache without touching SQLite.
+    const slimRunResp2 = await request(`/api/bench/runs/${runId}?omit_provenance=1`, 'GET', undefined, {
+        'Accept-Encoding': 'gzip'
+    });
+    expect(slimRunResp2.headers.get('content-encoding')).toBe('gzip');
+    const slimRun2 = JSON.parse(new TextDecoder().decode(Bun.gunzipSync(new Uint8Array(await slimRunResp2.arrayBuffer()))));
+    expect(slimRun2).toEqual(slimRun1);
+    expect(loadCalls).toBe(1);
+
+    // Updating the terminal run's timestamp invalidates the server-side cache on the next read.
+    service.db.db.run('UPDATE runs SET updated_at = ? WHERE id = ?', ['2026-11-22T00:05:00.000Z', runId]);
+    service._bench_execution = undefined;
+    const slimRunResp3 = await request(`/api/bench/runs/${runId}?omit_provenance=1`, 'GET', undefined, {
+        'Accept-Encoding': 'gzip'
+    });
+    const slimRun3 = JSON.parse(new TextDecoder().decode(Bun.gunzipSync(new Uint8Array(await slimRunResp3.arrayBuffer()))));
+    expect(slimRun3.updated_at).toBe('2026-11-22T00:05:00.000Z');
+    expect(loadCalls).toBeGreaterThan(1);
+});

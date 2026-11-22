@@ -61,6 +61,7 @@ import { createTaskSubmission } from './task-submission.js';
       } else if (available && [...state.tasks, ...state.runs].some(inProgress)) refreshHistory();
     });
   const findTaskSummary = id => (id ? state.tasks.find(task => task.id === id) || null : null);
+  const taskSummaryComplete = task => Boolean(task && Array.isArray(task.children));
   const findRunSummary = id => {
     if (!id) return null;
     for (const task of state.tasks) {
@@ -69,6 +70,8 @@ import { createTaskSubmission } from './task-submission.js';
     }
     return state.runs.find(run => run.id === id) || null;
   };
+  const taskDetailUrl = id => `./api/bench/tasks/${encodeURIComponent(id)}?omit_provenance=1`;
+  const runDetailUrl = id => `./api/bench/runs/${encodeURIComponent(id)}?omit_provenance=1`;
   const detailUnchanged = (detail, summary) =>
     Boolean(
       detail &&
@@ -79,6 +82,53 @@ import { createTaskSubmission } from './task-submission.js';
       detail.updated_at !== undefined &&
       detail.updated_at === summary.updated_at
     );
+  const RUN_DETAIL_CACHE_MAX = 32;
+  const runDetailCache = new Map();
+  const inflightRunRequests = new Map();
+  function cachedRunDetail(runId) {
+    if (!runId) return null;
+    const cached = runDetailCache.get(runId);
+    if (!cached) return null;
+    if (!detailUnchanged(cached, findRunSummary(runId))) {
+      runDetailCache.delete(runId);
+      return null;
+    }
+    runDetailCache.delete(runId);
+    runDetailCache.set(runId, cached);
+    return cached;
+  }
+  function cacheRunDetail(run) {
+    if (!run?.id) return;
+    if (inProgress(run) || run.updated_at === undefined) {
+      runDetailCache.delete(run.id);
+      return;
+    }
+    runDetailCache.delete(run.id);
+    runDetailCache.set(run.id, run);
+    if (runDetailCache.size > RUN_DETAIL_CACHE_MAX) {
+      const oldest = runDetailCache.keys().next().value;
+      if (oldest !== undefined) runDetailCache.delete(oldest);
+    }
+  }
+  function fetchRunDetail(runId, { forceFresh = false } = {}) {
+    if (!forceFresh) {
+      const hit = cachedRunDetail(runId);
+      if (hit) return Promise.resolve(hit);
+    }
+    const existing = inflightRunRequests.get(runId);
+    if (existing && (!forceFresh || existing.forceFresh)) return existing.promise;
+    const entry = { forceFresh, promise: null };
+    entry.promise = request(runDetailUrl(runId))
+      .then(run => {
+        cacheRunDetail(run);
+        return run;
+      })
+      .finally(() => {
+        if (inflightRunRequests.get(runId) === entry) inflightRunRequests.delete(runId);
+      });
+    inflightRunRequests.set(runId, entry);
+    return entry.promise;
+  }
   async function refreshHistory(forceFresh = false) {
     if (state.refreshing) {
       if (forceFresh) pendingForceFresh = true;
@@ -123,12 +173,18 @@ import { createTaskSubmission } from './task-submission.js';
           revealSelectedRun();
           return;
         }
-        const keepTask = !forceFresh && state.taskDetail?.id === taskId && detailUnchanged(state.taskDetail, findTaskSummary(taskId));
+        const taskSummary = findTaskSummary(taskId);
+        const keepTask = !forceFresh && state.taskDetail?.id === taskId && detailUnchanged(state.taskDetail, taskSummary);
         const keepRun = !forceFresh && state.runDetail?.id === runId && detailUnchanged(state.runDetail, findRunSummary(runId));
-        const [task, run] = await Promise.all([
-          taskId ? (keepTask ? state.taskDetail : request(`./api/bench/tasks/${encodeURIComponent(taskId)}`)) : null,
-          runId ? (keepRun ? state.runDetail : request(`./api/bench/runs/${encodeURIComponent(runId)}`)) : null
-        ]);
+        const taskPromise = taskId
+          ? keepTask
+            ? state.taskDetail
+            : taskSummaryComplete(taskSummary)
+              ? taskSummary
+              : request(taskDetailUrl(taskId))
+          : null;
+        const runPromise = runId ? (keepRun ? state.runDetail : fetchRunDetail(runId, { forceFresh })) : null;
+        const [task, run] = await Promise.all([taskPromise, runPromise]);
         if (version === state.selectionVersion) {
           state.taskDetail = task;
           state.runDetail = run;
@@ -259,11 +315,17 @@ import { createTaskSubmission } from './task-submission.js';
     state.historyClosed = false;
     state.selectedTaskId = taskId;
     state.selectedRunId = null;
-    state.taskDetail = null;
     state.runDetail = null;
+    const summary = findTaskSummary(taskId);
+    if (taskSummaryComplete(summary)) {
+      state.taskDetail = summary;
+      renderDetails();
+      return;
+    }
+    state.taskDetail = null;
     renderDetails();
     try {
-      const task = await request(`./api/bench/tasks/${encodeURIComponent(taskId)}`);
+      const task = await request(taskDetailUrl(taskId));
       if (version !== state.selectionVersion) return;
       state.taskDetail = task;
       renderDetails();
@@ -279,24 +341,33 @@ import { createTaskSubmission } from './task-submission.js';
     const version = ++state.selectionVersion;
     state.historyClosed = false;
     state.selectedRunId = runId;
-    state.runDetail = null;
     const parent = state.tasks.find(task => task.children?.some(child => child.run_id === runId));
-    const keepParent = parent && state.taskDetail?.id === parent.id && detailUnchanged(state.taskDetail, parent);
     state.selectedTaskId = parent?.id || null;
-    if (!keepParent) state.taskDetail = parent || null;
+    if (parent) state.taskDetail = parent;
+    else if (state.taskDetail) state.taskDetail = null;
+    const cached = cachedRunDetail(runId);
+    if (cached) {
+      state.runDetail = cached;
+      renderDetails();
+      revealSelectedRun();
+      return;
+    }
+    state.runDetail = null;
     renderDetails();
     try {
-      const parentTaskPromise = parent && !keepParent ? request(`./api/bench/tasks/${encodeURIComponent(parent.id)}`) : null;
-      const [run, prefetchedTask] = await Promise.all([request(`./api/bench/runs/${encodeURIComponent(runId)}`), parentTaskPromise]);
+      const run = await fetchRunDetail(runId);
       if (version !== state.selectionVersion) return;
       state.runDetail = run;
       state.selectedTaskId = run.task_id || parent?.id || null;
-      if (prefetchedTask && state.selectedTaskId === parent?.id) {
-        state.taskDetail = prefetchedTask;
-      } else if (state.selectedTaskId && !(keepParent && state.selectedTaskId === parent?.id)) {
-        const task = await request(`./api/bench/tasks/${encodeURIComponent(state.selectedTaskId)}`);
-        if (version !== state.selectionVersion) return;
-        state.taskDetail = task;
+      if (state.selectedTaskId && state.taskDetail?.id !== state.selectedTaskId) {
+        const parentSummary = findTaskSummary(state.selectedTaskId);
+        if (taskSummaryComplete(parentSummary)) {
+          state.taskDetail = parentSummary;
+        } else {
+          const task = await request(taskDetailUrl(state.selectedTaskId));
+          if (version !== state.selectionVersion) return;
+          state.taskDetail = task;
+        }
       }
       renderDetails();
       revealSelectedRun();

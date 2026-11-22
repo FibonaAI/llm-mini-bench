@@ -138,7 +138,7 @@ bun benchmark/bench.ts serve --port 3481
 
 取消会阻止尚未开始的样本及工具后续请求，并中止正在读取的流。中止连接不能证明上游停止计算，也不能保证不计费，已收到的证据会尽量保留。服务重启后，中断的运行不会自动重发请求。可通过运行或任务重试端点显式重试已结束的失败、超时、已中断、已取消或符合条件的 `budget_not_admitted` 样本，必须提交 32 位小写十六进制 `request_id`。同一标识重复提交幂等，适用于响应不确定后的核对。重试前归档原运行字节、调用及源码快照；已完成样本不重跑，重试样本在 `attempts` 中保留历次尝试，最新结果替代失败结果而非取最佳；当最新尝试完成并返回已知用量与费用时，将其作为该样本的有效用量与费用。原路由、账号、价格及剩余执行上限必须仍有效。重试后更新任务摘要、结果和分析。混合不同执行源码代际的结果不能提升为新的完整基线。
 
-工作区状态——任务、运行、样本、不可变 attempt 历史、Pi Session 风格的 `session_events`、按内容去重的题库与源码哈希快照及个人基线——统一保存在数据目录下的单个私有 SQLite 数据库（`mini-bench.sqlite`，WAL 模式）中，不再写入原始 SSE 流切片或逐次复制 `source/*.ts`。HTTP 服务同时缓存 `/api/bench/banks`、`/api/bench/tasks`、`/api/bench/runs` 与 `/api/bench/observations` 的序列化及 gzip 响应，在状态修订、源码或基线变化时自动失效。
+工作区状态——任务、运行、样本、不可变 attempt 历史、Pi Session 风格的 `session_events`、按内容去重的题库与源码哈希快照及个人基线——统一保存在数据目录下的单个私有 SQLite 数据库（`mini-bench.sqlite`，WAL 模式）中，不再写入原始 SSE 流切片或逐次复制 `source/*.ts`。HTTP 服务同时缓存 `/api/bench/banks`、`/api/bench/tasks`、`/api/bench/runs`、`/api/bench/observations` 以及终态 `/api/bench/runs/:id` 详情响应的序列化及 gzip 结果（有界 LRU，状态或 `updated_at` 变化时自动失效）；`/api/bench/tasks/:id` 和 `/api/bench/runs/:id` 支持 `?omit_provenance=1`，在前端只需展示进度与样本结果时跳过不可变题库与源码快照。
 
 写盘失败时，服务停止接收新请求，释放已结束样本的并发槽，并在内存中标记 `storage_error`。磁盘不可写时无法保证保存这次错误，重启会按最后成功保存的状态标记中断。修复存储问题并重启后才能提交新任务，不应通过重复提交来绕过故障。
 

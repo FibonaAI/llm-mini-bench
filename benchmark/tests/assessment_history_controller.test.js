@@ -45,12 +45,13 @@ function fixture() {
             notify: message => notices.push(message),
             request: async path => {
                 requests.push(path);
-                if (defer?.path === path) return defer.promise;
-                if (path.endsWith('/banks')) return { banks: [], execution_policy: 'sample-timeout-v1' };
-                if (path.endsWith('/routes')) return { routes: [] };
-                if (path.endsWith('/tasks')) return { tasks };
-                if (path.endsWith('/runs')) return { runs };
-                return tasks.find(task => path.endsWith('/tasks/' + task.id)) || runs.find(run => path.endsWith('/runs/' + run.id));
+                const basePath = path.split('?')[0];
+                if (defer?.path === path || defer?.path === basePath) return defer.promise;
+                if (basePath.endsWith('/banks')) return { banks: [], execution_policy: 'sample-timeout-v1' };
+                if (basePath.endsWith('/routes')) return { routes: [] };
+                if (basePath.endsWith('/tasks')) return { tasks };
+                if (basePath.endsWith('/runs')) return { runs };
+                return tasks.find(task => basePath.endsWith('/tasks/' + task.id)) || runs.find(run => basePath.endsWith('/runs/' + run.id));
             }
         },
         on: (name, handler) => events.set(name, handler),
@@ -164,11 +165,10 @@ test('collapsing a loading card invalidates its late response and polling cannot
     expect(f.state.runDetail).toBeNull();
     await f.refresh();
     expect(f.state.selectedRunId).toBeNull();
-    const resolveTask = f.defer('./api/bench/tasks/task');
-    await f.click('bench-run-list', { benchTaskId: 'task' });
-    const pendingTask = f.click('bench-run-list', { benchTaskId: 'task' });
-    await f.click('bench-run-list', { benchTaskId: 'task' });
-    resolveTask({ id: 'task', status: 'completed' });
+    const resolveTask = f.defer('./api/bench/tasks/missing-task');
+    const pendingTask = f.click('bench-run-list', { benchTaskId: 'missing-task' });
+    await f.click('bench-run-list', { benchTaskId: 'missing-task' });
+    resolveTask({ id: 'missing-task', status: 'completed', children: [] });
     await pendingTask;
     expect(f.state.selectedTaskId).toBeNull();
     expect(f.state.taskDetail).toBeNull();
@@ -242,6 +242,7 @@ test('background polling skips refetching unchanged terminal task and run detail
     // Stamp updated_at so terminal detail records can be recognized as unchanged.
     f.state.tasks[0].updated_at = '2026-11-20T00:00:00.000Z';
     f.state.tasks[0].children[0].updated_at = '2026-11-20T00:00:00.000Z';
+    f.state.tasks[0].children[1].updated_at = '2026-11-20T00:00:00.000Z';
     await f.select('child');
     f.state.taskDetail.updated_at = '2026-11-20T00:00:00.000Z';
     f.state.runDetail.updated_at = '2026-11-20T00:00:00.000Z';
@@ -251,9 +252,53 @@ test('background polling skips refetching unchanged terminal task and run detail
     await f.refreshHistory(false);
     expect(f.requests.slice(before)).toEqual(['./api/bench/tasks', './api/bench/runs']);
 
-    // Explicit refresh (forceFresh) still refetches selected details.
+    // Explicit refresh (forceFresh) still refetches the selected run with omit_provenance=1,
+    // while reusing the freshly fetched parent task summary from /api/bench/tasks.
     const beforeForced = f.requests.length;
     await f.refreshHistory(true);
-    expect(f.requests.slice(beforeForced)).toContain('./api/bench/tasks/task');
-    expect(f.requests.slice(beforeForced)).toContain('./api/bench/runs/child');
+    expect(f.requests.slice(beforeForced)).toEqual(['./api/bench/tasks', './api/bench/runs', './api/bench/runs/child?omit_provenance=1']);
+});
+
+test('selecting a child run under an active task skips task detail refetch, deduplicates polling, and caches terminal runs', async () => {
+    const f = fixture();
+    await f.refresh();
+    f.state.tasks[0].status = 'running';
+    f.state.tasks[0].updated_at = '2026-11-22T01:00:00.000Z';
+    f.state.tasks[0].children[0].updated_at = '2026-11-22T01:00:00.000Z';
+    f.state.tasks[0].children[1].updated_at = '2026-11-22T01:00:00.000Z';
+
+    // In-flight child selection must not trigger a parent /tasks/:id request,
+    // and concurrent polling must reuse the in-flight /runs/:id request instead of duplicating it.
+    const beforeSelect = f.requests.length;
+    const resolveChild = f.defer('./api/bench/runs/child?omit_provenance=1');
+    const opening = f.click('bench-task-detail', { childRunId: 'child' });
+    const polling = f.refreshHistory(false);
+    await Promise.resolve();
+    expect(f.requests.slice(beforeSelect).filter(path => path.includes('/tasks/task'))).toEqual([]);
+    expect(f.requests.slice(beforeSelect).filter(path => path.includes('/runs/child'))).toEqual([
+        './api/bench/runs/child?omit_provenance=1'
+    ]);
+    resolveChild({ id: 'child', task_id: 'task', status: 'completed', updated_at: '2026-11-22T01:00:00.000Z', samples: [] });
+    await Promise.all([opening, polling]);
+    expect(f.state.runDetail.id).toBe('child');
+
+    // Switching away and back to an unchanged terminal child serves immediately from the local cache.
+    const resolveOther = f.defer('./api/bench/runs/other?omit_provenance=1');
+    const openOther = f.click('bench-task-detail', { childRunId: 'other' });
+    resolveOther({ id: 'other', task_id: 'task', status: 'completed', updated_at: '2026-11-22T01:00:00.000Z', samples: [] });
+    await openOther;
+    const beforeCachedReopen = f.requests.length;
+    await f.click('bench-task-detail', { childRunId: 'child' });
+    expect(f.requests.slice(beforeCachedReopen)).toEqual([]);
+    expect(f.state.runDetail.id).toBe('child');
+
+    // Updating updated_at invalidates the terminal run cache on next open.
+    f.state.tasks[0].children[0].updated_at = '2026-11-22T02:00:00.000Z';
+    await f.click('bench-task-detail', { childRunId: 'other' });
+    const beforeInvalidated = f.requests.length;
+    const resolveRefreshed = f.defer('./api/bench/runs/child?omit_provenance=1');
+    const reopenInvalidated = f.click('bench-task-detail', { childRunId: 'child' });
+    resolveRefreshed({ id: 'child', task_id: 'task', status: 'completed', updated_at: '2026-11-22T02:00:00.000Z', samples: [] });
+    await reopenInvalidated;
+    expect(f.requests.slice(beforeInvalidated)).toEqual(['./api/bench/runs/child?omit_provenance=1']);
 });
