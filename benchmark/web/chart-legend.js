@@ -101,6 +101,10 @@ export function createChartLegend(container, id) {
     dimension = null,
     signature = '',
     compactButtons = [],
+    compactWidths = null,
+    lastFitWidth = -1,
+    lastDisclosureOpen = null,
+    listDirty = true,
     highlight = _key => {},
     activeKey = null;
 
@@ -139,35 +143,47 @@ export function createChartLegend(container, id) {
     return button;
   }
   function renderList() {
+    listDirty = false;
     const query = normalizeLegendSearch(search.value.trim());
     const matches = entries.filter(entry => entry.searchText.includes(query));
     list.replaceChildren(...matches.map(entry => makeButton(entry, true)));
     count.textContent = query ? `${matches.length} / ${entries.length} 组` : `${entries.length} 个颜色组`;
     empty.hidden = matches.length > 0;
   }
-  function fitCompact() {
+  function fitCompact(forceMeasure = false) {
     if (root.hidden) return;
+    const width = compact.clientWidth;
+    if (!forceMeasure && compactWidths !== null && width === lastFitWidth && disclosure.open === lastDisclosureOpen) return;
     summary.textContent = disclosure.open ? '收起图例' : `查看全部 · ${entries.length} 组`;
     disclosure.hidden = false;
     bar.style.paddingRight = '0px';
-    compactButtons.forEach(button => {
-      button.hidden = false;
-    });
-    const widths = compactButtons.map(button => button.getBoundingClientRect().width);
-    let shown = fitChartLegendItems(widths, compact.clientWidth);
+    if (forceMeasure || compactWidths === null) {
+      compactButtons.forEach(button => {
+        button.hidden = false;
+      });
+      compactWidths = compactButtons.map(button => button.getBoundingClientRect().width);
+    }
+    const availableWidth = compact.clientWidth;
+    let shown = fitChartLegendItems(compactWidths, availableWidth);
     if (shown === entries.length && !disclosure.open) disclosure.hidden = true;
     else {
       bar.style.paddingRight = `${summary.getBoundingClientRect().width + 12}px`;
-      shown = fitChartLegendItems(widths, compact.clientWidth);
+      shown = fitChartLegendItems(compactWidths, compact.clientWidth);
     }
     const focused = document.activeElement;
     compactButtons.forEach((button, index) => {
       button.hidden = index >= shown;
     });
+    lastFitWidth = compact.clientWidth;
+    lastDisclosureOpen = disclosure.open;
     if (compactButtons.some(button => button === focused && button.hidden)) summary.focus({ preventScroll: true });
     if (focused === summary && disclosure.hidden) compactButtons[0]?.focus({ preventScroll: true });
   }
+  summary.addEventListener('click', () => {
+    if (!disclosure.open && listDirty) renderList();
+  });
   disclosure.addEventListener('toggle', () => {
+    if (disclosure.open && listDirty) renderList();
     if (!disclosure.open) setHighlight(null);
     fitCompact();
   });
@@ -208,12 +224,15 @@ export function createChartLegend(container, id) {
       if (changed) {
         compactButtons = entries.map(entry => makeButton(entry, false));
         compact.replaceChildren(...compactButtons);
-        renderList();
+        compactWidths = null;
+        lastFitWidth = -1;
+        listDirty = true;
+        if (disclosure.open) renderList();
         list.scrollTop = dimensionChanged ? 0 : scrollTop;
         if (hadFocus && !root.hidden) (disclosure.open ? search : summary).focus({ preventScroll: true });
         if (activeKey && !entries.some(entry => entry.key === activeKey)) activeKey = null;
       }
-      fitCompact();
+      fitCompact(changed);
       if (activeKey !== null) highlight(activeKey);
     },
     destroy() {

@@ -109,19 +109,20 @@
     })[status] ||
     status ||
     '状态未知';
+  const DATE_FORMATTER = new Intl.DateTimeFormat('zh-CN', {
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+    second: '2-digit',
+    hour12: false
+  });
   const formatDate = value => {
     if (!value) return '未记录时间';
     const date = new Date(typeof value === 'number' ? value * 1000 : value);
     if (Number.isNaN(date.getTime())) return String(value);
-    return date.toLocaleString('zh-CN', {
-      year: 'numeric',
-      month: '2-digit',
-      day: '2-digit',
-      hour: '2-digit',
-      minute: '2-digit',
-      second: '2-digit',
-      hour12: false
-    });
+    return DATE_FORMATTER.format(date);
   };
   function notify(message, error = false) {
     const notice = byId('app-notice');

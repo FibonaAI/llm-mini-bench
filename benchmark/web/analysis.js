@@ -16,7 +16,9 @@ const state = {
   records: [],
   dataMode: 'latest',
   historyIds: new Set(),
+  historyPickerLimit: 100,
   disclosure: null,
+  disclosureLimit: 80,
   selectedId: null,
   loading: false,
   evidence: new Map(),
@@ -48,7 +50,7 @@ const resultPopovers = Object.fromEntries(
       onDismiss: () => {
         if (state.disclosure === kind) {
           state.disclosure = null;
-          renderObservations();
+          renderResultDisclosure(matchingRecords());
         }
       }
     })
@@ -169,10 +171,12 @@ function renderHistoryPicker() {
       : state.dataMode === 'all'
         ? '显示全部评测记录（含最新），可按本地日期缩小范围。'
         : '勾选要对照的评测记录；筛选与日期范围同时生效。';
-  if (state.dataMode !== 'selected') return;
+  if (state.dataMode !== 'selected' || !dataPopover.isOpen) return;
   const candidates = selectAnalysisHistoryRecords(state.records, historyOptions('all')).filter(filters.matches);
-  const key = JSON.stringify(
-    candidates.map(record => [
+  const visibleCandidates = candidates.length > state.historyPickerLimit ? candidates.slice(0, state.historyPickerLimit) : candidates;
+  const key = JSON.stringify([
+    candidates.length,
+    visibleCandidates.map(record => [
       record.id,
       record.created_at,
       record.modelDisplayName,
@@ -183,7 +187,7 @@ function renderHistoryPicker() {
       record.account,
       record.source
     ])
-  );
+  ]);
   const inputs = [key];
   element('analysis-history-count').textContent =
     `已选 ${candidates.filter(record => state.historyIds.has(record.id)).length} / ${candidates.length} 条`;
@@ -202,13 +206,17 @@ function renderHistoryPicker() {
       : record.accountDisplayId && record.accountDisplayId !== '实际账号未记录'
         ? record.accountDisplayId
         : record.account;
-  element('analysis-history-options').innerHTML = candidates.length
-    ? candidates
+  const moreHistory =
+    candidates.length > visibleCandidates.length
+      ? `<div class="history-pagination"><button class="btn" type="button" data-history-picker-more="100">显示更多（已显示 ${visibleCandidates.length} / ${candidates.length} 条）</button><button class="text-control" type="button" data-history-picker-more="all">显示全部</button></div>`
+      : '';
+  element('analysis-history-options').innerHTML = visibleCandidates.length
+    ? visibleCandidates
         .map(
           record =>
             `<label class="analysis-history-option"><input type="checkbox" data-history-record="${escapeHtml(record.id)}" ${state.historyIds.has(record.id) ? 'checked' : ''}><span><strong>${escapeHtml(record.modelDisplayName || record.model)} · ${escapeHtml(thinkingLabel(record.think))}</strong><span>${escapeHtml(formatDate(record.created_at))} · ${escapeHtml(record.providerName || record.provider)} / ${escapeHtml(conciseAccount(record))}</span><small>${escapeHtml(record.id)} · ${sourceText(record)}</small></span></label>`
         )
-        .join('')
+        .join('') + moreHistory
     : '<p class="field-hint">没有匹配的历史记录，请调整筛选或日期范围。</p>';
 }
 
@@ -225,7 +233,8 @@ function renderResultDisclosure(records) {
       axis: element('chart-axis').value,
       exclusionReason: chartExclusionReason,
       escapeHtml,
-      formatDate
+      formatDate,
+      limit: state.disclosureLimit
     });
     resultPopovers[kind].position();
   }
@@ -438,21 +447,30 @@ for (const kind of ['results', 'excluded']) {
   const trigger = element(kind === 'results' ? 'analysis-result-count' : 'analysis-excluded-count');
   trigger.addEventListener('click', () => {
     state.disclosure = state.disclosure === kind ? null : kind;
-    renderObservations();
+    state.disclosureLimit = 80;
+    renderResultDisclosure(matchingRecords());
   });
   element(`close-analysis-${kind}`).addEventListener('click', () => {
     state.disclosure = null;
-    renderObservations();
+    renderResultDisclosure(matchingRecords());
     trigger.focus();
   });
 }
 element('chart-settings-trigger').addEventListener('click', () => settingsPopover.setOpen(!settingsPopover.isOpen, { focus: true }));
 element('close-chart-settings').addEventListener('click', () => settingsPopover.close());
-element('analysis-data-trigger').addEventListener('click', () => dataPopover.setOpen(!dataPopover.isOpen, { focus: true }));
+element('analysis-data-trigger').addEventListener('click', () => {
+  const next = !dataPopover.isOpen;
+  dataPopover.setOpen(next, { focus: true });
+  if (next) {
+    renderHistoryPicker();
+    dataPopover.position();
+  }
+});
 element('close-analysis-data').addEventListener('click', () => dataPopover.close());
 for (const mode of ['latest', 'all', 'selected'])
   element(`analysis-data-${mode}`).addEventListener('change', () => {
     state.dataMode = mode;
+    state.historyPickerLimit = 100;
     rebuildHistoryFilterScope();
     chart.resetZoom();
     renderObservations();
@@ -503,6 +521,21 @@ element('export-chart').addEventListener('click', () => {
   setTimeout(() => URL.revokeObjectURL(url), 1000);
 });
 element('analysis-view').addEventListener('click', async event => {
+  const moreList = event.target.closest('[data-record-list-more]');
+  if (moreList) {
+    const step = moreList.dataset.recordListMore;
+    state.disclosureLimit = step === 'all' ? Number.MAX_SAFE_INTEGER : state.disclosureLimit + (Number(step) || 80);
+    renderResultDisclosure(matchingRecords());
+    return;
+  }
+  const moreHistory = event.target.closest('[data-history-picker-more]');
+  if (moreHistory) {
+    const step = moreHistory.dataset.historyPickerMore;
+    state.historyPickerLimit = step === 'all' ? Number.MAX_SAFE_INTEGER : state.historyPickerLimit + (Number(step) || 100);
+    renderHistoryPicker();
+    dataPopover.position();
+    return;
+  }
   const inspect = event.target.closest('[data-inspect-observation]');
   if (inspect) {
     state.disclosure = null;

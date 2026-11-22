@@ -3,7 +3,7 @@ import { buildAnalysisHistoryStates } from './analysis-history.js';
 import { chartCategory, createChartColorRegistry } from './chart-colors.js';
 import { buildChartLegendGroups, createChartLegend } from './chart-legend.js';
 import { placeChartLabels, placeThinkingLabels } from './chart-layout.js';
-import { formatChartRecordTime, summarizeChartRecordTimes, overlappingChartRecords } from './chart-point-time.js';
+import { formatChartRecordTime, summarizeChartRecordTimes } from './chart-point-time.js';
 const SVG_NS = 'http://www.w3.org/2000/svg';
 let chartSequence = 0;
 const money = value =>
@@ -642,11 +642,48 @@ export function createScoreCostChart(container, { onSelect = _id => {}, onOpenRu
           opacity: 0.7
         })
       );
-    for (const point of visible) {
-      const px = x(point.cost),
-        py = y(point.score),
-        selected = options.selectedIds.includes(point.id);
-      const overlaps = overlappingChartRecords(visible, point, x, y);
+    const OVERLAP_RADIUS = 12;
+    const visibleCoords = visible.map((point, index) => ({
+      point,
+      index,
+      px: x(point.cost),
+      py: y(point.score),
+      pointColor: color(point),
+      colorKey: chartCategory(point, colorBy).key
+    }));
+    const overlapGrid = new Map();
+    for (const item of visibleCoords) {
+      const gx = Math.floor(item.px / OVERLAP_RADIUS);
+      const gy = Math.floor(item.py / OVERLAP_RADIUS);
+      const cellKey = `${gx}:${gy}`;
+      let bucket = overlapGrid.get(cellKey);
+      if (!bucket) {
+        bucket = [];
+        overlapGrid.set(cellKey, bucket);
+      }
+      bucket.push(item);
+    }
+    const findOverlaps = item => {
+      const gx = Math.floor(item.px / OVERLAP_RADIUS);
+      const gy = Math.floor(item.py / OVERLAP_RADIUS);
+      const found = [];
+      for (let dx = -1; dx <= 1; dx++) {
+        for (let dy = -1; dy <= 1; dy++) {
+          const bucket = overlapGrid.get(`${gx + dx}:${gy + dy}`);
+          if (!bucket) continue;
+          for (const other of bucket) {
+            if (Math.hypot(other.px - item.px, other.py - item.py) <= OVERLAP_RADIUS) found.push(other);
+          }
+        }
+      }
+      if (found.length > 1) found.sort((a, b) => a.index - b.index);
+      return found.map(entry => entry.point);
+    };
+    const selectedIdSet = new Set(options.selectedIds);
+    for (const item of visibleCoords) {
+      const { point, px, py, pointColor, colorKey } = item;
+      const selected = selectedIdSet.has(point.id);
+      const overlaps = findOverlaps(item);
       const overlapSummary = overlaps.length > 1 ? summarizeChartRecordTimes(overlaps) : '';
       const historyState = historyStates.get(point.id) ?? 'unknown';
       const historyLabel = { latest: '最新', historical: '历史', unknown: '最新状态未知（时间未记录）' }[historyState];
@@ -678,8 +715,8 @@ export function createScoreCostChart(container, { onSelect = _id => {}, onOpenRu
       );
       const bundled = point.source === 'baseline';
       group.setAttribute('data-channel-key', String(point.providerId ?? point.provider));
-      group.setAttribute('data-model-color', color(point));
-      group.setAttribute('data-color-key', chartCategory(point, colorBy).key);
+      group.setAttribute('data-model-color', pointColor);
+      group.setAttribute('data-color-key', colorKey);
       const markerStroke = 1.5;
       // Centered strokes stay inside identical visible bounds for filled and hollow markers.
       const markerRadius = ((bundled ? 10 : 12) - markerStroke) / 2;
@@ -701,8 +738,8 @@ export function createScoreCostChart(container, { onSelect = _id => {}, onOpenRu
         svgNode(bundled ? 'rect' : 'circle', {
           class: 'record-marker',
           ...markerShape,
-          fill: historyState === 'latest' ? color(point) : theme.card,
-          stroke: color(point),
+          fill: historyState === 'latest' ? pointColor : theme.card,
+          stroke: pointColor,
           'stroke-width': markerStroke,
           'stroke-dasharray': historyState === 'unknown' ? '2 2' : 'none'
         })
@@ -725,7 +762,7 @@ export function createScoreCostChart(container, { onSelect = _id => {}, onOpenRu
         );
       }
       const seriesKey = thinkingGroupKey(point);
-      pointNodes.push([group, seriesKey, point]);
+      pointNodes.push([group, seriesKey, point, colorKey]);
       const showTooltip = (pinned = false) => {
         highlightSeries(seriesKey);
         tooltip.replaceChildren();
@@ -859,7 +896,7 @@ export function createScoreCostChart(container, { onSelect = _id => {}, onOpenRu
             }
           }
         }
-        const otherPoints = visible.filter(other => other.id !== point.id).map(other => ({ x: x(other.cost), y: y(other.score) }));
+        const otherPoints = visibleCoords.filter(other => other.point.id !== point.id).map(other => ({ x: other.px, y: other.py }));
         const scoreCandidate = candidate => {
           const hitsActive = overlapsBox(candidate, activeBox) ? 1 : 0;
           const hitsSeries = seriesCheckPoints.filter(pt =>
@@ -1093,8 +1130,8 @@ export function createScoreCostChart(container, { onSelect = _id => {}, onOpenRu
           node.setAttribute('opacity', selected ? 0.95 : 0);
           node.setAttribute('data-legend-highlight', false);
         }
-        for (const [node, , point] of pointNodes) {
-          const active = chartCategory(point, colorBy).key === key;
+        for (const [node, , , pointColorKey] of pointNodes) {
+          const active = pointColorKey === key;
           node.setAttribute('opacity', active ? 1 : 0.18);
           node.setAttribute('data-legend-highlight', active);
         }

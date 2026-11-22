@@ -12,7 +12,7 @@ import {
 } from './assessment_provenance.ts';
 import { project_run_observations } from './assessment_baselines.ts';
 import type { AssessmentObservation } from './assessment_observations.ts';
-import { BENCH_DB_FILENAME, BenchDatabase, type StoredSessionEvent } from './bench_db.ts';
+import { BENCH_DB_FILENAME, BenchDatabase, type RunIndexCacheEntry, type StoredSessionEvent } from './bench_db.ts';
 import { private_directory, SessionJournal, SampleJournal } from './bench_execution_storage.ts';
 import {
     execution_retryable_samples,
@@ -140,6 +140,7 @@ interface RunRuntime {
     last_target_id: string | null;
     journal: SessionJournal;
     dirty: boolean;
+    dirty_samples: Set<string>;
 }
 interface SampleDispatch {
     run_id: string;
@@ -517,10 +518,54 @@ export class BenchExecutionService {
         }
         return patched ? overlay : undefined;
     }
+    private to_cache_entry(indexed: IndexedRun, sourceSig: string): RunIndexCacheEntry {
+        return {
+            run_id: indexed.id,
+            source_sig: sourceSig,
+            updated_at: indexed.updated_at,
+            summary_json: JSON.stringify(indexed.summary),
+            observations_json: JSON.stringify(indexed.observations),
+            legacy_overlay_json: indexed.legacy_overlay ? JSON.stringify(indexed.legacy_overlay) : null
+        };
+    }
     private load_runs(): void {
         const context = create_assessment_source_context();
-        this._cached_source_sig = assessment_source_signature();
-        for (const id of this.db.list_run_ids()) {
+        const sourceSig = assessment_source_signature();
+        this._cached_source_sig = sourceSig;
+        const cacheUpdates: RunIndexCacheEntry[] = [];
+        for (const row of this.db.list_runs_for_startup()) {
+            const id = row.id;
+            if (
+                TERMINAL_RUN_STATUSES.has(row.status) &&
+                row.cache_source_sig === sourceSig &&
+                row.cache_updated_at === row.updated_at &&
+                typeof row.summary_json === 'string' &&
+                typeof row.observations_json === 'string'
+            ) {
+                try {
+                    const summary = JSON.parse(row.summary_json) as ReturnType<typeof execution_run_summary>;
+                    const observations = JSON.parse(row.observations_json) as AssessmentObservation[];
+                    const legacy_overlay =
+                        typeof row.legacy_overlay_json === 'string' ? (JSON.parse(row.legacy_overlay_json) as LegacyRunOverlay) : undefined;
+                    if (object(summary) && summary.id === id && Array.isArray(observations)) {
+                        this._run_index.set(id, {
+                            id,
+                            ...(typeof row.task_id === 'string' ? { task_id: row.task_id } : {}),
+                            ...(typeof row.execution_kind === 'string' ? { execution_kind: row.execution_kind } : {}),
+                            status: row.status,
+                            stop_reason: row.stop_reason ?? null,
+                            created_at: row.created_at,
+                            updated_at: row.updated_at,
+                            summary,
+                            observations,
+                            ...(legacy_overlay ? { legacy_overlay } : {})
+                        });
+                        continue;
+                    }
+                } catch {
+                    /* Corrupt index cache row falls back to full hydration. */
+                }
+            }
             const run = this.db.load_run(id) as ExecutionRun | null;
             if (!run) continue;
             if (!object(run) || run.id !== id || !Array.isArray(run.samples) || !object(run.plan))
@@ -535,7 +580,9 @@ export class BenchExecutionService {
             const legacyOverlay = this.normalize_legacy_run(run);
             const indexed = this.index_run(run, context, legacyOverlay);
             this._run_index.set(id, indexed);
+            if (TERMINAL_RUN_STATUSES.has(run.status)) cacheUpdates.push(this.to_cache_entry(indexed, sourceSig));
         }
+        if (cacheUpdates.length) this.db.save_run_index_cache_batch(cacheUpdates);
     }
     private load_full_task_from_db(id: string): ExecutionTaskState {
         const task = this.with_db_read(db => db.load_task(id, true)) as unknown as ExecutionTaskState;
@@ -635,27 +682,29 @@ export class BenchExecutionService {
         };
         try {
             const sharedTaskMap = new Map(prepared.tasks.map(item => [item.id, item]));
-            for (const target of prepared.plan.targets) {
-                const childId = uuid();
-                // Share immutable bank/task provenance snapshots across sibling children to limit active RSS.
-                const childPlan: ExecutionPlan = {
-                    ...prepared.plan,
-                    targets: [clone(target)],
-                    concurrency: plan.sample_concurrency,
-                    sample_count: plan.samples_per_run,
-                    limits: clone(prepared.plan.limits)
-                };
-                const child = this.stage_run(
-                    { ...prepared, plan: childPlan, bindings: new Map([[target.id, prepared.bindings.get(target.id)!]]) },
-                    childId,
-                    id,
-                    sharedTaskMap
-                );
-                staged.push(child);
-                task.child_run_ids.push(childId);
-                this._persist(child.run);
-            }
-            this._persist_task(task); // Commit: no child runtime has been installed yet.
+            this.db.run_in_transaction(() => {
+                for (const target of prepared.plan.targets) {
+                    const childId = uuid();
+                    // Share immutable bank/task provenance snapshots across sibling children to limit active RSS.
+                    const childPlan: ExecutionPlan = {
+                        ...prepared.plan,
+                        targets: [clone(target)],
+                        concurrency: plan.sample_concurrency,
+                        sample_count: plan.samples_per_run,
+                        limits: clone(prepared.plan.limits)
+                    };
+                    const child = this.stage_run(
+                        { ...prepared, plan: childPlan, bindings: new Map([[target.id, prepared.bindings.get(target.id)!]]) },
+                        childId,
+                        id,
+                        sharedTaskMap
+                    );
+                    staged.push(child);
+                    task.child_run_ids.push(childId);
+                    this._persist(child.run);
+                }
+                this._persist_task(task); // Commit: no child runtime has been installed yet.
+            });
         } catch (error) {
             for (const child of staged) {
                 try {
@@ -1019,25 +1068,35 @@ export class BenchExecutionService {
                 id,
                 [...bindings.values()].flatMap(route => [route.api_key, route.base_url.replace(/\/+$/, ''), route.api_key_env ?? ''])
             ),
-            dirty: false
+            dirty: false,
+            dirty_samples: new Set()
         };
         return { run, runtime };
     }
-    _persist(run: ExecutionRun): void {
+    _persist(run: ExecutionRun, dirtySampleIds?: ReadonlySet<string>): void {
         run.updated_at = now();
         const runtime = this._runtime.get(run.id);
         if (runtime) run.budget = runtime.budget.snapshot();
-        this.db.save_run(run);
+        this.db.save_run(run, dirtySampleIds);
         if (this._runs.has(run.id)) this.update_active_index(run);
         else if (this._run_index.has(run.id)) this.finalize_indexed_run(run);
         this._revision++;
     }
     private finalize_indexed_run(run: ExecutionRun): void {
         const context = create_assessment_source_context();
-        this._cached_source_sig = assessment_source_signature();
+        const sourceSig = assessment_source_signature();
+        this._cached_source_sig = sourceSig;
         const existing = this._run_index.get(run.id);
         const indexed = this.index_run(run, context, existing?.legacy_overlay);
         this._run_index.set(run.id, indexed);
+        this.db.forget_run_snapshot_hashes(run.id);
+        if (TERMINAL_RUN_STATUSES.has(run.status) && !this.db.is_closed) {
+            try {
+                this.db.save_run_index_cache(this.to_cache_entry(indexed, sourceSig));
+            } catch {
+                /* Index cache is an optimization; primary run state is already committed. */
+            }
+        }
     }
     private fail_storage(): void {
         this._closing = true;
@@ -1055,9 +1114,9 @@ export class BenchExecutionService {
         this._revision++;
         this.schedule();
     }
-    private persist_safe(run: ExecutionRun): boolean {
+    private persist_safe(run: ExecutionRun, dirtySampleIds?: ReadonlySet<string>): boolean {
         try {
-            this._persist(run);
+            this._persist(run, dirtySampleIds);
             return true;
         } catch {
             this.fail_storage();
@@ -1090,12 +1149,21 @@ export class BenchExecutionService {
     ): AssessmentObservation[] {
         if (source_sig !== this._cached_source_sig) {
             this._cached_source_sig = source_sig;
+            const cacheUpdates: RunIndexCacheEntry[] = [];
             for (const [id, entry] of this._run_index) {
                 if (this._runs.has(id)) continue;
                 const run = this.load_run_from_db(id);
                 if (!run) continue;
                 const refreshed = this.index_run(run, context, entry.legacy_overlay);
                 this._run_index.set(id, refreshed);
+                if (TERMINAL_RUN_STATUSES.has(run.status)) cacheUpdates.push(this.to_cache_entry(refreshed, source_sig));
+            }
+            if (cacheUpdates.length && !this.db.is_closed) {
+                try {
+                    this.db.save_run_index_cache_batch(cacheUpdates);
+                } catch {
+                    /* Best-effort cache refresh. */
+                }
             }
         }
         const result: AssessmentObservation[] = [];
@@ -1283,7 +1351,8 @@ export class BenchExecutionService {
                 target_active: new Set(),
                 last_target_id: null,
                 journal,
-                dirty: false
+                dirty: false,
+                dirty_samples: new Set()
             };
             run.budget = budget.snapshot();
             this._runs.set(id, run);
@@ -1479,6 +1548,7 @@ export class BenchExecutionService {
                               : stop ||
                                 (run.status === 'failed' ? 'api_failure' : run.status === 'incomplete' ? 'capability_or_limit' : null);
                     runtime.dirty = false;
+                    runtime.dirty_samples.clear();
                     let persisted = this.persist_safe(run);
                     try {
                         runtime.journal.close();
@@ -1499,11 +1569,14 @@ export class BenchExecutionService {
                     this.waiters.delete(id);
                     continue;
                 }
+                const flushDirty = () => {
+                    runtime.dirty = false;
+                    const dirtyIds = runtime.dirty_samples.size ? new Set(runtime.dirty_samples) : undefined;
+                    runtime.dirty_samples.clear();
+                    this.persist_safe(run, dirtyIds);
+                };
                 if (!pending.length) {
-                    if (runtime.dirty) {
-                        runtime.dirty = false;
-                        this.persist_safe(run);
-                    }
+                    if (runtime.dirty) flushDirty();
                     continue;
                 }
                 const taskId = typeof run.task_id === 'string' ? run.task_id : null;
@@ -1515,31 +1588,28 @@ export class BenchExecutionService {
                         activeChildren.size >= parent.plan.run_concurrency ||
                         this.next_task_child_to_admit(parent, activeChildren) !== id
                     ) {
-                        if (runtime.dirty) {
-                            runtime.dirty = false;
-                            this.persist_safe(run);
-                        }
+                        if (runtime.dirty) flushDirty();
                         continue;
                     }
                 }
                 if (taskChild) {
                     const slots = run.plan.concurrency - runtime.active;
                     if (slots <= 0) {
-                        if (runtime.dirty) {
-                            runtime.dirty = false;
-                            this.persist_safe(run);
-                        }
+                        if (runtime.dirty) flushDirty();
                         continue;
                     }
                     const batch = pending.slice(0, slots);
                     const startedAt = now();
+                    const dirtyBatch = new Set(runtime.dirty_samples);
                     for (const sample of batch) {
                         sample.status = 'running';
                         sample.started_at = startedAt;
+                        dirtyBatch.add(sample.sample_id);
                     }
                     run.status = 'running';
                     runtime.dirty = false;
-                    if (!this.persist_safe(run)) {
+                    runtime.dirty_samples.clear();
+                    if (!this.persist_safe(run, dirtyBatch)) {
                         for (const sample of batch) sample.status = 'storage_error';
                         continue;
                     }
@@ -1579,8 +1649,11 @@ export class BenchExecutionService {
                     sample.status = 'running';
                     sample.started_at = now();
                     run.status = 'running';
+                    const dirtyDirect = new Set(runtime.dirty_samples);
+                    dirtyDirect.add(sample.sample_id);
                     runtime.dirty = false;
-                    if (!this.persist_safe(run)) {
+                    runtime.dirty_samples.clear();
+                    if (!this.persist_safe(run, dirtyDirect)) {
                         sample.status = 'storage_error';
                         admittedDirect = true;
                         break;
@@ -1599,10 +1672,7 @@ export class BenchExecutionService {
                     dispatched = true;
                     break;
                 }
-                if (!admittedDirect && runtime.dirty) {
-                    runtime.dirty = false;
-                    this.persist_safe(run);
-                }
+                if (!admittedDirect && runtime.dirty) flushDirty();
             }
         } while (dispatched);
     }
@@ -1684,6 +1754,7 @@ export class BenchExecutionService {
             this._active--;
             this._account_active.set(account, this._account_active.get(account)! - 1);
             runtime.dirty = true;
+            runtime.dirty_samples.add(sample_id);
             this.update_active_index(run);
             this._revision++;
             this.schedule();

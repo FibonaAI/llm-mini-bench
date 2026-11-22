@@ -3,7 +3,8 @@ import { existsSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync 
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { BenchExecutionService, type ExecutionRoutes } from './bench_execution.ts';
-import { BenchService } from '../backend/mini_bench.ts';
+import { BenchDatabase } from './bench_db.ts';
+import { BenchService, make_handler } from '../backend/mini_bench.ts';
 import { load_assessment_bank } from './assessment_bank.ts';
 
 function routes(): ExecutionRoutes {
@@ -141,11 +142,13 @@ describe('terminal run eviction and persistent index cache', () => {
             const tasks1 = service.cached_tasks_payload(execution);
             const tasks2 = service.cached_tasks_payload(execution);
             expect(tasks2).toBe(tasks1);
-            expect(tasks1.body).toBe(JSON.stringify({ tasks: execution.list_tasks() }));
+            expect(typeof tasks1.etag).toBe('string');
+            expect(tasks1.body).toBe(JSON.stringify({ etag: tasks1.etag, tasks: execution.list_tasks() }));
             const runs1 = service.cached_runs_payload(execution);
             const runs2 = service.cached_runs_payload(execution);
             expect(runs2).toBe(runs1);
-            expect(runs1.body).toBe(JSON.stringify({ runs: execution.list_runs() }));
+            expect(typeof runs1.etag).toBe('string');
+            expect(runs1.body).toBe(JSON.stringify({ etag: runs1.etag, runs: execution.list_runs() }));
         } finally {
             await service.close();
             rmSync(dir, { recursive: true, force: true });
@@ -191,6 +194,84 @@ describe('terminal run eviction and persistent index cache', () => {
             expect(service.serialize_runs_payload()).toBe(JSON.stringify({ runs: service.list_runs() }));
             await service.close();
         } finally {
+            rmSync(dir, { recursive: true, force: true });
+        }
+    });
+
+    test('SQLite run_index_cache serves warm restarts without hydrating attempts and recovers from corrupt rows', async () => {
+        const dir = mkdtempSync(join(tmpdir(), 'mini-bench-sqlite-cache-'));
+        const taskId = load_assessment_bank().task_ids[0]!;
+        const clientFactory = () => ({
+            post_responses_stream: () => [200, 0.01, {}, completedResponse()] as const
+        });
+        try {
+            const first = new BenchExecutionService(dir, routes(), 4, clientFactory as never);
+            const runId = await first.start_run({
+                targets: [{ id: 'target-a', route_id: 'route-a', thinking: 'high' }],
+                task_ids: [taskId],
+                rounds: 1
+            });
+            expect(await first.wait_for_run(runId, 5)).toBe(true);
+            const expectedSummary = first.list_runs();
+            const expectedObs = first.list_observations();
+            await first.close();
+
+            // Verify run_index_cache row exists and warm restart skips load_run completely.
+            const db = new BenchDatabase(join(dir, 'mini-bench.sqlite'));
+            let loadRunCalls = 0;
+            const origLoadRun = db.load_run.bind(db);
+            db.load_run = id => {
+                loadRunCalls++;
+                return origLoadRun(id);
+            };
+            const cachedRows = db.list_runs_for_startup();
+            expect(cachedRows).toHaveLength(1);
+            expect(cachedRows[0]!.summary_json).not.toBeNull();
+            const warm = new BenchExecutionService(dir, routes(), 4, clientFactory as never, db);
+            expect(loadRunCalls).toBe(0);
+            expect(warm.list_runs()).toEqual(expectedSummary);
+            expect(warm.list_observations()).toEqual(expectedObs);
+            await warm.close();
+
+            // Corrupt cache JSON -> startup gracefully falls back to load_run and repairs cache.
+            db.db.run("UPDATE run_index_cache SET summary_json = '{not-json' WHERE run_id = ?", [runId]);
+            const recovered = new BenchExecutionService(dir, routes(), 4, clientFactory as never, db);
+            expect(loadRunCalls).toBe(1);
+            expect(recovered.list_runs()).toEqual(expectedSummary);
+            expect(recovered.list_observations()).toEqual(expectedObs);
+            await recovered.close();
+            db.close();
+        } finally {
+            rmSync(dir, { recursive: true, force: true });
+        }
+    });
+
+    test('tasks and runs HTTP endpoints support conditional ?known=<etag> polling', async () => {
+        const dir = mkdtempSync(join(tmpdir(), 'mini-bench-known-etag-'));
+        const token = 't'.repeat(32);
+        const service = new BenchService({ data_dir: dir, token });
+        const handler = make_handler(service);
+        const headers = { Host: '127.0.0.1:3481', 'X-Mini-Bench-Token': token };
+        try {
+            const firstTasks = await (await handler(new Request('http://127.0.0.1:3481/api/bench/tasks', { headers }))).json();
+            expect(typeof firstTasks.etag).toBe('string');
+            expect(firstTasks.tasks).toEqual([]);
+            const sameTasks = await (
+                await handler(
+                    new Request(`http://127.0.0.1:3481/api/bench/tasks?known=${encodeURIComponent(firstTasks.etag)}`, { headers })
+                )
+            ).json();
+            expect(sameTasks).toEqual({ etag: firstTasks.etag, unchanged: true });
+
+            const firstRuns = await (await handler(new Request('http://127.0.0.1:3481/api/bench/runs', { headers }))).json();
+            expect(typeof firstRuns.etag).toBe('string');
+            expect(firstRuns.runs).toEqual([]);
+            const sameRuns = await (
+                await handler(new Request(`http://127.0.0.1:3481/api/bench/runs?known=${encodeURIComponent(firstRuns.etag)}`, { headers }))
+            ).json();
+            expect(sameRuns).toEqual({ etag: firstRuns.etag, unchanged: true });
+        } finally {
+            await service.close();
             rmSync(dir, { recursive: true, force: true });
         }
     });

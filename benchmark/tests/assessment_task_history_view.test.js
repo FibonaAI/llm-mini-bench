@@ -755,3 +755,35 @@ test('task card surfaces channel badges, non-zero status pills, and channel-pod 
     expect(detailHtml).toContain('‖ 中断');
     expect(detailHtml).toContain('✓ 完成');
 });
+
+test('large task history paginates to 40 cards, expands for deep selection, and loads more on demand', () => {
+    const { nodes, state, view } = fixture();
+    const target = { model: 'model', route_id: 'fixed', thinking: 'high', account_ref: 'account' };
+    state.tasks = Array.from({ length: 55 }, (_, index) => ({
+        id: `task-${String(index).padStart(3, '0')}`,
+        status: 'completed',
+        created_at: new Date(2026, 10, 1, 12, 0, index).toISOString(),
+        plan: { targets: [target], run_count: 1, rounds: 1 },
+        children: [{ run_id: `run-${index}`, target, status: 'completed', sample_count: 12, sample_status_counts: { completed: 12 } }]
+    }));
+    state.selectedTaskId = null;
+    state.selectedRunId = null;
+    state.taskDetail = null;
+    state.runDetail = null;
+    view.renderDetails();
+    const list = nodes.get('bench-run-list');
+    expect(list.innerHTML.match(/class="history-entry/g)?.length).toBe(40);
+    expect(list.innerHTML).toContain('显示更多（已显示 40 / 55 条）');
+    // Selecting an entry past index 40 automatically expands the visible window to include it.
+    state.selectedTaskId = 'task-002';
+    view.renderDetails();
+    expect(list.innerHTML).toContain('data-bench-task-id="task-002"');
+    // Clicking "show more" expands the full list.
+    state.selectedTaskId = null;
+    list.handlers.get('click')({
+        stopPropagation() {},
+        target: { closest: selector => (selector === '[data-history-show-more]' ? { dataset: { historyShowMore: '40' } } : null) }
+    });
+    expect(list.innerHTML.match(/class="history-entry/g)?.length).toBe(55);
+    expect(list.innerHTML).not.toContain('data-history-show-more');
+});

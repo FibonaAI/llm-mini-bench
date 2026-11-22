@@ -328,28 +328,47 @@ export function createTaskHistoryView({ app, state, retryRequests, retrying }) {
       .filter(Boolean)
       .join(' · ');
   }
+  let cachedEntriesTasksSnapshot = null;
+  let cachedEntriesRunsSnapshot = null;
+  let cachedEntriesList = [];
+  const sameArrayItems = (prev, next) => prev !== null && prev.length === next.length && prev.every((item, index) => item === next[index]);
   function historyEntries() {
-    return [
+    if (sameArrayItems(cachedEntriesTasksSnapshot, state.tasks) && sameArrayItems(cachedEntriesRunsSnapshot, state.runs))
+      return cachedEntriesList;
+    cachedEntriesTasksSnapshot = [...state.tasks];
+    cachedEntriesRunsSnapshot = [...state.runs];
+    cachedEntriesList = [
       ...state.tasks.map(record => ({ kind: 'task', record })),
       ...state.runs.filter(record => !record.task_id).map(record => ({ kind: 'legacy', record }))
     ].sort((a, b) => Number(new Date(b.record.created_at || 0)) - Number(new Date(a.record.created_at || 0)));
+    return cachedEntriesList;
   }
+  const HISTORY_PAGE_SIZE = 40;
+  let historyLimit = HISTORY_PAGE_SIZE;
+  let lastHistoryFilterKey = '';
+  const targetSearchCache = new WeakMap();
   const searchTokens = query => query.trim().toLowerCase().split(/\s+/).filter(Boolean);
   const matchesTokens = (text, tokens) => !tokens.length || tokens.every(token => text.includes(token));
-  const targetSearchText = target =>
-    [
-      target?.model,
-      target?.model_display_name,
-      target?.thinking,
-      target?.route_id,
-      target?.account_ref,
-      target?.provider_id,
-      target?.provider_name,
-      target ? remoteRouteNamespace(target) : null
+  const targetSearchText = target => {
+    if (!target || typeof target !== 'object') return '';
+    const cached = targetSearchCache.get(target);
+    if (cached !== undefined) return cached;
+    const computed = [
+      target.model,
+      target.model_display_name,
+      target.thinking,
+      target.route_id,
+      target.account_ref,
+      target.provider_id,
+      target.provider_name,
+      remoteRouteNamespace(target)
     ]
       .filter(Boolean)
       .join(' ')
       .toLowerCase();
+    targetSearchCache.set(target, computed);
+    return computed;
+  };
   const childMatchesTokens = (child, tokens) =>
     matchesTokens(
       [child?.run_id, child?.status, statusText(child?.status), targetSearchText(child?.target)].join(' ').toLowerCase(),
@@ -359,10 +378,21 @@ export function createTaskHistoryView({ app, state, retryRequests, retrying }) {
     matchesTokens([record?.id, record?.status, statusText(record?.status)].join(' ').toLowerCase(), tokens);
   function renderHistory() {
     const entries = historyEntries();
-    element('run-summary').textContent =
-      `${state.tasks.length} 个任务 · ${entries.filter(entry => entry.kind === 'legacy').length} 条旧运行 · ${entries.filter(entry => inProgress(entry.record)).length} 个进行中`;
-    const tokens = searchTokens(element('history-search').value),
+    let legacyCount = 0,
+      activeCount = 0;
+    for (const entry of entries) {
+      if (entry.kind === 'legacy') legacyCount++;
+      if (inProgress(entry.record)) activeCount++;
+    }
+    element('run-summary').textContent = `${state.tasks.length} 个任务 · ${legacyCount} 条旧运行 · ${activeCount} 个进行中`;
+    const rawSearch = element('history-search').value,
       status = element('history-status').value;
+    const filterKey = `${status}\u0000${rawSearch}`;
+    if (filterKey !== lastHistoryFilterKey) {
+      lastHistoryFilterKey = filterKey;
+      historyLimit = HISTORY_PAGE_SIZE;
+    }
+    const tokens = searchTokens(rawSearch);
     const shown = entries.filter(({ kind, record }) => {
       if (status !== 'all' && record.status !== status) return false;
       if (!tokens.length) return true;
@@ -371,10 +401,22 @@ export function createTaskHistoryView({ app, state, retryRequests, retrying }) {
         return record.children.some(child => childMatchesTokens(child, tokens));
       return fixedTargets(record).some(target => matchesTokens(targetSearchText(target), tokens));
     });
+    let visibleLimit = historyLimit;
+    if (shown.length > visibleLimit && (state.selectedTaskId || state.selectedRunId)) {
+      const selectedIdx = shown.findIndex(({ kind, record }) =>
+        kind === 'task' ? record.id === state.selectedTaskId : !state.selectedTaskId && record.id === state.selectedRunId
+      );
+      if (selectedIdx >= visibleLimit) visibleLimit = selectedIdx + 1;
+    }
+    const visible = shown.length > visibleLimit ? shown.slice(0, visibleLimit) : shown;
+    const paginationHtml =
+      shown.length > visible.length
+        ? `<div class="history-pagination"><button class="btn" type="button" data-history-show-more="40">显示更多（已显示 ${visible.length} / ${shown.length} 条）</button><button class="text-control" type="button" data-history-show-more="all">显示全部</button></div>`
+        : '';
     replaceHistoryMarkup(
       element('bench-run-list'),
-      shown.length
-        ? shown
+      visible.length
+        ? visible
             .map(({ kind, record }) => {
               const children = record.children || [],
                 targets = fixedTargets(record);
@@ -426,7 +468,7 @@ export function createTaskHistoryView({ app, state, retryRequests, retrying }) {
               const recordTone = statusTone(record);
               return `<article class="history-entry${selected ? ' is-expanded' : ''}"><button class="run-list-item ${selected ? 'is-selected' : ''}" type="button" aria-expanded="${selected}" aria-controls="history-${kind === 'task' ? 'task' : 'run'}-${escapeHtml(record.id)}" data-history-focus="${escapeHtml(kind + ':' + record.id)}" ${kind === 'task' ? 'data-bench-task-id' : 'data-bench-run-id'}="${escapeHtml(record.id)}"><span class="run-list-main"><strong${headline?.title ? ` title="${escapeHtml(headline.title)}"` : ''}>${escapeHtml(title)}</strong>${channelBadges}<small>${taskMetaParts.map(escapeHtml).join(' · ')} · ${idTag}</small></span><span class="run-list-status ${statusBadgeClass(record)}"><i class="task-dot is-${recordTone}" aria-hidden="true"></i>${escapeHtml(recordStatusLabel(record))}</span></button>${counts ? `<div class="task-status-counts">${counts}</div>` : ''}<div id="history-${kind === 'task' ? 'task' : 'run'}-${escapeHtml(record.id)}" data-inline-${kind === 'task' ? 'task' : 'run'}="${escapeHtml(record.id)}"></div></article>`;
             })
-            .join('')
+            .join('') + paginationHtml
         : `<div class="empty">${entries.length ? '没有匹配的任务，请调整搜索或状态筛选。' : '暂无任务。选择目标并点击“开始评测”，即可创建第一个任务。'}</div>`
     );
   }
@@ -469,9 +511,9 @@ export function createTaskHistoryView({ app, state, retryRequests, retrying }) {
     }
     return { counts, segments, sampleDone, sampleTotal, timeoutSamples };
   }
-  function channelHealthTone(children, fallbackTone = 'queued') {
+  function channelHealthTone(children, fallbackTone = 'queued', precomputedSum = null) {
     if (!children.length) return fallbackTone;
-    const { counts } = summarizeChildren(children);
+    const { counts } = precomputedSum ?? summarizeChildren(children);
     if (counts.failed > 0) return 'failed';
     if (counts.timeout > 0 || counts.incomplete > 0) return 'timeout';
     if (counts.interrupted > 0) return 'interrupted';
@@ -592,7 +634,7 @@ export function createTaskHistoryView({ app, state, retryRequests, retrying }) {
     const podsHtml = channelPods
       .map(pod => {
         const podSum = summarizeChildren(pod.children);
-        const podTone = channelHealthTone(pod.children);
+        const podTone = channelHealthTone(pod.children, 'queued', podSum);
         const isRemote = pod.children.some(child => Boolean(remoteRouteNamespace(child.target)));
         const { distinct: podAccounts, podBadge } = describeChannelAccounts(pod.children);
         const statusBits = [
@@ -775,20 +817,40 @@ export function createTaskHistoryView({ app, state, retryRequests, retrying }) {
     lazyJsonPayloads.set(rawKey, value);
     return `<details class="raw-block" data-history-disclosure="${key}" data-lazy-json="${key}"><summary data-history-focus="${key}">${escapeHtml(title)}</summary></details>`;
   }
+  let lastRunDetailInputs = null;
   function renderRunDetail() {
     const run = state.runDetail?.id === state.selectedRunId ? state.runDetail : null;
     const container = element('bench-run-detail');
     element('bench-run-title').textContent = state.selectedTaskId ? '子运行样本' : '旧运行详情';
     element('bench-cancel-run').hidden = !inProgress(run);
     element('bench-cancel-run').disabled = !canCancel(run) || state.cancelling.has(`run:${run?.id}`);
-    lazyJsonPayloads.clear();
     if (!run) {
+      lastRunDetailInputs = null;
+      lazyJsonPayloads.clear();
       replaceHistoryMarkup(
         container,
         `<div class="empty">${state.selectedRunId ? '正在读取运行详情…' : '选择一个运行，查看逐题、逐轮样本与原始证据。'}</div>`
       );
       return;
     }
+    const calls = ensureCallSummaries(run);
+    const runDetailInputs = [
+      run,
+      run.samples,
+      run.samples?.length ?? 0,
+      run.status,
+      run.updated_at,
+      state.selectedRunId,
+      state.selectedTaskId,
+      calls,
+      Boolean(callSummaries.get(run.id)?.loading),
+      retryRequests.has(`runs:${run.id}`),
+      retrying.has(`runs:${run.id}`),
+      state.cancelling.has(`run:${run.id}`)
+    ];
+    if (lastRunDetailInputs && runDetailInputs.every((value, index) => value === lastRunDetailInputs[index])) return;
+    lastRunDetailInputs = runDetailInputs;
+    lazyJsonPayloads.clear();
     const runConfirmLabel = retryCopy(run, true);
     element('bench-retry-run').hidden = inProgress(run) || !(run.retryable_samples > 0);
     element('bench-retry-run').disabled = retrying.has(`runs:${run.id}`);
@@ -798,7 +860,6 @@ export function createTaskHistoryView({ app, state, retryRequests, retrying }) {
     const samples = run.samples || [];
     const retryBatches = Array.isArray(run.retry_batches) ? run.retry_batches : [];
     const latestRetry = retryBatches.at(-1);
-    const calls = ensureCallSummaries(run);
     const timeout = run.plan?.limits?.timeout;
     const failureText = sample => {
       if (sample.status === 'completed' || ['pending', 'queued', 'running'].includes(sample.status)) return null;
@@ -1006,6 +1067,14 @@ export function createTaskHistoryView({ app, state, retryRequests, retrying }) {
     target.open = true;
     target.scrollIntoView?.({ block: 'nearest' });
     target.querySelector('summary')?.focus({ preventScroll: true });
+  });
+  element('bench-run-list').addEventListener('click', event => {
+    const more = event.target?.closest?.('[data-history-show-more]');
+    if (!more) return;
+    event.stopPropagation();
+    const step = more.dataset.historyShowMore;
+    historyLimit = step === 'all' ? Number.MAX_SAFE_INTEGER : historyLimit + (Number(step) || HISTORY_PAGE_SIZE);
+    renderDetails();
   });
   element('history-search').addEventListener('input', renderDetails);
   element('history-status').addEventListener('change', renderDetails);

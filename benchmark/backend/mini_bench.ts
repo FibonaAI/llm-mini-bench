@@ -2,7 +2,7 @@ import { PRODUCTION_BANK_VERSION } from '../src/production_bank.ts';
 import { lstatSync, readFileSync, realpathSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { dirname, extname, join, relative, resolve } from 'node:path';
-import { createHash, timingSafeEqual } from 'node:crypto';
+import { createHash, randomUUID, timingSafeEqual } from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 import {
     build_assessment_baseline,
@@ -104,21 +104,22 @@ export class BenchService {
     async quota_cards(refresh = false): Promise<BenchQuotaCatalog> {
         return this.adapter?.quotas ? this.adapter.quotas.read(refresh) : { status: 'unavailable', fetched_at: null, cards: [] };
     }
+    private readonly instance_id = randomUUID().slice(0, 12);
     private _baselines_cache: { key: string; baselines: AssessmentBaseline[] } | null = null;
     private _observations_cache: { key: string; etag: string; body: string; gzip: Uint8Array<ArrayBuffer> | null } | null = null;
     private _banks_cache: { key: string; body: string; gzip: Uint8Array<ArrayBuffer> | null } | null = null;
-    private _tasks_cache: { revision: number; body: string; gzip: Uint8Array<ArrayBuffer> | null } | null = null;
-    private _runs_cache: { revision: number; body: string; gzip: Uint8Array<ArrayBuffer> | null } | null = null;
-    private baselines_snapshot(): { signature: string; payloads: string[] } {
-        if (this.db.is_closed) return { signature: 'closed', payloads: [] };
-        const rows = this.db.list_baseline_rows();
-        const signature = `${this.db.baselines_revision}|` + rows.map(row => `${row.id}:${row.payload_json.length}`).join(',');
-        return { signature, payloads: rows.map(row => row.payload_json) };
+    private _tasks_cache: { revision: number; etag: string; body: string; gzip: Uint8Array<ArrayBuffer> | null } | null = null;
+    private _runs_cache: { revision: number; etag: string; body: string; gzip: Uint8Array<ArrayBuffer> | null } | null = null;
+    private baselines_signature(): string {
+        if (this.db.is_closed) return 'closed';
+        const rows = this.db.list_baseline_metadata();
+        return `${this.db.baselines_revision}|` + rows.map(row => `${row.id}:${row.payload_length}`).join(',');
     }
     baselines(context?: AssessmentSourceContext, sourceSig = assessment_source_signature()): AssessmentBaseline[] {
-        const { signature, payloads } = this.baselines_snapshot();
+        const signature = this.baselines_signature();
         const key = `${sourceSig}\u0000${signature}`;
         if (!context && this._baselines_cache?.key === key) return this._baselines_cache.baselines;
+        const payloads = this.db.is_closed ? [] : this.db.list_baseline_rows().map(row => row.payload_json);
         const resolvedContext = context ?? create_assessment_source_context();
         const validated: AssessmentBaseline[] = [];
         const seen = new Set<string>();
@@ -159,7 +160,7 @@ export class BenchService {
     cached_observations_payload(): { etag: string; body: string; gzip: Uint8Array<ArrayBuffer> | null } {
         const execution = this.bench_execution();
         const sourceSig = assessment_source_signature();
-        const { signature: baselineSig } = this.baselines_snapshot();
+        const baselineSig = this.baselines_signature();
         const key = `${sourceSig}\u0000${baselineSig}\u0000${execution.revision}`;
         if (this._observations_cache?.key === key) return this._observations_cache;
         const observations = this.observations();
@@ -192,22 +193,26 @@ export class BenchService {
         this._banks_cache = { key: sourceSig, body, gzip: null };
         return this._banks_cache;
     }
-    cached_tasks_payload(execution: BenchExecutionService): { body: string; gzip: Uint8Array<ArrayBuffer> | null } {
+    cached_tasks_payload(execution: BenchExecutionService): { etag: string | null; body: string; gzip: Uint8Array<ArrayBuffer> | null } {
         if (execution.list_tasks !== BenchExecutionService.prototype.list_tasks)
-            return { body: JSON.stringify({ tasks: execution.list_tasks() }), gzip: null };
+            return { etag: null, body: JSON.stringify({ tasks: execution.list_tasks() }), gzip: null };
         const revision = execution.revision;
         if (this._tasks_cache?.revision === revision) return this._tasks_cache;
-        const body = execution.serialize_tasks_payload();
-        this._tasks_cache = { revision, body, gzip: null };
+        const etag = `${this.instance_id}-t-${revision}`;
+        const raw = execution.serialize_tasks_payload();
+        const body = `{"etag":${JSON.stringify(etag)},${raw.slice(1)}`;
+        this._tasks_cache = { revision, etag, body, gzip: null };
         return this._tasks_cache;
     }
-    cached_runs_payload(execution: BenchExecutionService): { body: string; gzip: Uint8Array<ArrayBuffer> | null } {
+    cached_runs_payload(execution: BenchExecutionService): { etag: string | null; body: string; gzip: Uint8Array<ArrayBuffer> | null } {
         if (execution.list_runs !== BenchExecutionService.prototype.list_runs)
-            return { body: JSON.stringify({ runs: execution.list_runs() }), gzip: null };
+            return { etag: null, body: JSON.stringify({ runs: execution.list_runs() }), gzip: null };
         const revision = execution.revision;
         if (this._runs_cache?.revision === revision) return this._runs_cache;
-        const body = execution.serialize_runs_payload();
-        this._runs_cache = { revision, body, gzip: null };
+        const etag = `${this.instance_id}-r-${revision}`;
+        const raw = execution.serialize_runs_payload();
+        const body = `{"etag":${JSON.stringify(etag)},${raw.slice(1)}`;
+        this._runs_cache = { revision, etag, body, gzip: null };
         return this._runs_cache;
     }
 }
@@ -329,8 +334,12 @@ export function make_handler(service: BenchService, web_dir?: string): (request:
                 }
                 if (request.method === 'POST' && path === '/api/bench/task-plans')
                     return json(200, await execution.plan_task(await requestBody(request)));
-                if (request.method === 'GET' && path === '/api/bench/tasks')
-                    return jsonCached(200, service.cached_tasks_payload(execution));
+                if (request.method === 'GET' && path === '/api/bench/tasks') {
+                    const cached = service.cached_tasks_payload(execution);
+                    if (cached.etag && new URL(request.url).searchParams.get('known') === cached.etag)
+                        return json(200, { etag: cached.etag, unchanged: true });
+                    return jsonCached(200, cached);
+                }
                 if (request.method === 'POST' && path === '/api/bench/tasks')
                     return json(202, { id: await execution.start_task(await requestBody(request)) });
                 const taskMatch = path.match(/^\/api\/bench\/tasks\/([0-9a-f]{32})(\/cancel|\/retry)?$/);
@@ -350,7 +359,12 @@ export function make_handler(service: BenchService, web_dir?: string): (request:
                 }
                 if (request.method === 'POST' && path === '/api/bench/plans')
                     return json(200, await execution.plan(await requestBody(request)));
-                if (request.method === 'GET' && path === '/api/bench/runs') return jsonCached(200, service.cached_runs_payload(execution));
+                if (request.method === 'GET' && path === '/api/bench/runs') {
+                    const cached = service.cached_runs_payload(execution);
+                    if (cached.etag && new URL(request.url).searchParams.get('known') === cached.etag)
+                        return json(200, { etag: cached.etag, unchanged: true });
+                    return jsonCached(200, cached);
+                }
                 if (request.method === 'POST' && path === '/api/bench/runs')
                     return json(202, { id: await execution.start_run(await requestBody(request)) });
                 const match = path.match(/^\/api\/bench\/runs\/([0-9a-f]{32})(\/cancel|\/retry|\/baseline|\/calls)?$/);

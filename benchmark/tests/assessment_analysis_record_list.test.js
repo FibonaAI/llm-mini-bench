@@ -114,3 +114,13 @@ test('plotted records with anomalies list all anomaly details and offer retry fo
     expect(html).toContain('data-open-run="run-timeout"');
     expect(text).toContain('去任务页重试');
 });
+
+test('optional limit truncates long record lists with an explicit show-more control', () => {
+    const many = Array.from({ length: 10 }, (_, index) => ({ ...record, id: `run-${index}` }));
+    const limited = renderAnalysisRecordList(many, { ...options, limit: 4 });
+    expect(limited.match(/class="analysis-record-row"/g)?.length).toBe(4);
+    expect(limited).toContain('显示更多（已显示 4 / 10 条）');
+    const unlimited = renderAnalysisRecordList(many, options);
+    expect(unlimited.match(/class="analysis-record-row"/g)?.length).toBe(10);
+    expect(unlimited).not.toContain('data-record-list-more');
+});

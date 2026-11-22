@@ -88,6 +88,30 @@ export interface StoredBaselineRow {
     payload_json: string;
 }
 
+export interface RunIndexCacheEntry {
+    run_id: string;
+    source_sig: string;
+    updated_at: string;
+    summary_json: string;
+    observations_json: string;
+    legacy_overlay_json: string | null;
+}
+
+export interface RunStartupRow {
+    id: string;
+    task_id: string | null;
+    execution_kind: string | null;
+    status: string;
+    stop_reason: string | null;
+    created_at: string;
+    updated_at: string;
+    cache_source_sig: string | null;
+    cache_updated_at: string | null;
+    summary_json: string | null;
+    observations_json: string | null;
+    legacy_overlay_json: string | null;
+}
+
 const SCHEMA_SQL = `
 CREATE TABLE IF NOT EXISTS meta (
     key TEXT PRIMARY KEY,
@@ -259,6 +283,15 @@ CREATE TABLE IF NOT EXISTS baselines (
     payload_json TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_baselines_created_at ON baselines(created_at);
+
+CREATE TABLE IF NOT EXISTS run_index_cache (
+    run_id TEXT PRIMARY KEY REFERENCES runs(id) ON DELETE CASCADE,
+    source_sig TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    summary_json TEXT NOT NULL,
+    observations_json TEXT NOT NULL,
+    legacy_overlay_json TEXT
+);
 `;
 
 function extractAttemptMetrics(record: RecordValue) {
@@ -291,7 +324,21 @@ export class BenchDatabase {
     readonly db: Database;
     private closed = false;
     private _baselines_revision = 0;
+    private txDepth = 0;
     private readonly snapshotCache = new Map<string, unknown>();
+    private readonly runSnapshotHashes = new Map<
+        string,
+        { bank: unknown; bankHash: string; tasks: unknown; tasksHash: string; sources: unknown; sourcesHash: string }
+    >();
+    private readonly stmtPutSnapshot;
+    private readonly stmtGetSnapshot;
+    private readonly stmtUpsertRun;
+    private readonly stmtUpsertSample;
+    private readonly stmtInsertHistoricalAttempt;
+    private readonly stmtUpsertCurrentAttempt;
+    private readonly stmtInsertSessionEvent;
+    private readonly stmtUpsertIndexCache;
+    private readonly stmtDeleteIndexCache;
 
     constructor(dbPath: string) {
         this.path = resolve(dbPath);
@@ -306,6 +353,150 @@ export class BenchDatabase {
         this.db.run('INSERT OR IGNORE INTO meta (key, value) VALUES (?, ?)', ['schema_version', BENCH_DB_SCHEMA_VERSION]);
         // Ensure private permissions after WAL initialization.
         if (existsSync(this.path)) chmodSync(this.path, 0o600);
+
+        this.stmtPutSnapshot = this.db.query('INSERT OR IGNORE INTO snapshots (hash, kind, payload_json) VALUES (?, ?, ?)');
+        this.stmtGetSnapshot = this.db.query('SELECT payload_json FROM snapshots WHERE hash = ?');
+        this.stmtUpsertRun = this.db.query(
+            `INSERT INTO runs (
+                id, task_id, execution_kind, status, stop_reason,
+                bank_version, bank_scope, rounds, round_start, concurrency, sample_count,
+                bank_hash, tasks_hash, sources_hash,
+                targets_json, task_ids_json, limits_json, budget_json,
+                retry_batches_json, imported_from_json, imported_sha256, evidence_json,
+                model, provider_id, route_id, account_ref, thinking,
+                created_at, updated_at
+            ) VALUES (
+                ?, ?, ?, ?, ?,
+                ?, ?, ?, ?, ?, ?,
+                ?, ?, ?,
+                ?, ?, ?, ?,
+                ?, ?, ?, ?,
+                ?, ?, ?, ?, ?,
+                ?, ?
+            )
+            ON CONFLICT(id) DO UPDATE SET
+                task_id = excluded.task_id,
+                execution_kind = excluded.execution_kind,
+                status = excluded.status,
+                stop_reason = excluded.stop_reason,
+                bank_version = excluded.bank_version,
+                bank_scope = excluded.bank_scope,
+                rounds = excluded.rounds,
+                round_start = excluded.round_start,
+                concurrency = excluded.concurrency,
+                sample_count = excluded.sample_count,
+                bank_hash = excluded.bank_hash,
+                tasks_hash = excluded.tasks_hash,
+                sources_hash = excluded.sources_hash,
+                targets_json = excluded.targets_json,
+                task_ids_json = excluded.task_ids_json,
+                limits_json = excluded.limits_json,
+                budget_json = excluded.budget_json,
+                retry_batches_json = excluded.retry_batches_json,
+                imported_from_json = excluded.imported_from_json,
+                imported_sha256 = excluded.imported_sha256,
+                evidence_json = excluded.evidence_json,
+                model = excluded.model,
+                provider_id = excluded.provider_id,
+                route_id = excluded.route_id,
+                account_ref = excluded.account_ref,
+                thinking = excluded.thinking,
+                created_at = excluded.created_at,
+                updated_at = excluded.updated_at`
+        );
+        this.stmtUpsertSample = this.db.query(
+            `INSERT INTO samples (
+                run_id, sample_id, seq, target_id, route_id, account_ref, account_evidence,
+                task, domain, model, thinking, round, latest_attempt_id,
+                status, ok, score, outcome, input_tokens, output_tokens, cost_usd,
+                elapsed_seconds, runner_error, started_at, finished_at
+            ) VALUES (
+                ?, ?, ?, ?, ?, ?, ?,
+                ?, ?, ?, ?, ?, ?,
+                ?, ?, ?, ?, ?, ?, ?,
+                ?, ?, ?, ?
+            )
+            ON CONFLICT(run_id, sample_id) DO UPDATE SET
+                seq = excluded.seq,
+                target_id = excluded.target_id,
+                route_id = excluded.route_id,
+                account_ref = excluded.account_ref,
+                account_evidence = excluded.account_evidence,
+                task = excluded.task,
+                domain = excluded.domain,
+                model = excluded.model,
+                thinking = excluded.thinking,
+                round = excluded.round,
+                latest_attempt_id = excluded.latest_attempt_id,
+                status = excluded.status,
+                ok = excluded.ok,
+                score = excluded.score,
+                outcome = excluded.outcome,
+                input_tokens = excluded.input_tokens,
+                output_tokens = excluded.output_tokens,
+                cost_usd = excluded.cost_usd,
+                elapsed_seconds = excluded.elapsed_seconds,
+                runner_error = excluded.runner_error,
+                started_at = excluded.started_at,
+                finished_at = excluded.finished_at`
+        );
+        this.stmtInsertHistoricalAttempt = this.db.query(
+            `INSERT OR IGNORE INTO attempts (
+                run_id, id, sample_id, seq, retry_batch_id,
+                status, ok, sources_hash, score, outcome,
+                input_tokens, output_tokens, cost_usd, elapsed_seconds,
+                api_request_count, last_http_status, runner_error,
+                started_at, finished_at, detail_json
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+        );
+        this.stmtUpsertCurrentAttempt = this.db.query(
+            `INSERT INTO attempts (
+                run_id, id, sample_id, seq, retry_batch_id,
+                status, ok, sources_hash, score, outcome,
+                input_tokens, output_tokens, cost_usd, elapsed_seconds,
+                api_request_count, last_http_status, runner_error,
+                started_at, finished_at, detail_json
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(run_id, id) DO UPDATE SET
+                seq = excluded.seq,
+                status = excluded.status,
+                ok = excluded.ok,
+                sources_hash = excluded.sources_hash,
+                score = excluded.score,
+                outcome = excluded.outcome,
+                input_tokens = excluded.input_tokens,
+                output_tokens = excluded.output_tokens,
+                cost_usd = excluded.cost_usd,
+                elapsed_seconds = excluded.elapsed_seconds,
+                api_request_count = excluded.api_request_count,
+                last_http_status = excluded.last_http_status,
+                runner_error = excluded.runner_error,
+                started_at = excluded.started_at,
+                finished_at = excluded.finished_at,
+                detail_json = excluded.detail_json`
+        );
+        this.stmtInsertSessionEvent = this.db.query(
+            `INSERT INTO session_events (
+                run_id, sample_id, attempt_id, seq, kind,
+                call_id, turn, api_attempt, http_status, elapsed_seconds,
+                usage_known, input_tokens, output_tokens, estimated_cost_usd,
+                response_status, error_code, error_message, local_exception,
+                terminal_event, termination, first_output_seconds, last_progress_seconds,
+                payload_json, created_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+        );
+        this.stmtUpsertIndexCache = this.db.query(
+            `INSERT INTO run_index_cache (
+                run_id, source_sig, updated_at, summary_json, observations_json, legacy_overlay_json
+            ) VALUES (?, ?, ?, ?, ?, ?)
+            ON CONFLICT(run_id) DO UPDATE SET
+                source_sig = excluded.source_sig,
+                updated_at = excluded.updated_at,
+                summary_json = excluded.summary_json,
+                observations_json = excluded.observations_json,
+                legacy_overlay_json = excluded.legacy_overlay_json`
+        );
+        this.stmtDeleteIndexCache = this.db.query('DELETE FROM run_index_cache WHERE run_id = ?');
     }
 
     get is_closed(): boolean {
@@ -326,11 +517,23 @@ export class BenchDatabase {
         }
     }
 
+    /** Run multiple write operations inside a single SQLite transaction without nested savepoints. */
+    run_in_transaction<T>(fn: () => T): T {
+        if (this.txDepth > 0) return fn();
+        this.txDepth++;
+        try {
+            const tx = this.db.transaction(fn);
+            return tx();
+        } finally {
+            this.txDepth--;
+        }
+    }
+
     put_snapshot(kind: SnapshotKind, value: unknown): string {
         const json = canonicalStorageJson(value);
         const hash = createHash('sha256').update(json).digest('hex');
         if (!this.snapshotCache.has(hash)) {
-            this.db.run('INSERT OR IGNORE INTO snapshots (hash, kind, payload_json) VALUES (?, ?, ?)', [hash, kind, json]);
+            this.stmtPutSnapshot.run(hash, kind, json);
             this.snapshotCache.set(hash, JSON.parse(json));
         }
         return hash;
@@ -339,7 +542,7 @@ export class BenchDatabase {
     get_snapshot<T = unknown>(hash: string | null | undefined): T | undefined {
         if (!hash) return undefined;
         if (this.snapshotCache.has(hash)) return clone(this.snapshotCache.get(hash) as T);
-        const row = this.db.query('SELECT payload_json FROM snapshots WHERE hash = ?').get(hash) as { payload_json: string } | null;
+        const row = this.stmtGetSnapshot.get(hash) as { payload_json: string } | null;
         if (!row) return undefined;
         const parsed = JSON.parse(row.payload_json) as T;
         this.snapshotCache.set(hash, parsed);
@@ -347,17 +550,37 @@ export class BenchDatabase {
     }
 
     /** Atomically persist a run, its deduplicated plan snapshots, its samples, and immutable attempt rows. */
-    save_run(run: RecordValue): void {
+    save_run(run: RecordValue, dirtySampleIds?: ReadonlySet<string>): void {
         const plan = run.plan as RecordValue;
         const targets = Array.isArray(plan.targets) ? (plan.targets as RecordValue[]) : [];
         const primary = targets[0] ?? null;
         const samples = Array.isArray(run.samples) ? (run.samples as RecordValue[]) : [];
         const runId = String(run.id);
+        const isDelta = dirtySampleIds !== undefined;
 
-        const tx = this.db.transaction(() => {
-            const bankHash = this.put_snapshot('bank', plan.bank_snapshot ?? {});
-            const tasksHash = this.put_snapshot('tasks', plan.task_snapshots ?? []);
-            const sourcesHash = this.put_snapshot('sources', plan.source_sha256 ?? {});
+        this.run_in_transaction(() => {
+            const cachedSnap = isDelta ? this.runSnapshotHashes.get(runId) : undefined;
+            const bankObj = plan.bank_snapshot ?? {};
+            const tasksObj = plan.task_snapshots ?? [];
+            const sourcesObj = plan.source_sha256 ?? {};
+            let bankHash: string, tasksHash: string, sourcesHash: string;
+            if (cachedSnap && cachedSnap.bank === bankObj && cachedSnap.tasks === tasksObj && cachedSnap.sources === sourcesObj) {
+                bankHash = cachedSnap.bankHash;
+                tasksHash = cachedSnap.tasksHash;
+                sourcesHash = cachedSnap.sourcesHash;
+            } else {
+                bankHash = this.put_snapshot('bank', bankObj);
+                tasksHash = this.put_snapshot('tasks', tasksObj);
+                sourcesHash = this.put_snapshot('sources', sourcesObj);
+                this.runSnapshotHashes.set(runId, {
+                    bank: bankObj,
+                    bankHash,
+                    tasks: tasksObj,
+                    tasksHash,
+                    sources: sourcesObj,
+                    sourcesHash
+                });
+            }
 
             let compactBatches: string | null = null;
             if (Array.isArray(run.retry_batches)) {
@@ -375,194 +598,76 @@ export class BenchDatabase {
             const importedFrom = object(run.imported_from) ? run.imported_from : null;
             const importedSha = importedFrom && typeof importedFrom.sha256 === 'string' ? importedFrom.sha256 : null;
 
-            this.db.run(
-                `INSERT INTO runs (
-                    id, task_id, execution_kind, status, stop_reason,
-                    bank_version, bank_scope, rounds, round_start, concurrency, sample_count,
-                    bank_hash, tasks_hash, sources_hash,
-                    targets_json, task_ids_json, limits_json, budget_json,
-                    retry_batches_json, imported_from_json, imported_sha256, evidence_json,
-                    model, provider_id, route_id, account_ref, thinking,
-                    created_at, updated_at
-                ) VALUES (
-                    ?, ?, ?, ?, ?,
-                    ?, ?, ?, ?, ?, ?,
-                    ?, ?, ?,
-                    ?, ?, ?, ?,
-                    ?, ?, ?, ?,
-                    ?, ?, ?, ?, ?,
-                    ?, ?
-                )
-                ON CONFLICT(id) DO UPDATE SET
-                    task_id = excluded.task_id,
-                    execution_kind = excluded.execution_kind,
-                    status = excluded.status,
-                    stop_reason = excluded.stop_reason,
-                    bank_version = excluded.bank_version,
-                    bank_scope = excluded.bank_scope,
-                    rounds = excluded.rounds,
-                    round_start = excluded.round_start,
-                    concurrency = excluded.concurrency,
-                    sample_count = excluded.sample_count,
-                    bank_hash = excluded.bank_hash,
-                    tasks_hash = excluded.tasks_hash,
-                    sources_hash = excluded.sources_hash,
-                    targets_json = excluded.targets_json,
-                    task_ids_json = excluded.task_ids_json,
-                    limits_json = excluded.limits_json,
-                    budget_json = excluded.budget_json,
-                    retry_batches_json = excluded.retry_batches_json,
-                    imported_from_json = excluded.imported_from_json,
-                    imported_sha256 = excluded.imported_sha256,
-                    evidence_json = excluded.evidence_json,
-                    model = excluded.model,
-                    provider_id = excluded.provider_id,
-                    route_id = excluded.route_id,
-                    account_ref = excluded.account_ref,
-                    thinking = excluded.thinking,
-                    created_at = excluded.created_at,
-                    updated_at = excluded.updated_at`,
-                [
-                    runId,
-                    text(run.task_id),
-                    text(run.execution_kind),
-                    String(run.status),
-                    text(run.stop_reason),
-                    String(plan.bank_version ?? ''),
-                    String(plan.bank_scope ?? 'whole'),
-                    Number(plan.rounds ?? 1),
-                    integer(plan.round_start),
-                    integer(plan.concurrency),
-                    Number(plan.sample_count ?? samples.length),
-                    bankHash,
-                    tasksHash,
-                    sourcesHash,
-                    JSON.stringify(targets),
-                    JSON.stringify(plan.task_ids ?? []),
-                    JSON.stringify(plan.limits ?? {}),
-                    JSON.stringify(run.budget ?? {}),
-                    compactBatches,
-                    importedFrom ? JSON.stringify(importedFrom) : null,
-                    importedSha,
-                    run.evidence !== undefined ? JSON.stringify(run.evidence) : null,
-                    primary ? text(primary.model) : null,
-                    primary ? text(primary.provider_id) : null,
-                    primary ? text(primary.route_id) : null,
-                    primary ? text(primary.account_ref) : null,
-                    primary ? text(primary.thinking) : null,
-                    String(run.created_at ?? ''),
-                    String(run.updated_at ?? '')
-                ]
-            );
-
-            const upsertSample = this.db.query(
-                `INSERT INTO samples (
-                    run_id, sample_id, seq, target_id, route_id, account_ref, account_evidence,
-                    task, domain, model, thinking, round, latest_attempt_id,
-                    status, ok, score, outcome, input_tokens, output_tokens, cost_usd,
-                    elapsed_seconds, runner_error, started_at, finished_at
-                ) VALUES (
-                    ?, ?, ?, ?, ?, ?, ?,
-                    ?, ?, ?, ?, ?, ?,
-                    ?, ?, ?, ?, ?, ?, ?,
-                    ?, ?, ?, ?
-                )
-                ON CONFLICT(run_id, sample_id) DO UPDATE SET
-                    seq = excluded.seq,
-                    target_id = excluded.target_id,
-                    route_id = excluded.route_id,
-                    account_ref = excluded.account_ref,
-                    account_evidence = excluded.account_evidence,
-                    task = excluded.task,
-                    domain = excluded.domain,
-                    model = excluded.model,
-                    thinking = excluded.thinking,
-                    round = excluded.round,
-                    latest_attempt_id = excluded.latest_attempt_id,
-                    status = excluded.status,
-                    ok = excluded.ok,
-                    score = excluded.score,
-                    outcome = excluded.outcome,
-                    input_tokens = excluded.input_tokens,
-                    output_tokens = excluded.output_tokens,
-                    cost_usd = excluded.cost_usd,
-                    elapsed_seconds = excluded.elapsed_seconds,
-                    runner_error = excluded.runner_error,
-                    started_at = excluded.started_at,
-                    finished_at = excluded.finished_at`
-            );
-
-            const insertHistoricalAttempt = this.db.query(
-                `INSERT OR IGNORE INTO attempts (
-                    run_id, id, sample_id, seq, retry_batch_id,
-                    status, ok, sources_hash, score, outcome,
-                    input_tokens, output_tokens, cost_usd, elapsed_seconds,
-                    api_request_count, last_http_status, runner_error,
-                    started_at, finished_at, detail_json
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
-            );
-
-            const upsertCurrentAttempt = this.db.query(
-                `INSERT INTO attempts (
-                    run_id, id, sample_id, seq, retry_batch_id,
-                    status, ok, sources_hash, score, outcome,
-                    input_tokens, output_tokens, cost_usd, elapsed_seconds,
-                    api_request_count, last_http_status, runner_error,
-                    started_at, finished_at, detail_json
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                ON CONFLICT(run_id, id) DO UPDATE SET
-                    seq = excluded.seq,
-                    status = excluded.status,
-                    ok = excluded.ok,
-                    sources_hash = excluded.sources_hash,
-                    score = excluded.score,
-                    outcome = excluded.outcome,
-                    input_tokens = excluded.input_tokens,
-                    output_tokens = excluded.output_tokens,
-                    cost_usd = excluded.cost_usd,
-                    elapsed_seconds = excluded.elapsed_seconds,
-                    api_request_count = excluded.api_request_count,
-                    last_http_status = excluded.last_http_status,
-                    runner_error = excluded.runner_error,
-                    started_at = excluded.started_at,
-                    finished_at = excluded.finished_at,
-                    detail_json = excluded.detail_json`
+            this.stmtDeleteIndexCache.run(runId);
+            this.stmtUpsertRun.run(
+                runId,
+                text(run.task_id),
+                text(run.execution_kind),
+                String(run.status),
+                text(run.stop_reason),
+                String(plan.bank_version ?? ''),
+                String(plan.bank_scope ?? 'whole'),
+                Number(plan.rounds ?? 1),
+                integer(plan.round_start),
+                integer(plan.concurrency),
+                Number(plan.sample_count ?? samples.length),
+                bankHash,
+                tasksHash,
+                sourcesHash,
+                JSON.stringify(targets),
+                JSON.stringify(plan.task_ids ?? []),
+                JSON.stringify(plan.limits ?? {}),
+                JSON.stringify(run.budget ?? {}),
+                compactBatches,
+                importedFrom ? JSON.stringify(importedFrom) : null,
+                importedSha,
+                run.evidence !== undefined ? JSON.stringify(run.evidence) : null,
+                primary ? text(primary.model) : null,
+                primary ? text(primary.provider_id) : null,
+                primary ? text(primary.route_id) : null,
+                primary ? text(primary.account_ref) : null,
+                primary ? text(primary.thinking) : null,
+                String(run.created_at ?? ''),
+                String(run.updated_at ?? '')
             );
 
             for (let sampleIdx = 0; sampleIdx < samples.length; sampleIdx++) {
                 const sample = samples[sampleIdx]!;
                 const sampleId = String(sample.sample_id);
+                if (isDelta && !dirtySampleIds.has(sampleId)) continue;
                 const priorAttempts = Array.isArray(sample.attempts) ? (sample.attempts as RecordValue[]) : [];
 
-                for (let idx = 0; idx < priorAttempts.length; idx++) {
-                    const prev = priorAttempts[idx]!;
-                    const attemptSeq = idx + 1;
-                    const prevId = stableAttemptId(runId, sampleId, prev, attemptSeq);
-                    const { retry_source_sha256: prevSrc, attempts: _nested, ...prevDetail } = prev;
-                    const prevSrcHash = object(prevSrc) ? this.put_snapshot('sources', prevSrc) : null;
-                    const m = extractAttemptMetrics(prev);
-                    insertHistoricalAttempt.run(
-                        runId,
-                        prevId,
-                        sampleId,
-                        attemptSeq,
-                        null,
-                        m.status,
-                        m.ok,
-                        prevSrcHash,
-                        m.score,
-                        m.outcome,
-                        m.input_tokens,
-                        m.output_tokens,
-                        m.cost_usd,
-                        m.elapsed_seconds,
-                        m.api_request_count,
-                        m.last_http_status,
-                        m.runner_error,
-                        m.started_at,
-                        m.finished_at,
-                        JSON.stringify(prevDetail)
-                    );
+                if (!isDelta) {
+                    for (let idx = 0; idx < priorAttempts.length; idx++) {
+                        const prev = priorAttempts[idx]!;
+                        const attemptSeq = idx + 1;
+                        const prevId = stableAttemptId(runId, sampleId, prev, attemptSeq);
+                        const { retry_source_sha256: prevSrc, attempts: _nested, ...prevDetail } = prev;
+                        const prevSrcHash = object(prevSrc) ? this.put_snapshot('sources', prevSrc) : null;
+                        const m = extractAttemptMetrics(prev);
+                        this.stmtInsertHistoricalAttempt.run(
+                            runId,
+                            prevId,
+                            sampleId,
+                            attemptSeq,
+                            null,
+                            m.status,
+                            m.ok,
+                            prevSrcHash,
+                            m.score,
+                            m.outcome,
+                            m.input_tokens,
+                            m.output_tokens,
+                            m.cost_usd,
+                            m.elapsed_seconds,
+                            m.api_request_count,
+                            m.last_http_status,
+                            m.runner_error,
+                            m.started_at,
+                            m.finished_at,
+                            JSON.stringify(prevDetail)
+                        );
+                    }
                 }
 
                 const latestSeq = priorAttempts.length + 1;
@@ -571,7 +676,7 @@ export class BenchDatabase {
                 const curSrcHash = object(curSrc) ? this.put_snapshot('sources', curSrc) : null;
                 const metrics = extractAttemptMetrics(sample);
 
-                upsertCurrentAttempt.run(
+                this.stmtUpsertCurrentAttempt.run(
                     runId,
                     latestAttemptId,
                     sampleId,
@@ -594,7 +699,7 @@ export class BenchDatabase {
                     JSON.stringify(curDetail)
                 );
 
-                upsertSample.run(
+                this.stmtUpsertSample.run(
                     runId,
                     sampleId,
                     sampleIdx,
@@ -622,7 +727,51 @@ export class BenchDatabase {
                 );
             }
         });
-        tx();
+    }
+
+    /** Release cached snapshot hash references once an active run reaches a terminal state. */
+    forget_run_snapshot_hashes(runId: string): void {
+        this.runSnapshotHashes.delete(runId);
+    }
+
+    /** Single startup query joining run metadata with cached terminal summaries and observations. */
+    list_runs_for_startup(): RunStartupRow[] {
+        return this.db
+            .query(
+                `SELECT
+                    r.id, r.task_id, r.execution_kind, r.status, r.stop_reason, r.created_at, r.updated_at,
+                    c.source_sig AS cache_source_sig,
+                    c.updated_at AS cache_updated_at,
+                    c.summary_json,
+                    c.observations_json,
+                    c.legacy_overlay_json
+                 FROM runs r
+                 LEFT JOIN run_index_cache c ON c.run_id = r.id
+                 ORDER BY r.created_at ASC, r.id ASC`
+            )
+            .all() as RunStartupRow[];
+    }
+
+    save_run_index_cache(entry: RunIndexCacheEntry): void {
+        this.stmtUpsertIndexCache.run(
+            entry.run_id,
+            entry.source_sig,
+            entry.updated_at,
+            entry.summary_json,
+            entry.observations_json,
+            entry.legacy_overlay_json
+        );
+    }
+
+    save_run_index_cache_batch(entries: readonly RunIndexCacheEntry[]): void {
+        if (!entries.length) return;
+        this.run_in_transaction(() => {
+            for (const entry of entries) this.save_run_index_cache(entry);
+        });
+    }
+
+    delete_run_index_cache(runId: string): void {
+        this.stmtDeleteIndexCache.run(runId);
     }
 
     has_run(id: string): boolean {
@@ -730,7 +879,7 @@ export class BenchDatabase {
 
     save_task(task: RecordValue): void {
         const plan = task.plan as RecordValue;
-        const tx = this.db.transaction(() => {
+        this.run_in_transaction(() => {
             const bankHash = this.put_snapshot('bank', plan.bank_snapshot ?? {});
             const tasksHash = this.put_snapshot('tasks', plan.task_snapshots ?? []);
             const sourcesHash = this.put_snapshot('sources', plan.source_sha256 ?? {});
@@ -786,7 +935,6 @@ export class BenchDatabase {
                 ]
             );
         });
-        tx();
     }
 
     update_task_status(id: string, status: string, stop_reason: string | null, updated_at: string): void {
@@ -838,87 +986,39 @@ export class BenchDatabase {
     }
 
     insert_session_event(event: SessionEventRecord): void {
-        this.db.run(
-            `INSERT INTO session_events (
-                run_id, sample_id, attempt_id, seq, kind,
-                call_id, turn, api_attempt, http_status, elapsed_seconds,
-                usage_known, input_tokens, output_tokens, estimated_cost_usd,
-                response_status, error_code, error_message, local_exception,
-                terminal_event, termination, first_output_seconds, last_progress_seconds,
-                payload_json, created_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-            [
-                event.run_id,
-                event.sample_id,
-                event.attempt_id,
-                event.seq,
-                event.kind,
-                event.call_id ?? null,
-                event.turn ?? null,
-                event.api_attempt ?? null,
-                event.http_status ?? null,
-                event.elapsed_seconds ?? null,
-                event.usage_known === undefined || event.usage_known === null ? null : event.usage_known ? 1 : 0,
-                event.input_tokens ?? null,
-                event.output_tokens ?? null,
-                event.estimated_cost_usd ?? null,
-                event.response_status ?? null,
-                event.error_code ?? null,
-                event.error_message ?? null,
-                event.local_exception ?? null,
-                event.terminal_event ?? null,
-                event.termination ?? null,
-                event.first_output_seconds ?? null,
-                event.last_progress_seconds ?? null,
-                event.payload !== undefined && event.payload !== null ? JSON.stringify(event.payload) : null,
-                event.created_at ?? new Date().toISOString()
-            ]
+        this.stmtInsertSessionEvent.run(
+            event.run_id,
+            event.sample_id,
+            event.attempt_id,
+            event.seq,
+            event.kind,
+            event.call_id ?? null,
+            event.turn ?? null,
+            event.api_attempt ?? null,
+            event.http_status ?? null,
+            event.elapsed_seconds ?? null,
+            event.usage_known === undefined || event.usage_known === null ? null : event.usage_known ? 1 : 0,
+            event.input_tokens ?? null,
+            event.output_tokens ?? null,
+            event.estimated_cost_usd ?? null,
+            event.response_status ?? null,
+            event.error_code ?? null,
+            event.error_message ?? null,
+            event.local_exception ?? null,
+            event.terminal_event ?? null,
+            event.termination ?? null,
+            event.first_output_seconds ?? null,
+            event.last_progress_seconds ?? null,
+            event.payload !== undefined && event.payload !== null ? JSON.stringify(event.payload) : null,
+            event.created_at ?? new Date().toISOString()
         );
     }
 
     insert_session_events_batch(events: readonly SessionEventRecord[]): void {
         if (!events.length) return;
-        const stmt = this.db.query(
-            `INSERT INTO session_events (
-                run_id, sample_id, attempt_id, seq, kind,
-                call_id, turn, api_attempt, http_status, elapsed_seconds,
-                usage_known, input_tokens, output_tokens, estimated_cost_usd,
-                response_status, error_code, error_message, local_exception,
-                terminal_event, termination, first_output_seconds, last_progress_seconds,
-                payload_json, created_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
-        );
-        const tx = this.db.transaction(() => {
-            for (const event of events) {
-                stmt.run(
-                    event.run_id,
-                    event.sample_id,
-                    event.attempt_id,
-                    event.seq,
-                    event.kind,
-                    event.call_id ?? null,
-                    event.turn ?? null,
-                    event.api_attempt ?? null,
-                    event.http_status ?? null,
-                    event.elapsed_seconds ?? null,
-                    event.usage_known === undefined || event.usage_known === null ? null : event.usage_known ? 1 : 0,
-                    event.input_tokens ?? null,
-                    event.output_tokens ?? null,
-                    event.estimated_cost_usd ?? null,
-                    event.response_status ?? null,
-                    event.error_code ?? null,
-                    event.error_message ?? null,
-                    event.local_exception ?? null,
-                    event.terminal_event ?? null,
-                    event.termination ?? null,
-                    event.first_output_seconds ?? null,
-                    event.last_progress_seconds ?? null,
-                    event.payload !== undefined && event.payload !== null ? JSON.stringify(event.payload) : null,
-                    event.created_at ?? new Date().toISOString()
-                );
-            }
+        this.run_in_transaction(() => {
+            for (const event of events) this.insert_session_event(event);
         });
-        tx();
     }
 
     /** Direct indexed projection of per-call diagnostics without reading any raw bodies or streams. */
@@ -1033,5 +1133,11 @@ export class BenchDatabase {
 
     list_baseline_rows(): StoredBaselineRow[] {
         return this.db.query('SELECT * FROM baselines ORDER BY created_at ASC, id ASC').all() as StoredBaselineRow[];
+    }
+
+    list_baseline_metadata(): Array<{ id: string; payload_length: number }> {
+        return this.db
+            .query('SELECT id, length(payload_json) AS payload_length FROM baselines ORDER BY created_at ASC, id ASC')
+            .all() as Array<{ id: string; payload_length: number }>;
     }
 }

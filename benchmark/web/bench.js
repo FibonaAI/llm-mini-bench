@@ -13,6 +13,8 @@ import { createTaskSubmission } from './task-submission.js';
     submissionUncertain: false,
     tasks: [],
     runs: [],
+    tasksEtag: null,
+    runsEtag: null,
     selectedTaskId: null,
     selectedRunId: null,
     taskDetail: null,
@@ -90,11 +92,24 @@ import { createTaskSubmission } from './task-submission.js';
     state.refreshing = (async () => {
       const previous = new Map([...state.tasks, ...state.runs].map(record => [record.id, record.status]));
       try {
-        const [tasks, runs] = await Promise.all([request('./api/bench/tasks'), request('./api/bench/runs')]);
-        if (!Array.isArray(tasks.tasks) || !Array.isArray(runs.runs)) throw new Error('任务或运行记录格式无效');
-        state.tasks = tasks.tasks;
-        state.runs = runs.runs;
-        app.setHistory(state.tasks);
+        const tasksPath =
+          !forceFresh && state.tasksEtag ? `./api/bench/tasks?known=${encodeURIComponent(state.tasksEtag)}` : './api/bench/tasks';
+        const runsPath =
+          !forceFresh && state.runsEtag ? `./api/bench/runs?known=${encodeURIComponent(state.runsEtag)}` : './api/bench/runs';
+        const [tasks, runs] = await Promise.all([request(tasksPath), request(runsPath)]);
+        const tasksUnchanged = !forceFresh && Boolean(state.tasksEtag) && tasks.unchanged === true;
+        const runsUnchanged = !forceFresh && Boolean(state.runsEtag) && runs.unchanged === true;
+        if (!tasksUnchanged) {
+          if (!Array.isArray(tasks.tasks)) throw new Error('任务或运行记录格式无效');
+          state.tasks = tasks.tasks;
+          state.tasksEtag = typeof tasks.etag === 'string' ? tasks.etag : null;
+          app.setHistory(state.tasks);
+        }
+        if (!runsUnchanged) {
+          if (!Array.isArray(runs.runs)) throw new Error('任务或运行记录格式无效');
+          state.runs = runs.runs;
+          state.runsEtag = typeof runs.etag === 'string' ? runs.etag : null;
+        }
         const runsVisible = !element('runs-view')?.hidden;
         if (runsVisible && !state.historyClosed && !state.selectedTaskId && !state.selectedRunId) {
           const first = historyEntries()[0];
@@ -104,6 +119,10 @@ import { createTaskSubmission } from './task-submission.js';
         const taskId = state.selectedTaskId,
           runId = state.selectedRunId,
           version = state.selectionVersion;
+        if (tasksUnchanged && runsUnchanged && (!taskId || state.taskDetail?.id === taskId) && (!runId || state.runDetail?.id === runId)) {
+          revealSelectedRun();
+          return;
+        }
         const keepTask = !forceFresh && state.taskDetail?.id === taskId && detailUnchanged(state.taskDetail, findTaskSummary(taskId));
         const keepRun = !forceFresh && state.runDetail?.id === runId && detailUnchanged(state.runDetail, findRunSummary(runId));
         const [task, run] = await Promise.all([
@@ -116,7 +135,10 @@ import { createTaskSubmission } from './task-submission.js';
         }
         renderDetails();
         revealSelectedRun();
-        if ([...state.tasks, ...state.runs].some(record => previous.has(record.id) && previous.get(record.id) !== record.status))
+        if (
+          (!tasksUnchanged || !runsUnchanged) &&
+          [...state.tasks, ...state.runs].some(record => previous.has(record.id) && previous.get(record.id) !== record.status)
+        )
           app.emit('mini-bench:observations-changed');
       } catch (error) {
         notify(`无法加载任务与运行记录：${error.message}`, true);

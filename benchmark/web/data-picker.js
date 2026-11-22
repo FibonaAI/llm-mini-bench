@@ -22,9 +22,19 @@ const normalizeSearch = value =>
 /** Default omits reasoning (only offered for models without levels) and stays distinct from explicit none. */
 export const thinkingLabel = value => (value === 'default' ? '默认' : value === 'unknown' ? '未记录' : String(value));
 
-/** Unified search uses recorded identity fields, never inferred route segments. */
-export function recordMatchesSearch(record, query) {
-  const tokens = query.trim().split(/\s+/).map(normalizeSearch).filter(Boolean);
+const recordSearchCache = new WeakMap();
+/** Compile a search string once into normalized tokens for repeated record matching. */
+export function compileSearchTokens(query) {
+  return String(query ?? '')
+    .trim()
+    .split(/\s+/)
+    .map(normalizeSearch)
+    .filter(Boolean);
+}
+function recordSearchText(record) {
+  if (!record || typeof record !== 'object') return '';
+  const cached = recordSearchCache.get(record);
+  if (cached !== undefined) return cached;
   const text = normalizeSearch(
     [
       record.model,
@@ -40,7 +50,19 @@ export function recordMatchesSearch(record, query) {
       record.think
     ].join(' ')
   );
+  recordSearchCache.set(record, text);
+  return text;
+}
+/** Match one record against pre-compiled search tokens without re-normalizing the query. */
+export function recordMatchesTokens(record, tokens) {
+  if (!tokens.length) return true;
+  const text = recordSearchText(record);
   return tokens.every(token => text.includes(token));
+}
+/** Unified search uses recorded identity fields, never inferred route segments. */
+export function recordMatchesSearch(record, query) {
+  const tokens = compileSearchTokens(query);
+  return recordMatchesTokens(record, tokens);
 }
 
 const EFFORT_ORDER = ['default', 'none', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max', 'ultra', 'unknown'];
@@ -957,11 +979,11 @@ export function createDataPicker(container, { records, selectedKeys, mode = 'ana
   }
 
   function renderSearchView() {
-    const query = search.value;
+    const tokens = compileSearchTokens(search.value);
     const thinkFilter = thinking.value;
     searchVisibleLeaves = leaves.filter(leaf => {
       if (thinkFilter && leaf.think !== thinkFilter) return false;
-      return recordMatchesSearch(leaf, query);
+      return recordMatchesTokens(leaf, tokens);
     });
 
     const groups = new Map();
@@ -1120,16 +1142,27 @@ export function createDataPicker(container, { records, selectedKeys, mode = 'ana
     const fixedHeight =
       2 + [...popup.children].filter(child => child !== body).reduce((sum, child) => sum + child.getBoundingClientRect().height, 0);
     const resultsEl = body.querySelector?.('.dp-results');
-    const rowsHeight = resultsEl ? [...resultsEl.children].reduce((sum, row) => sum + row.getBoundingClientRect().height, 0) : 0;
+    let rowsHeight = 0;
+    if (resultsEl) {
+      for (const row of resultsEl.children) {
+        rowsHeight += row.getBoundingClientRect().height;
+        if (rowsHeight >= 640) break;
+      }
+    }
     const railEl = body.querySelector?.('.dp-rail');
     const railStackedHeight = railEl && window.innerWidth <= 680 ? railEl.getBoundingClientRect().height : 0;
-    const railSideHeight =
-      railEl && window.innerWidth > 680
-        ? Math.min(
-            440,
-            [...railEl.children].reduce((sum, item) => sum + item.getBoundingClientRect().height + 2, 16)
-          )
-        : 0;
+    let railSideHeight = 0;
+    if (railEl && window.innerWidth > 680) {
+      let sum = 16;
+      for (const item of railEl.children) {
+        sum += item.getBoundingClientRect().height + 2;
+        if (sum >= 440) {
+          sum = 440;
+          break;
+        }
+      }
+      railSideHeight = sum;
+    }
     const mainEl = body.querySelector?.('.dp-main');
     const bodyChromeHeight = mainEl
       ? [...mainEl.children].filter(child => child !== resultsEl).reduce((sum, child) => sum + child.getBoundingClientRect().height, 0)
@@ -1180,10 +1213,14 @@ export function createDataPicker(container, { records, selectedKeys, mode = 'ana
       trigger.focus();
     }
   }
+  function onScroll(event) {
+    if (!open || (event?.target && popup.contains(event.target))) return;
+    position();
+  }
   document.addEventListener('pointerdown', outsideClick);
   document.addEventListener('keydown', escape);
   window.addEventListener('resize', position);
-  window.addEventListener('scroll', position, true);
+  window.addEventListener('scroll', onScroll, true);
   render();
 
   return {
@@ -1206,7 +1243,7 @@ export function createDataPicker(container, { records, selectedKeys, mode = 'ana
       document.removeEventListener('pointerdown', outsideClick);
       document.removeEventListener('keydown', escape);
       window.removeEventListener('resize', position);
-      window.removeEventListener('scroll', position, true);
+      window.removeEventListener('scroll', onScroll, true);
     }
   };
 }

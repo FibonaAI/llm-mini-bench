@@ -15,12 +15,13 @@ function compactRecordTime(date, includeYear) {
 /** Render matching and excluded records with one compact list; full identity stays in the inspector. */
 export function renderAnalysisRecordList(
   records,
-  { axis, exclusionReason, escapeHtml, formatDate, currentYear = new Date().getFullYear() }
+  { axis, exclusionReason, escapeHtml, formatDate, currentYear = new Date().getFullYear(), limit = Infinity }
 ) {
   if (!records.length) return '<p class="empty">没有匹配结果，请调整筛选条件。</p>';
-  const dates = records.map(recordDate);
+  const shown = Number.isFinite(limit) && records.length > limit ? records.slice(0, limit) : records;
+  const dates = shown.map(recordDate);
   const includeYear = dates.some(date => date && date.getFullYear() !== currentYear);
-  const rows = records.map((record, index) => {
+  const rows = shown.map((record, index) => {
     const model = record.modelDisplayName || record.model;
     const thinking = thinkingLabel(record.think);
     const reason = exclusionReason(record);
@@ -65,5 +66,9 @@ export function renderAnalysisRecordList(
     const label = `${model} · ${thinking} · ${source} · ${fullTime}`;
     return `<li class="analysis-record-row"><div class="analysis-record-main"><button class="text-control" type="button" data-inspect-observation="${escapeHtml(record.id)}" aria-label="${escapeHtml(label)}">${escapeHtml(model)} <span class="analysis-record-thinking">· ${escapeHtml(thinking)}</span></button><span class="analysis-record-meta">${escapeHtml(identity)} · <time ${dates[index] ? `datetime="${escapeHtml(record.created_at)}"` : ''} title="${escapeHtml(fullTime)}" aria-label="${escapeHtml(fullTime)}">${escapeHtml(time)}</time></span></div><div class="analysis-record-metrics"><span>${escapeHtml(score)}</span>${quantity ? `<span>${escapeHtml(quantity)}</span>` : ''}</div>${note ? `<p class="analysis-record-reason${reason ? '' : ' is-note'}">${escapeHtml(note)}${retry}</p>` : ''}</li>`;
   });
-  return `<ul class="analysis-record-list">${rows.join('')}</ul>`;
+  const more =
+    records.length > shown.length
+      ? `<div class="history-pagination"><button class="btn" type="button" data-record-list-more="80">显示更多（已显示 ${shown.length} / ${records.length} 条）</button><button class="text-control" type="button" data-record-list-more="all">显示全部</button></div>`
+      : '';
+  return `<ul class="analysis-record-list">${rows.join('')}</ul>${more}`;
 }
