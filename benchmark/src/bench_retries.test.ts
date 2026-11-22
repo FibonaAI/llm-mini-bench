@@ -1,8 +1,9 @@
 import { afterEach, expect, test } from 'bun:test';
-import { mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdtempSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { AssessmentBudget, run_assessment_sample, type RunnerTask } from '../calibrate_assessment.ts';
+import { BenchDatabase } from './bench_db.ts';
 import { BenchExecutionService, type ExecutionRoutes } from './bench_execution.ts';
 import { project_assessment_observation } from './assessment_observations.ts';
 import type { BaselineRun, BaselineTarget } from './assessment_baselines.ts';
@@ -209,7 +210,7 @@ test('retry rejection does not close a healthy service; storage publication fail
     await expect(f.service.retry_run(id, 'e'.repeat(32))).rejects.toThrow('limit exhausted');
     expect(f.service._closing).toBe(false);
     expect(f.calls()).toBe(1);
-    expect(readdirSync(join(f.dir, id)).some(name => name.startsWith('retry-'))).toBe(false);
+    expect(f.service.get_run(id)!.retry_batches).toBeUndefined();
     const g = fixture();
     const other = await g.service.start_run({
         targets: [{ route_id: 'route', thinking: 'high' }],
@@ -290,8 +291,7 @@ test('manual retry archives evidence, keeps successful sample bytes, updates par
     await f.service.wait_for_run(id, 2);
     expect(f.service.get_run(id)!.status).toBe('failed');
     const successfulBefore = JSON.stringify(f.service.get_run(id)!.samples.find(sample => sample.status === 'completed'));
-    const before = readFileSync(join(f.dir, id, 'run.json'));
-    const journal = readFileSync(join(f.dir, id, 'journal.jsonl'));
+    const eventsBefore = f.service.read_run_session_events(id)!;
     f.succeed();
     const retryId = 'a'.repeat(32);
     await f.service.retry_run(id, retryId);
@@ -302,9 +302,10 @@ test('manual retry archives evidence, keeps successful sample bytes, updates par
     expect(run.samples.every(sample => sample.status === 'completed')).toBe(true);
     expect(f.service.get_task(taskId)!.status).toBe('completed');
     expect(run.budget.estimated_uncached_cost_usd).toBeNull();
-    expect(readFileSync(join(f.dir, id, 'retry-' + retryId, 'run-before.json'))).toEqual(before);
-    expect(readFileSync(join(f.dir, id, 'journal.jsonl'))).toEqual(journal);
-    expect(readdirSync(join(f.dir, id, 'retry-' + retryId, 'source'))).toContain('calibrate_assessment.ts');
+    // Prior session events remain immutable and no run-before.json or copied source/ dirs are created.
+    expect(f.service.read_run_session_events(id)!.slice(0, eventsBefore.length)).toEqual(eventsBefore);
+    expect(existsSync(join(f.dir, id))).toBe(false);
+    expect((run.retry_batches as Array<Record<string, any>>)[0]!.source_sha256['calibrate_assessment.ts']).toMatch(/^[a-f0-9]{64}$/);
     const after = f.calls();
     await f.service.retry_run(id, retryId);
     expect(f.calls()).toBe(after);
@@ -564,14 +565,18 @@ test('sample timeout scores zero and completes the run while remaining retryable
     expect(failedObs.status).toBe('failed');
     expect(failedObs.tasks.flatMap(t => t.samples).filter(s => s.status === 'api_failure')[0]!.content_score).toBeNull();
 
-    // Mark that failed sample as SampleTimeout on disk (matching a real deadline expiry) and reload.
+    // Mark that failed sample as SampleTimeout in SQLite (matching a real deadline expiry) and reload.
     await writer.close();
-    const runPath = join(dir, runId, 'run.json');
-    const saved = JSON.parse(readFileSync(runPath, 'utf8'));
-    const failedSample = saved.samples.find((s: Record<string, unknown>) => s.status === 'api_failure');
-    failedSample.runner_error = 'SampleTimeout';
-    failedSample.elapsed_seconds = 10;
-    writeFileSync(runPath, JSON.stringify(saved));
+    const db = new BenchDatabase(join(dir, 'mini-bench.sqlite'));
+    try {
+        const saved = db.load_run(runId) as any;
+        const failedSample = saved.samples.find((s: Record<string, unknown>) => s.status === 'api_failure');
+        failedSample.runner_error = 'SampleTimeout';
+        failedSample.elapsed_seconds = 10;
+        db.save_run(saved);
+    } finally {
+        db.close();
+    }
     const reloaded = new BenchExecutionService(dir, f.routes, 2, () => ({
         post_responses_stream: () => [200, 0.01, {}, success()]
     }));

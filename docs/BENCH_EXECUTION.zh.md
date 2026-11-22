@@ -138,7 +138,7 @@ bun benchmark/bench.ts serve --port 3481
 
 取消会阻止尚未开始的样本及工具后续请求，并中止正在读取的流。中止连接不能证明上游停止计算，也不能保证不计费，已收到的证据会尽量保留。服务重启后，中断的运行不会自动重发请求。可通过运行或任务重试端点显式重试已结束的失败、超时、已中断、已取消或符合条件的 `budget_not_admitted` 样本，必须提交 32 位小写十六进制 `request_id`。同一标识重复提交幂等，适用于响应不确定后的核对。重试前归档原运行字节、调用及源码快照；已完成样本不重跑，重试样本在 `attempts` 中保留历次尝试，最新结果替代失败结果而非取最佳；当最新尝试完成并返回已知用量与费用时，将其作为该样本的有效用量与费用。原路由、账号、价格及剩余执行上限必须仍有效。重试后更新任务摘要、结果和分析。混合不同执行源码代际的结果不能提升为新的完整基线。
 
-已结束运行的摘要与观察记录投影会缓存到评测目录下的 `.run-index-cache.json`，避免重启和列表查询反复重读每个已结束运行的 `run.json`。HTTP 服务同时缓存 `/api/bench/banks`、`/api/bench/tasks`、`/api/bench/runs` 与 `/api/bench/observations` 的序列化及 gzip 响应，在状态修订、源码或基线变化时自动失效。
+工作区状态——任务、运行、样本、不可变 attempt 历史、Pi Session 风格的 `session_events`、按内容去重的题库与源码哈希快照及个人基线——统一保存在数据目录下的单个私有 SQLite 数据库（`mini-bench.sqlite`，WAL 模式）中，不再写入原始 SSE 流切片或逐次复制 `source/*.ts`。HTTP 服务同时缓存 `/api/bench/banks`、`/api/bench/tasks`、`/api/bench/runs` 与 `/api/bench/observations` 的序列化及 gzip 响应，在状态修订、源码或基线变化时自动失效。
 
 写盘失败时，服务停止接收新请求，释放已结束样本的并发槽，并在内存中标记 `storage_error`。磁盘不可写时无法保证保存这次错误，重启会按最后成功保存的状态标记中断。修复存储问题并重启后才能提交新任务，不应通过重复提交来绕过故障。
 
@@ -186,6 +186,6 @@ bun benchmark/bench.ts serve --port 3481
 
 运行摘要及任务的子运行摘要包含只读的 `result_quality`，仅统计已完成样本：`completed_samples`、`unscored_samples`、`unknown_usage_samples`、`unknown_cost_samples`、`prior_unknown_usage_samples`、`prior_unknown_cost_samples`。这些计数不改变执行状态、已保存证据、评分或入图资格。
 
-保存基线要求完整 12 题、全部预定轮次完成且可评分、任务与执行协议证据一致。个人基线保存到数据目录的 `assessment-baselines/`，不覆盖原运行。查看已有个人运行和已通过校验的基线无需重新发模型请求。来源不兼容的运行不能提升为基线。
+保存基线要求完整 12 题、全部预定轮次完成且可评分、任务与执行协议证据一致。个人基线保存到数据目录的 `mini-bench.sqlite`，不覆盖原运行。查看已有个人运行和已通过校验的基线无需重新发模型请求。来源不兼容的运行不能提升为基线。
 
 计划和启动使用相同请求结构。目录里的题库 ID 为 `assessment-1.0`，请求中的 `bank_version` 为 `1.0`，这是唯一可用的题库。

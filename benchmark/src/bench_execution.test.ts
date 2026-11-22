@@ -1,7 +1,8 @@
 import { afterEach, describe, expect, test } from 'bun:test';
-import { mkdtempSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdtempSync, rmSync, statSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { BenchDatabase } from './bench_db.ts';
 import { BenchExecutionService, type ExecutionRoute, type ExecutionRoutes } from './bench_execution.ts';
 import type { GatewayResponse } from './client.ts';
 
@@ -165,7 +166,8 @@ describe('durable execution and admission (fully offline)', () => {
         routes.configs.a!.provider_id = 'renamed-provider';
         const run = await finish(service, id);
         expect(run.plan.targets[0]!.provider_id).toBe('chatgpt-api-2');
-        expect(JSON.parse(readFileSync(join(directory, id, 'run.json'), 'utf8')).plan.targets[0].provider_id).toBe('chatgpt-api-2');
+        expect((service.db.load_run(id) as any).plan.targets[0].provider_id).toBe('chatgpt-api-2');
+        expect(existsSync(join(directory, id))).toBe(false);
         const configured = await service.plan(request({ targets: [{ id: 'b', route_id: 'b', thinking: 'none' }] }));
         for (const key of ['provider_id', 'provider_evidence', 'model_display_name']) expect(configured.targets[0]).not.toHaveProperty(key);
         expect(JSON.stringify(run.plan)).not.toMatch(/private-secret|account-a\.invalid|api_key/);
@@ -218,12 +220,10 @@ describe('durable execution and admission (fully offline)', () => {
         expect(new Set(run.samples.map(sample => sample.sample_id)).size).toBe(2);
         expect(new Set(run.samples.map(sample => sample.account_ref))).toEqual(new Set(['account-a', 'account-b']));
         expect(run.samples.every(sample => (sample.grade as { content_score: number }).content_score === 0)).toBe(true);
-        const records = readFileSync(join(directory, id, 'journal.jsonl'), 'utf8')
-            .trim()
-            .split('\n')
-            .map(line => JSON.parse(line) as Record<string, unknown>);
-        expect(records.every(record => record.run_id === id && record.attempt_id)).toBe(true);
-        expect(new Set(records.filter(record => record.type === 'call').map(record => record.call_id))).toEqual(
+        const events = service.read_run_session_events(id)!;
+        expect(events.length).toBeGreaterThan(0);
+        expect(events.every(event => event.run_id === id && event.attempt_id)).toBe(true);
+        expect(new Set(events.filter(event => event.kind === 'llm_turn').map(event => event.call_id))).toEqual(
             new Set(run.samples.flatMap(sample => sample.calls as string[]))
         );
         run.samples = [];
@@ -306,11 +306,8 @@ describe('durable execution and admission (fully offline)', () => {
         expect(run.status).toBe('cancelled');
         expect(gateway.calls.length).toBe(1);
         expect(new Set(run.samples.map(sample => sample.status))).toEqual(new Set(['cancelled']));
-        const records = readFileSync(join(directory, id, 'journal.jsonl'), 'utf8')
-            .trim()
-            .split('\n')
-            .map(line => JSON.parse(line));
-        expect(records.map(record => record.type)).toEqual(['call', 'observation']);
+        const events = service.read_run_session_events(id)!;
+        expect(events.map(event => event.kind)).toEqual(['llm_turn', 'grade']);
         expect(service.get_run('unknown')).toBeNull();
         expect(service.cancel_run('unknown')).toBe(false);
         expect(await service.wait_for_run('unknown', 0)).toBe(false);
@@ -345,29 +342,27 @@ describe('durable execution and admission (fully offline)', () => {
     test('provider echoes are redacted recursively including nested keys', async () => {
         const gateway = new FakeGateway();
         gateway.echo_secret = true;
-        const { service, directory } = fixture(gateway);
+        const { service } = fixture(gateway);
         const id = await service.start_run(request());
         const run = await finish(service, id);
-        const journal = readFileSync(join(directory, id, 'journal.jsonl'), 'utf8');
-        expect(journal).not.toMatch(/private-secret-account-a|account-a\.invalid/);
+        const eventsJson = JSON.stringify(service.read_run_session_events(id));
+        expect(eventsJson).not.toMatch(/private-secret-account-a|account-a\.invalid/);
         expect(JSON.stringify(run)).not.toMatch(/private-secret-account-a|account-a\.invalid/);
-        expect(journal).toContain('[REDACTED]');
+        expect(eventsJson).toContain('[REDACTED]');
     });
     test('raw response text preserves numeric tokens and redacts escaped string secrets', async () => {
-        const { service, gateway, directory } = fixture(new FakeGateway(true));
+        const { service, gateway } = fixture(new FakeGateway(true));
         const id = await service.start_run(request());
         await gateway.wait_calls(1);
         service._runtime.get(id)!.journal.write({
             type: 'call',
+            http_status: 500,
             raw_response_text: '{"secret":"\\u0070rivate-secret-account-a","usage":{"input_tokens":10.0}}'
         });
         gateway.release.resolve();
         await finish(service, id);
-        const rows = readFileSync(join(directory, id, 'journal.jsonl'), 'utf8')
-            .trim()
-            .split('\n')
-            .map(line => JSON.parse(line) as Record<string, unknown>);
-        const source = rows.find(row => typeof row.raw_response_text === 'string')!.raw_response_text as string;
+        const events = service.read_run_session_events(id)!;
+        const source = events.find(event => typeof event.payload?.raw_error_excerpt === 'string')!.payload!.raw_error_excerpt as string;
         expect(source).toContain('"input_tokens":10.0');
         expect(source).toContain('[REDACTED]');
         expect(source).not.toContain('rivate-secret-account-a');
@@ -375,21 +370,18 @@ describe('durable execution and admission (fully offline)', () => {
     test('provider tool names and wire call IDs are redacted without changing management identity', async () => {
         const gateway = new FakeGateway();
         gateway.echo_tool_identifiers = true;
-        const { service, directory } = fixture(gateway);
+        const { service } = fixture(gateway);
         const id = await service.start_run(request({ task_ids: ['E23_Tight_Conditional_Audit'] }));
         const run = await finish(service, id);
-        const journal = readFileSync(join(directory, id, 'journal.jsonl'), 'utf8');
-        expect(journal).not.toContain('private-secret-account-a');
+        const events = service.read_run_session_events(id)!;
+        const eventsJson = JSON.stringify(events);
+        expect(eventsJson).not.toContain('private-secret-account-a');
         expect(JSON.stringify(run)).not.toContain('private-secret-account-a');
-        const tool = journal
-            .trim()
-            .split('\n')
-            .map(line => JSON.parse(line) as Record<string, unknown>)
-            .find(record => record.type === 'tool_result')!;
-        expect(tool.name).toBe('[REDACTED]');
+        const tool = events.find(event => event.kind === 'tool_result')!;
+        expect(tool.payload?.name).toBe('[REDACTED]');
         expect(tool.call_id).toBe('[REDACTED]');
         expect(tool.run_id).toBe(id);
-        expect(tool.target_id).toBe('a');
+        expect(run.samples[0]!.target_id).toBe('a');
     });
     test('short secrets cannot corrupt management identities', async () => {
         const routes = new FakeRoutes();
@@ -429,26 +421,25 @@ describe('durable execution and admission (fully offline)', () => {
             'high'
         ]);
     });
-    test('all provenance files are private and restart interrupts without resubmission', async () => {
+    test('all SQLite storage files are private and restart interrupts without resubmission', async () => {
         const { service, directory } = fixture();
         const id = await service.start_run(request({ rounds: 2 }));
         await finish(service, id);
         await service.close();
-        function permissions(path: string) {
-            for (const name of readdirSync(path)) {
-                const child = join(path, name),
-                    stat = statSync(child);
-                expect(stat.mode & 0o777).toBe(stat.isDirectory() ? 0o700 : 0o600);
-                if (stat.isDirectory()) permissions(child);
-            }
+        expect(statSync(directory).mode & 0o777).toBe(0o700);
+        expect(statSync(join(directory, 'mini-bench.sqlite')).mode & 0o777).toBe(0o600);
+        // No per-run directories or copied source/*.ts trees are created.
+        expect(existsSync(join(directory, id))).toBe(false);
+        const db = new BenchDatabase(join(directory, 'mini-bench.sqlite'));
+        try {
+            const state = db.load_run(id)! as any;
+            state.status = 'running';
+            state.samples[0].status = 'running';
+            state.samples[1].status = 'pending';
+            db.save_run(state);
+        } finally {
+            db.close();
         }
-        permissions(join(directory, id));
-        const path = join(directory, id, 'run.json'),
-            state = JSON.parse(readFileSync(path, 'utf8'));
-        state.status = 'running';
-        state.samples[0].status = 'running';
-        state.samples[1].status = 'pending';
-        writeFileSync(path, JSON.stringify(state));
         const gateway = new FakeGateway(),
             restored = new BenchExecutionService(directory, new FakeRoutes(), 4, gateway.factory);
         try {

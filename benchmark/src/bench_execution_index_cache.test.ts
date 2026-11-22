@@ -64,29 +64,21 @@ describe('terminal run eviction and persistent index cache', () => {
             expect(full.samples).toHaveLength(1);
             expect(first._runs.size).toBe(0);
 
-            const cachePath = join(dir, '.run-index-cache.json');
-            expect(existsSync(cachePath)).toBe(true);
-            expect(statSync(cachePath).mode & 0o777).toBe(0o600);
+            const dbPath = join(dir, 'mini-bench.sqlite');
+            expect(existsSync(dbPath)).toBe(true);
+            expect(statSync(dbPath).mode & 0o777).toBe(0o600);
+            expect(existsSync(join(dir, '.run-index-cache.json'))).toBe(false);
             const summaryBefore = first.list_runs();
             const obsBefore = first.list_observations();
             await first.close();
 
-            // Warm restart uses index cache and keeps _runs empty.
+            // Restart loads directly from SQLite and keeps _runs empty.
             const warm = new BenchExecutionService(dir, routes(), 4, clientFactory as never);
             expect(warm._runs.size).toBe(0);
             expect(warm.list_runs()).toEqual(summaryBefore);
             expect(warm.list_observations()).toEqual(obsBefore);
             expect(warm.get_run(runId)?.status).toBe('completed');
             await warm.close();
-
-            // Corrupt index cache is ignored cleanly and rebuilt from durable run.json.
-            writeFileSync(cachePath, '{not valid json', { mode: 0o600 });
-            const rebuilt = new BenchExecutionService(dir, routes(), 4, clientFactory as never);
-            expect(rebuilt._runs.size).toBe(0);
-            expect(rebuilt.list_runs()).toEqual(summaryBefore);
-            expect(rebuilt.list_observations()).toEqual(obsBefore);
-            expect(JSON.parse(readFileSync(cachePath, 'utf8')).version).toBe(1);
-            await rebuilt.close();
         } finally {
             rmSync(dir, { recursive: true, force: true });
         }

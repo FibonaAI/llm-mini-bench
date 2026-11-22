@@ -1,8 +1,6 @@
-import { journal_raw_response_text } from './assessment_runner.ts';
 import { describe, expect, test } from 'bun:test';
 import { GatewayClient } from './client.ts';
 import { AssessmentBudget, AssessmentJournal, run_assessment_sample } from '../calibrate_assessment.ts';
-import { parseAssessmentJson } from './assessment_json.ts';
 
 describe('Responses-only HTTP transport', () => {
     test('sends exact model and explicit account credentials, parses complete Responses payload', async () => {
@@ -104,7 +102,7 @@ describe('Responses-only HTTP transport', () => {
         expect(JSON.stringify(failed[3])).not.toContain('private-key');
         expect(JSON.stringify(failed[3])).not.toContain('127.0.0.1');
     });
-    test('journal preserves original HTTP response text for numeric-type replay integrity', async () => {
+    test('runner rejects non-integer usage tokens during streaming without storing stream_chunk rows', async () => {
         const raw = '{"status":"completed","usage":{"input_tokens":10.0,"output_tokens":5},"output":[],"output_text":"42"}';
         const terminal = `data: {"type":"response.completed","response":${raw}}\n\n`;
         const server = Bun.serve({
@@ -148,18 +146,9 @@ describe('Responses-only HTTP transport', () => {
                 .split('\n')
                 .map(line => JSON.parse(line));
             const call = rows.find(row => row.type === 'call');
-            // Exact bytes live once, in the stream chunks; the call references them by count.
+            expect(call).toBeDefined();
             expect(call.raw_response_text).toBeUndefined();
-            expect(rows.filter(row => row.type === 'stream_chunk').every(row => Object.keys(row).length <= 7 && !('model' in row))).toBe(
-                true
-            );
-            const saved = { raw_response_text: journal_raw_response_text(call, rows)! };
-            expect(saved.raw_response_text).toBe(terminal);
-            expect(saved.raw_response_text).toContain('"input_tokens":10.0');
-            const replay = new AssessmentBudget(1, 1);
-            const parsed = parseAssessmentJson(saved.raw_response_text.slice('data: '.length).trim()) as { response: unknown };
-            expect(replay.settle(0, parsed.response, pricing, 100)).toBeNull();
-            expect(replay.stop_reason).toBe('missing_usage_cost');
+            expect(rows.some(row => row.type === 'stream_chunk')).toBe(false);
         } finally {
             server.stop(true);
         }

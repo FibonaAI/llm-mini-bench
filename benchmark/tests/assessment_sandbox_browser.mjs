@@ -84,7 +84,7 @@ const seededBaseline = build_assessment_baseline(
     },
     seededTarget.id
 );
-writeFileSync(join(service.data_dir, 'assessment-baselines', 'fixture.json'), JSON.stringify(seededBaseline));
+service.save_baseline(seededBaseline);
 adapter.models = async () =>
     [
         ...['remote-A', 'remote-B'].map(owner => ({

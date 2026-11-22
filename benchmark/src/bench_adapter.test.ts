@@ -1,5 +1,5 @@
 import { afterEach, expect, test } from 'bun:test';
-import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import { existsSync, mkdtempSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { BenchService } from '../backend/mini_bench.ts';
@@ -74,7 +74,7 @@ test('generic adapter owns execution transport and snapshots while the engine fr
         expect(run.plan.targets[0]!.binding_ref).toBe('adapter-binding-v1');
         expect(run.plan.targets[0]!.remote_route!.evidence).toBe('fixture_catalog');
         expect(run.plan.source_sha256['adapter/fixture.ts']).toMatch(/^[a-f0-9]{64}$/);
-        expect(readFileSync(join(storage, id, 'source', 'adapter', 'fixture.ts'), 'utf8')).toBe('fixture source bytes');
+        expect(existsSync(join(storage, id, 'source'))).toBe(false);
         expect(JSON.stringify(run)).not.toContain('offline-only');
     } finally {
         await service.close();

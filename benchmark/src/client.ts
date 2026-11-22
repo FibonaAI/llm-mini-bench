@@ -73,7 +73,6 @@ export class GatewayClient {
         const signal = options.signal ? AbortSignal.any([timeoutSignal, options.signal]) : timeoutSignal;
         let reader: ReadableStreamDefaultReader<Uint8Array> | undefined;
         let headers: Record<string, string> = {};
-        let raw: string | undefined = options.on_chunk ? undefined : '';
         let journalError: unknown;
         const onFrame = options.on_chunk
             ? (text: string, time: number) => {
@@ -116,21 +115,17 @@ export class GatewayClient {
             while (decoder.response === null) {
                 const { value, done } = await reader.read();
                 if (done) {
-                    const tail = utf8.decode();
-                    if (raw !== undefined) raw += tail;
-                    decoder.push(tail);
+                    decoder.push(utf8.decode());
                     decoder.finish();
                     break;
                 }
                 const time = duration();
                 telemetry.first_byte_seconds ??= time;
                 telemetry.last_byte_seconds = time;
-                const text = utf8.decode(value, { stream: true });
-                if (raw !== undefined) raw += text;
-                decoder.push(text);
+                decoder.push(utf8.decode(value, { stream: true }));
             }
             // A terminal event is sufficient; do not wait for a gateway to close a keep-alive body.
-            return [response.status, duration(), headers, decoder.response, raw];
+            return [response.status, duration(), headers, decoder.response, undefined];
         } catch (error) {
             if (journalError !== undefined) throw journalError;
             decoder.flush_pending();
@@ -141,7 +136,7 @@ export class GatewayClient {
                 : error instanceof ResponsesStreamProtocolError
                   ? 'protocol_error'
                   : 'transport_error';
-            return [-1, duration(), headers, { exception: error instanceof Error ? error.name : 'Error' }, raw];
+            return [-1, duration(), headers, { exception: error instanceof Error ? error.name : 'Error' }, undefined];
         } finally {
             if (reader) {
                 try {

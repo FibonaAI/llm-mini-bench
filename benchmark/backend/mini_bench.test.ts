@@ -127,7 +127,7 @@ function fixture() {
         pricing: { prompt: 0, completion: 0 }
     };
     const execution = new BenchExecutionService(
-        join(directory, 'assessment'),
+        directory,
         { resolve: () => route, public_routes: () => [{ id: 'route-a', model: 'test-model' }] },
         4,
         () => ({
@@ -151,7 +151,8 @@ function fixture() {
                     usage: { input_tokens: 1, output_tokens: 20 }
                 }
             ]
-        })
+        }),
+        service.db
     );
     service._bench_execution = execution;
     const handler = make_handler(service);
@@ -310,12 +311,12 @@ test('banks, routes, plan, durable run and cancel API shapes', async () => {
     expect((await request('/api/bench/runs/' + RUN_ID + '/cancel', 'POST', {})).status).toBe(404);
 });
 test('baseline input validation and missing run produce no artifact', async () => {
-    const { directory, request } = fixture();
+    const { service, request } = fixture();
     const path = '/api/bench/runs/' + RUN_ID + '/baseline';
     for (const body of [{}, { model: 'old' }, { target_id: 'a', extra: true }, { target_id: 1 }])
         expect((await request(path, 'POST', body)).status).toBe(400);
     expect((await request(path, 'POST', { target_id: 'a' })).status).toBe(404);
-    expect(readdirSync(join(directory, 'assessment-baselines'))).toEqual([]);
+    expect(service.db.list_baseline_rows()).toEqual([]);
 });
 test('complete target baseline roundtrip and per-task observation API', async () => {
     const { service, execution, request, directory } = fixture();
@@ -357,9 +358,8 @@ test('complete target baseline roundtrip and per-task observation API', async ()
     const { baseline } = (await response.json()) as { baseline: AssessmentBaseline };
     expect(baseline.schema).toBe('assessment-baseline-v1');
     expect(baseline.samples).toHaveLength(12);
-    const files = readdirSync(join(directory, 'assessment-baselines'));
-    expect(files).toHaveLength(1);
-    expect(statSync(join(directory, 'assessment-baselines', files[0]!)).mode & 0o777).toBe(0o600);
+    expect(service.db.list_baseline_rows()).toHaveLength(1);
+    expect(statSync(join(directory, 'mini-bench.sqlite')).mode & 0o777).toBe(0o600);
     expect(service.baselines()).toContainEqual(baseline);
     const observations = (await (await request('/api/bench/observations')).json()) as {
         observations: Array<Record<string, unknown>>;
@@ -651,25 +651,45 @@ test('run call diagnosis is authenticated, read-only and limited to known runs',
     const execution = service.bench_execution();
     expect((await request('/api/bench/runs/' + RUN_ID + '/calls', 'GET', undefined, { 'X-Mini-Bench-Token': '' })).status).toBe(403);
     expect((await request('/api/bench/runs/' + RUN_ID + '/calls')).status).toBe(404);
-    execution.get_run = id => (id === RUN_ID ? ({ id } as never) : null);
-    mkdirSync(join(execution.data_dir, RUN_ID), { recursive: true });
-    writeFileSync(
-        join(execution.data_dir, RUN_ID, 'journal.jsonl'),
-        JSON.stringify({
-            type: 'call',
-            call_id: 'c',
-            sample_id: 's',
-            http_status: 502,
-            request: { input: 'secret prompt' },
-            raw_response: {}
-        }) + '\n'
-    );
+    service.db.save_run({
+        id: RUN_ID,
+        status: 'failed',
+        created_at: '2026-11-22T00:00:00.000Z',
+        updated_at: '2026-11-22T00:00:00.000Z',
+        stop_reason: 'api_failure',
+        plan: {
+            bank_version: '1.0',
+            bank_scope: 'subset',
+            bank_snapshot: {},
+            targets: [],
+            task_ids: [],
+            task_snapshots: [],
+            rounds: 1,
+            limits: { timeout: 60 },
+            source_sha256: {},
+            sample_count: 1
+        },
+        samples: [],
+        budget: {}
+    });
+    service.db.insert_session_event({
+        run_id: RUN_ID,
+        sample_id: 's',
+        attempt_id: 'att-1',
+        seq: 1,
+        kind: 'llm_turn',
+        call_id: 'c',
+        http_status: 502,
+        usage_known: false,
+        payload: { raw_error_excerpt: 'bad gateway' }
+    });
+    execution.has_run = id => id === RUN_ID;
     const response = await request('/api/bench/runs/' + RUN_ID + '/calls');
     expect(response.status).toBe(200);
     const body = await response.json();
     expect(body.calls).toHaveLength(1);
     expect(body.calls[0]).toMatchObject({ call_id: 'c', http_status: 502 });
-    expect(JSON.stringify(body)).not.toContain('secret prompt');
+    expect(JSON.stringify(body)).not.toContain('bad gateway');
     expect((await request('/api/bench/runs/' + RUN_ID + '/calls', 'POST', {})).status).toBe(404);
 });
 

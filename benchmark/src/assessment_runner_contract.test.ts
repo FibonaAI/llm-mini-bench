@@ -130,8 +130,8 @@ test('production runner streamed results promote offline with legacy and new sam
                 const index = records.indexOf(row);
                 expect(records.slice(0, index).some(row => row.type === 'call')).toBe(true);
             }
-            const firstCall = records.findIndex(row => row.type === 'call');
-            expect(records.slice(0, firstCall).some(row => row.type === 'stream_chunk')).toBe(true);
+            expect(records.some(row => row.type === 'call')).toBe(true);
+            expect(records.some(row => row.type === 'stream_chunk')).toBe(false);
             const contradictory = structuredClone(run);
             contradictory.samples[1]!.execution_protocol.requests[contradictory.samples[1]!.task] = {};
             expect(() => build_assessment_baseline(contradictory, target.id)).toThrow(

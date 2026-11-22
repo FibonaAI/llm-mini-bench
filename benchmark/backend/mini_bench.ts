@@ -1,14 +1,13 @@
 import { PRODUCTION_BANK_VERSION } from '../src/production_bank.ts';
-import { RunCallSummaryReader } from '../src/bench_call_summaries.ts';
-import { existsSync, lstatSync, readFileSync, readdirSync, realpathSync, statSync } from 'node:fs';
+import { lstatSync, readFileSync, realpathSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { dirname, extname, join, relative, resolve } from 'node:path';
-import { createHash, randomUUID, timingSafeEqual } from 'node:crypto';
+import { createHash, timingSafeEqual } from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 import {
     build_assessment_baseline,
-    load_assessment_baselines,
     project_validated_baseline_observations,
+    validate_assessment_baseline,
     type AssessmentBaseline
 } from '../src/assessment_baselines.ts';
 import { load_assessment_bank } from '../src/assessment_bank.ts';
@@ -20,7 +19,8 @@ import {
 import { parseAssessmentJson } from '../src/assessment_json.ts';
 import { readBenchLimitedBody } from '../src/bench_http_body.ts';
 export { readBenchLimitedBody } from '../src/bench_http_body.ts';
-import { BenchExecutionService, private_directory, save_execution_json } from '../src/bench_execution.ts';
+import { BENCH_DB_FILENAME, BenchDatabase } from '../src/bench_db.ts';
+import { BenchExecutionService, private_directory } from '../src/bench_execution.ts';
 import { BenchRouteRegistry } from '../src/bench_routes.ts';
 import type { BenchServiceAdapter, BenchQuotaCatalog } from '../src/bench_adapter.ts';
 
@@ -48,6 +48,7 @@ class BenchUnavailableError extends Error {}
 /** Local Assessment service; no process spawning and no automatic paid-task recovery. */
 export class BenchService {
     readonly data_dir: string;
+    readonly db: BenchDatabase;
     readonly adapter?: BenchServiceAdapter;
     readonly token: string;
     readonly concurrency: number;
@@ -65,12 +66,7 @@ export class BenchService {
         this.data_dir = resolve(expandHome(options.data_dir ?? process.env.MAGPIE_BENCH_DATA_DIR ?? '~/.local/share/magpie-mini-bench'));
         this.adapter = options.adapter;
         private_directory(this.data_dir);
-        private_directory(join(this.data_dir, 'assessment-baselines'));
-    }
-    private _call_summaries: RunCallSummaryReader | null = null;
-    /** Read-only call diagnosis cache; never reads request bodies or raw streams into responses. */
-    call_summaries(root: string): RunCallSummaryReader {
-        return (this._call_summaries ??= new RunCallSummaryReader(root));
+        this.db = new BenchDatabase(join(this.data_dir, BENCH_DB_FILENAME));
     }
     bench_execution(): BenchExecutionService {
         if (this.closed) throw new BenchUnavailableError('Assessment service is closed');
@@ -86,14 +82,20 @@ export class BenchService {
                 if (!(error instanceof Error && 'code' in error && error.code === 'ENOENT')) throw error;
             }
             const routes = override !== undefined || entryExists || !this.adapter ? new BenchRouteRegistry(path) : this.adapter.routes;
-            this._bench_execution = new BenchExecutionService(join(this.data_dir, 'assessment'), routes, this.concurrency);
+            this._bench_execution = new BenchExecutionService(this.data_dir, routes, this.concurrency, undefined, this.db);
         }
         return this._bench_execution;
     }
     async close(): Promise<void> {
         if (this.close_promise) return this.close_promise;
         this.closed = true;
-        this.close_promise = this._bench_execution?.close() ?? Promise.resolve();
+        this.close_promise = (async () => {
+            try {
+                await this._bench_execution?.close();
+            } finally {
+                this.db.close();
+            }
+        })();
         return this.close_promise;
     }
     async models(): Promise<JsonObject[]> {
@@ -107,43 +109,43 @@ export class BenchService {
     private _banks_cache: { key: string; body: string; gzip: Uint8Array<ArrayBuffer> | null } | null = null;
     private _tasks_cache: { revision: number; body: string; gzip: Uint8Array<ArrayBuffer> | null } | null = null;
     private _runs_cache: { revision: number; body: string; gzip: Uint8Array<ArrayBuffer> | null } | null = null;
-    private baselines_signature(): { signature: string; paths: string[] } {
-        const paths: string[] = [];
-        const parts: string[] = [];
-        // Historical fixtures are retained for offline replay, never mixed into personal workspaces.
-        const directory = join(this.data_dir, 'assessment-baselines');
-        if (existsSync(directory)) {
-            for (const name of readdirSync(directory).sort()) {
-                if (!name.endsWith('.json')) continue;
-                const full = join(directory, name);
-                paths.push(full);
-                try {
-                    const st = statSync(full);
-                    parts.push(`${name}:${st.size}:${st.mtimeMs}`);
-                } catch {
-                    parts.push(`${name}:missing`);
-                }
-            }
-        }
-        return { signature: parts.join('|'), paths };
+    private baselines_snapshot(): { signature: string; payloads: string[] } {
+        if (this.db.is_closed) return { signature: 'closed', payloads: [] };
+        const rows = this.db.list_baseline_rows();
+        const signature = `${this.db.baselines_revision}|` + rows.map(row => `${row.id}:${row.payload_json.length}`).join(',');
+        return { signature, payloads: rows.map(row => row.payload_json) };
     }
     baselines(context?: AssessmentSourceContext, sourceSig = assessment_source_signature()): AssessmentBaseline[] {
-        const { signature, paths } = this.baselines_signature();
+        const { signature, payloads } = this.baselines_snapshot();
         const key = `${sourceSig}\u0000${signature}`;
         if (!context && this._baselines_cache?.key === key) return this._baselines_cache.baselines;
         const resolvedContext = context ?? create_assessment_source_context();
-        const baselines = load_assessment_baselines(paths, resolvedContext);
-        const deduped = [...new Map(baselines.map(baseline => [baseline.id, baseline])).values()];
-        if (!context) this._baselines_cache = { key, baselines: deduped };
-        return deduped;
+        const validated: AssessmentBaseline[] = [];
+        const seen = new Set<string>();
+        for (const raw of payloads) {
+            try {
+                const baseline = validate_assessment_baseline(parseAssessmentJson(raw), resolvedContext);
+                if (!seen.has(baseline.id)) {
+                    seen.add(baseline.id);
+                    validated.push(baseline);
+                }
+            } catch {
+                /* Invalid, tampered, or stale baselines are skipped without upgrading. */
+            }
+        }
+        if (!context) this._baselines_cache = { key, baselines: validated };
+        return validated;
+    }
+    save_baseline(baseline: AssessmentBaseline): void {
+        this.db.save_baseline(baseline);
+        this._baselines_cache = null;
+        this._observations_cache = null;
     }
     create_run_baseline(run_id: string, target_id: string) {
         const run = this.bench_execution().get_run(run_id);
         if (!run) return null;
         const baseline = build_assessment_baseline(run, target_id);
-        save_execution_json(join(this.data_dir, 'assessment-baselines', randomUUID().replaceAll('-', '') + '.json'), baseline);
-        this._baselines_cache = null;
-        this._observations_cache = null;
+        this.save_baseline(baseline);
         return baseline;
     }
     observations() {
@@ -157,7 +159,7 @@ export class BenchService {
     cached_observations_payload(): { etag: string; body: string; gzip: Uint8Array<ArrayBuffer> | null } {
         const execution = this.bench_execution();
         const sourceSig = assessment_source_signature();
-        const { signature: baselineSig } = this.baselines_signature();
+        const { signature: baselineSig } = this.baselines_snapshot();
         const key = `${sourceSig}\u0000${baselineSig}\u0000${execution.revision}`;
         if (this._observations_cache?.key === key) return this._observations_cache;
         const observations = this.observations();
@@ -360,7 +362,7 @@ export function make_handler(service: BenchService, web_dir?: string): (request:
                             execution.has_run(id) ||
                             (execution.get_run !== BenchExecutionService.prototype.get_run && Boolean(execution.get_run(id)));
                         if (!exists) return json(404, { error: 'run not found' });
-                        return json(200, { calls: (await service.call_summaries(execution.data_dir).read(id)) ?? [] });
+                        return json(200, { calls: execution.read_run_call_summaries(id) ?? [] });
                     }
                     if (request.method === 'GET' && !match[2]) {
                         const run = execution.get_run(id);

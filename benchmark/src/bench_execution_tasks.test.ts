@@ -143,7 +143,7 @@ test('remote namespace snapshots preserve outer owner and exact model while isol
     expect(binding.remote_route?.namespace).toBe('provider-one');
     expect(binding.pricing).toEqual({ prompt: 0, completion: 0 });
     expect(binding.thinking_levels).toEqual(['low', 'high', 'none']);
-    const persisted = JSON.parse(readFileSync(join(directory, child.run_id, 'run.json'), 'utf8'));
+    const persisted = service.db.load_run(child.run_id) as any;
     expect(persisted.plan.targets[0].remote_route).toEqual(legacyPlan.targets[0]!.remote_route);
     run.plan.targets[0]!.remote_route!.namespace = 'mutated-api-copy';
     expect(service.get_run(child.run_id)!.plan.targets[0]!.remote_route?.namespace).toBe('provider-one');
@@ -247,7 +247,7 @@ test('three admitted child runs execute six simultaneous samples each; remaining
         expect(run.samples).toHaveLength(36);
         expect(run.plan.targets).toHaveLength(1);
         expect(run.plan.source_sha256['src/bench_execution.ts']).toMatch(/^[a-f0-9]{64}$/);
-        expect(JSON.parse(readFileSync(join(directory, child.run_id, 'run.json'), 'utf8')).task_id).toBe(id);
+        expect((service.db.load_run(child.run_id) as any).task_id).toBe(id);
     }
     expect(service.list_runs().every(run => run.task_id === id)).toBe(true);
     expect(service.cancel_task(id)).toBe(true);
@@ -356,10 +356,9 @@ test('single child cancellation preserves sibling completion and terminal task b
     await finish(service, id);
     expect(children(service, id).map(child => child.status)).toEqual(['cancelled', 'completed', 'completed']);
     expect(gateway.calls).toHaveLength(74);
-    const manifest = join(directory, 'tasks', id, 'task.json');
-    const before = readFileSync(manifest, 'utf8');
+    const before = JSON.stringify(service.db.load_task(id, true));
     const restarted = new BenchExecutionService(directory, routes, 18, gateway.factory);
-    expect(readFileSync(manifest, 'utf8')).toBe(before);
+    expect(JSON.stringify(restarted.db.load_task(id, true))).toBe(before);
     expect(restarted.get_task(id)!.status).toBe('incomplete');
     await restarted.close();
 });
@@ -469,13 +468,9 @@ test('restart interrupts admitted and queued children, retaining terminal histor
     expect(restarted.get_task(id)!.status).toBe('interrupted');
     expect(children(restarted, id).every(child => child.status === 'interrupted')).toBe(true);
     expect(gateway.calls).toHaveLength(18);
-    const before = new Map(
-        readdirSync(directory)
-            .filter(name => /^[a-f0-9]{32}$/.test(name))
-            .map(name => [name, readFileSync(join(directory, name, 'run.json'), 'utf8')])
-    );
+    const before = new Map(restarted.db.list_run_ids().map(name => [name, JSON.stringify(restarted.db.load_run(name))]));
     const another = new BenchExecutionService(directory, routes, 18, gateway.factory);
-    for (const [child, bytes] of before) expect(readFileSync(join(directory, child, 'run.json'), 'utf8')).toBe(bytes);
+    for (const [child, snapshot] of before) expect(JSON.stringify(another.db.load_run(child))).toBe(snapshot);
     expect(another.cancel_task(id)).toBe(true);
     expect(gateway.calls).toHaveLength(18);
     await restarted.close();

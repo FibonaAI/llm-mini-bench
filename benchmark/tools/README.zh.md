@@ -33,22 +33,30 @@ bun benchmark/tools/compress_journals.ts [--data-dir DIR] [--dry-run] [--decompr
 
 把个人工作区里所有已结束运行及其重试批次的 `journal.jsonl` 无损压缩为 gzip；排队中、运行中和取消中的运行会跳过。每份压缩文件都先解压、按 SHA-256 与原文件比对一致，才删除原文件，`journal.archive.json` 记录原始大小和摘要。工具中途中断可以安全续跑；原文件与记录的摘要不一致时保留原文件并报错。服务会直接读取 `journal.jsonl.gz`（失败原因诊断、手动重试）。`--decompress` 还原出与原来逐字节相同的文件并校验。原始 SSE 日志一般能压缩到约 1/14。
 
+## 将旧版文件工作区迁移到 SQLite
+
+```sh
+bun benchmark/tools/migrate_legacy_storage.ts [--data-dir DIR] [--dry-run]
+```
+
+将旧版逐运行目录存储（`<data-dir>/assessment/` 与 `<data-dir>/assessment-baselines/`）迁移到单个 `<data-dir>/mini-bench.sqlite`。完整保留所有运行、任务、样本、不可变 attempt 历史、Pi Session 风格事件流（调用、工具结果、重试、评分）与基线，丢弃原始 SSE 流切片、重复复制的 `source/*.ts`、`run-before.json` 与 `.run-index-cache.json`。工具不会修改或删除任何旧文件，重复执行幂等安全。
+
 ## 在工作区查看校准结果
 
 ```sh
 bun benchmark/tools/import_calibration.ts --input INPUT.jsonl [--data-dir DIR]
 ```
 
-把一份 `benchmark/calibrate_assessment.ts` 的 JSONL 转成个人工作区里的只读运行（默认 `MAGPIE_BENCH_DATA_DIR` 或 `~/.local/share/magpie-mini-bench`），任务页和分析页就能看到它的逐题矩阵、失败原因和得分。原始字节原样复制为运行日志，并记录输入文件摘要；同一文件重复导入不会生效。导入的运行标为“校准导入”，没有路由身份，不能重试，也不能升级为基线。实验题库仍不会出现在正式图表里。运行在服务启动时加载，导入后需要重载插件或重启服务。
+把一份 `benchmark/calibrate_assessment.ts` 的 JSONL 直接导入个人工作区的 `mini-bench.sqlite`（默认 `MAGPIE_BENCH_DATA_DIR` 或 `~/.local/share/magpie-mini-bench`），任务页和分析页就能看到它的逐题矩阵、失败原因和得分。导入时提取结构化会话事件而不复制原始 SSE 流，并记录输入文件摘要；同一文件重复导入不会生效。导入的运行标为“校准导入”，没有路由身份，不能重试，也不能升级为基线。实验题库仍不会出现在正式图表里。运行在服务启动时加载，导入后需要重载插件或重启服务。
 
 ## 从完整运行导入基线
 
 ```sh
-bun benchmark/tools/import_assessment_baseline.ts /path/to/assessment/RUN_ID/run.json \
+bun benchmark/tools/import_assessment_baseline.ts --run-id RUN_ID [--data-dir DIR] \
   --target-id TARGET_ID --output-dir benchmark/baselines
 ```
 
-输入必须是执行服务保存的完整 `run.json`，不是校准器的 JSONL。工具校验 Assessment 1.0 完整 12 题、全部预定轮次、题库哈希、源码和逐样本执行协议，只接受完成且可评分的结果。
+也可直接传入独立的运行 JSON 文件代替 `--run-id`。工具校验 Assessment 1.0 完整 12 题、全部预定轮次、题库哈希、源码和逐样本执行协议，只接受完成且可评分的结果。
 
 输出文件名由完整快照的内容哈希生成。相同证据再次导入不会覆盖不同内容。个人基线推荐通过插件页面保存，避免把个人数据写入项目。
 

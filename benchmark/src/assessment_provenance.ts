@@ -26,6 +26,7 @@ export const EXECUTION_SOURCE_PATHS = [
     'src/assessment_answer_protocol.ts',
     'src/assessment_bank.ts',
     'src/bench_execution.ts',
+    'src/bench_db.ts',
     'src/bench_execution_storage.ts',
     'src/bench_execution_queries.ts',
     'src/bench_routes.ts',

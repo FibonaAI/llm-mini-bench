@@ -1,9 +1,10 @@
 import { describe, expect, test } from 'bun:test';
-import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import { mkdtempSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { canonicalAssessmentJson } from './assessment_json.ts';
-import { canonicalStorageJson, RunJournal, SampleJournal } from './bench_execution_storage.ts';
+import { BenchDatabase } from './bench_db.ts';
+import { canonicalStorageJson, SessionJournal, SampleJournal } from './bench_execution_storage.ts';
 
 describe('bench execution storage optimizations', () => {
     test('canonicalStorageJson matches canonicalAssessmentJson byte-for-byte including Unicode code-point order and errors', () => {
@@ -40,17 +41,59 @@ describe('bench execution storage optimizations', () => {
         expect(() => canonicalStorageJson(deep)).toThrow('nesting limit');
     });
 
-    test('RunJournal buffers stream_chunk writes, preserves canonical order, flushes before call/close, and redacts secrets', () => {
+    test('SessionJournal persists compact Pi Session events into SQLite, ignores stream_chunk, and redacts secrets', () => {
         const dir = mkdtempSync(join(tmpdir(), 'mini-bench-storage-'));
-        const path = join(dir, 'journal.jsonl');
+        const db = new BenchDatabase(join(dir, 'mini-bench.sqlite'));
+        const runId = 'r'.repeat(32);
+        const sampleId = 's'.repeat(32);
+        const attemptId = 'a'.repeat(32);
         try {
-            const journal = new RunJournal(path, ['sk-live-secret', 'https://secret.example']);
+            db.save_run({
+                id: runId,
+                status: 'running',
+                created_at: '2026-11-22T00:00:00.000Z',
+                updated_at: '2026-11-22T00:00:00.000Z',
+                stop_reason: null,
+                plan: {
+                    bank_version: '1.0',
+                    bank_scope: 'subset',
+                    bank_snapshot: {},
+                    targets: [],
+                    task_ids: ['K04'],
+                    task_snapshots: [],
+                    rounds: 1,
+                    concurrency: 1,
+                    limits: { timeout: 60 },
+                    source_sha256: {},
+                    sample_count: 1
+                },
+                samples: [
+                    {
+                        sample_id: sampleId,
+                        attempt_id: attemptId,
+                        run_id: runId,
+                        target_id: 'target-1',
+                        route_id: 'route-1',
+                        account_ref: 'acct-1',
+                        account_evidence: 'configured_binding',
+                        task: 'K04',
+                        model: 'm',
+                        thinking: 'high',
+                        round: 1,
+                        status: 'running',
+                        grade: null
+                    }
+                ],
+                budget: {}
+            });
+
+            const journal = new SessionJournal(db, runId, ['sk-live-secret', 'https://secret.example']);
             const sample = new SampleJournal(
                 journal,
                 {
-                    run_id: 'r'.repeat(32),
-                    sample_id: 's'.repeat(32),
-                    attempt_id: 'a'.repeat(32),
+                    run_id: runId,
+                    sample_id: sampleId,
+                    attempt_id: attemptId,
                     target_id: 'target-1',
                     route_id: 'route-1',
                     account_ref: 'acct-1',
@@ -61,7 +104,7 @@ describe('bench execution storage optimizations', () => {
                 }
             );
 
-            // Standard unredacted chunk, raw secret chunk, escaped secret chunk, and large chunk burst (> 64 KiB).
+            // Raw stream_chunk records are ignored and never persisted.
             sample.write({
                 type: 'stream_chunk',
                 turn: 1,
@@ -70,80 +113,74 @@ describe('bench execution storage optimizations', () => {
                 elapsed_seconds: 0.05,
                 raw_stream_text: 'event: delta\ndata: {"delta":"plain"}\n\n'
             });
-            sample.write({
-                type: 'stream_chunk',
-                turn: 1,
-                api_attempt: 1,
-                chunk_index: 1,
-                elapsed_seconds: 0.1,
-                raw_stream_text: 'data: {"leak":"sk-live-secret","url":"https://secret.example"}\n\n'
-            });
-            sample.write({
-                type: 'stream_chunk',
-                turn: 1,
-                api_attempt: 1,
-                chunk_index: 2,
-                elapsed_seconds: 0.15,
-                raw_stream_text: 'data: {"escaped":"\\u0073k-live-secret","n":10.0}\n\n'
-            });
-            for (let i = 3; i < 40; i++) {
-                sample.write({
-                    type: 'stream_chunk',
-                    turn: 1,
-                    api_attempt: 1,
-                    chunk_index: i,
-                    elapsed_seconds: 0.2 + i * 0.001,
-                    raw_stream_text: 'data: ' + 'x'.repeat(2048) + '\n\n'
-                });
-            }
-            // Extra-key stream_chunk falls back to canonicalStorageJson cleanly.
-            journal.write({
-                type: 'stream_chunk',
-                attempt_id: 'a'.repeat(32),
-                call_id: 'a'.repeat(32) + ':1:1',
-                sample_id: 's'.repeat(32),
-                chunk_index: 40,
-                elapsed_seconds: 0.5,
-                raw_stream_text: 'extra',
-                custom_note: 'kept'
-            });
-            // Writing a non-stream record flushes any buffered stream_chunks strictly before it.
+            // Failed turn retains a redacted error excerpt without storing request history.
             sample.write({
                 type: 'call',
                 turn: 1,
                 api_attempt: 1,
-                http_status: 200,
-                raw_response: { id: 'resp-1', note: 'clean' }
+                http_status: 500,
+                elapsed_seconds: 0.5,
+                request: { input: [{ role: 'user', content: 'huge repeated prompt' }] },
+                raw_response: { error: { code: 'upstream', message: 'bad sk-live-secret at https://secret.example' } },
+                raw_response_text: '{"escaped":"\\u0073k-live-secret","n":10.0}'
             });
-            // Trailing stream_chunk is flushed on close().
+            // Tool result redacts secrets across wire identifiers, arguments, and result.
             sample.write({
-                type: 'stream_chunk',
+                type: 'tool_result',
+                call_id: 'wire-sk-live-secret',
+                name: 'tool-sk-live-secret',
+                arguments: '{"url":"https://secret.example"}',
+                result: { echoed: 'sk-live-secret' }
+            });
+            // Successful turn stores compact output/tool_calls without raw error excerpt or request payload.
+            sample.write({
+                type: 'call',
                 turn: 2,
                 api_attempt: 1,
-                chunk_index: 0,
-                elapsed_seconds: 0.6,
-                raw_stream_text: 'trailing'
+                http_status: 200,
+                elapsed_seconds: 0.25,
+                estimated_uncached_cost_usd: 0.001,
+                raw_response: {
+                    status: 'completed',
+                    output_text: 'final answer',
+                    usage: { input_tokens: 12, output_tokens: 4 }
+                },
+                stream: { terminal_event: 'response.completed', termination: 'terminal', first_output_seconds: 0.1 }
             });
             journal.close();
 
-            const rawLines = readFileSync(path, 'utf8').trim().split('\n');
-            expect(rawLines).toHaveLength(43);
-            for (const line of rawLines) {
-                expect(line).toBe(canonicalAssessmentJson(JSON.parse(line)));
-            }
-            const parsed = rawLines.map(line => JSON.parse(line) as Record<string, unknown>);
-            expect(parsed[0]!.redaction_applied).toBeUndefined();
-            expect(parsed[1]!.redaction_applied).toBe(true);
-            expect(String(parsed[1]!.raw_stream_text)).not.toContain('sk-live-secret');
-            expect(String(parsed[1]!.raw_stream_text)).not.toContain('https://secret.example');
-            expect(parsed[2]!.redaction_applied).toBe(true);
-            expect(String(parsed[2]!.raw_stream_text)).toContain('"n":10.0');
-            expect(String(parsed[2]!.raw_stream_text)).toContain('[REDACTED]');
-            expect(parsed[40]!.custom_note).toBe('kept');
-            expect(parsed[41]!.type).toBe('call');
-            expect(parsed[41]!.redaction_applied).toBeUndefined();
-            expect(parsed[42]!.raw_stream_text).toBe('trailing');
+            const events = db.read_run_session_events(runId, attemptId);
+            expect(events).toHaveLength(3);
+            expect(events.map(e => e.kind)).toEqual(['llm_turn', 'tool_result', 'llm_turn']);
+            expect(events.map(e => e.seq)).toEqual([1, 2, 3]);
+
+            const first = events[0]!;
+            expect(first.call_id).toBe(attemptId + ':1:1');
+            expect(first.error_message).not.toContain('sk-live-secret');
+            expect(first.error_message).not.toContain('https://secret.example');
+            expect(String(first.payload?.raw_error_excerpt)).toContain('"n":10.0');
+            expect(String(first.payload?.raw_error_excerpt)).toContain('[REDACTED]');
+            expect(first.payload?.request).toBeUndefined();
+            expect(first.payload?.redaction_applied).toBe(true);
+
+            const tool = events[1]!;
+            expect(tool.call_id).toBe('wire-[REDACTED]');
+            expect(JSON.stringify(tool.payload)).not.toContain('sk-live-secret');
+            expect(JSON.stringify(tool.payload)).not.toContain('https://secret.example');
+
+            const second = events[2]!;
+            expect(second.usage_known).toBe(true);
+            expect(second.input_tokens).toBe(12);
+            expect(second.output_tokens).toBe(4);
+            expect(second.payload?.assistant_text).toBe('final answer');
+            expect(second.payload?.raw_error_excerpt).toBeUndefined();
+
+            const summaries = db.read_run_call_summaries(runId);
+            expect(summaries).toHaveLength(2);
+            expect(summaries[0]!.http_status).toBe(500);
+            expect(summaries[1]!.usage_known).toBe(true);
         } finally {
+            db.close();
             rmSync(dir, { recursive: true, force: true });
         }
     });

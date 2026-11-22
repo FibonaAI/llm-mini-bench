@@ -34,22 +34,30 @@ bun benchmark/tools/compress_journals.ts [--data-dir DIR] [--dry-run] [--decompr
 
 Losslessly gzips `journal.jsonl` of every terminal run and retry generation in the personal workspace; queued, running and cancelling runs are skipped. Each archive is decompressed and compared by SHA-256 with the original before the plain file is removed, and `journal.archive.json` records the original size and digest. Interrupted runs of the tool resume safely, and a plain file that no longer matches its recorded digest is kept and reported. The service reads `journal.jsonl.gz` transparently (failure diagnosis, manual retries). `--decompress` restores the exact original bytes and verifies them. Raw SSE journals typically compress about 14x.
 
+## Migrate a legacy file workspace into SQLite
+
+```sh
+bun benchmark/tools/migrate_legacy_storage.ts [--data-dir DIR] [--dry-run]
+```
+
+Migrates legacy file-per-run workspaces (`<data-dir>/assessment/` and `<data-dir>/assessment-baselines/`) into `<data-dir>/mini-bench.sqlite`. Preserves all runs, tasks, samples, immutable attempt histories, compact Pi Session-style events (calls, tool results, retries, grades), and baselines while discarding raw SSE stream chunks, duplicated `source/*.ts` copies, `run-before.json` archives, and `.run-index-cache.json`. Legacy files are never modified or deleted, and re-running is idempotent.
+
 ## Show a calibration in the workspace
 
 ```sh
 bun benchmark/tools/import_calibration.ts --input INPUT.jsonl [--data-dir DIR]
 ```
 
-Converts one `benchmark/calibrate_assessment.ts` journal into a read-only run in the personal workspace (default `MAGPIE_BENCH_DATA_DIR` or `~/.local/share/magpie-mini-bench`), so the task page and analysis page can show its matrix, failure causes and scores. The original bytes are copied unchanged as the run journal, and the input digest is recorded; importing the same file again does nothing. Imported runs are labelled 校准导入, have no route identity, can never be retried and can never be promoted to baselines. Experimental banks stay off the production chart. Reload the plugin (or restart the service) afterwards, because runs are loaded at startup.
+Converts one `benchmark/calibrate_assessment.ts` journal into a read-only run directly inside `mini-bench.sqlite` (default `MAGPIE_BENCH_DATA_DIR` or `~/.local/share/magpie-mini-bench`), so the task page and analysis page can show its matrix, failure causes and scores. Structured session events are stored without copying raw SSE streams, and the input digest is recorded; importing the same file again does nothing. Imported runs are labelled 校准导入, have no route identity, can never be retried and can never be promoted to baselines. Experimental banks stay off the production chart. Reload the plugin (or restart the service) afterwards, because runs are loaded at startup.
 
 ## Import a baseline from a complete run
 
 ```sh
-bun benchmark/tools/import_assessment_baseline.ts /path/to/assessment/RUN_ID/run.json \
+bun benchmark/tools/import_assessment_baseline.ts --run-id RUN_ID [--data-dir DIR] \
   --target-id TARGET_ID --output-dir benchmark/baselines
 ```
 
-The input must be a complete `run.json` saved by the execution service, not the calibrator's JSONL. The tool validates all 12 tasks in Assessment 1.0, every planned round, the bank hash, source code, and per-sample execution protocols. It accepts only completed, gradable results.
+Or pass a standalone exported run JSON file instead of `--run-id`. The tool validates all 12 tasks in Assessment 1.0, every planned round, the bank hash, source code, and per-sample execution protocols. It accepts only completed, gradable results.
 
 The output filename is generated from the content hash of the full snapshot. Importing the same evidence again does not overwrite different content. Save personal baselines through the plugin page instead to avoid writing personal data into the project.
 

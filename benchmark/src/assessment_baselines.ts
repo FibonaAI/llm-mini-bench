@@ -283,6 +283,11 @@ function validatedBaseline(value: unknown, context: AssessmentSourceContext): As
     return rebuilt;
 }
 
+/** Validate one baseline object against the current production bank and execution provenance. */
+export function validate_assessment_baseline(value: unknown, context = create_assessment_source_context()): AssessmentBaseline {
+    return validatedBaseline(value, context);
+}
+
 /** Invalid, tampered and obsolete snapshots are skipped, never upgraded or filled with defaults. */
 export function load_assessment_baselines(paths: Iterable<string>, context = create_assessment_source_context()): AssessmentBaseline[] {
     const result: AssessmentBaseline[] = [],

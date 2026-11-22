@@ -43,7 +43,7 @@ TypeScript 在 Bun 上实现评测引擎和 HTTP 服务，原生浏览器 JavaSc
 | `benchmark/src/bench_routes.ts`、`benchmark/src/bench_adapter.ts` | 显式路由与通用适配器接口 |
 | `magpie/magpie_adapter.ts`、`magpie/magpie_routes.ts`、`magpie/magpie_accounts.ts`、`magpie/magpie_quotas.ts` | Magpie 目录、账号绑定、请求头及额度标准化 |
 | `benchmark/src/bench_execution.ts` | 计划、原子准入／发布、并发、重试与取消的协调 |
-| `benchmark/src/bench_execution_storage.ts`、`benchmark/src/bench_execution_queries.ts` | 私有持久化 JSON／日志及轻量运行／任务摘要投影 |
+| `benchmark/src/bench_db.ts`、`benchmark/src/bench_execution_storage.ts`、`benchmark/src/bench_execution_queries.ts` | 单文件 SQLite 存储（`mini-bench.sqlite`）、脱敏的 Pi Session 风格事件流及轻量运行／任务摘要投影 |
 | `benchmark/src/assessment_runner.ts` | 独立于 CLI 入口的单样本执行、预算与同步日志契约 |
 | `benchmark/calibrate_assessment.ts` | 复用共用执行器的独立校准 CLI，默认仍为已发布 12 题 |
 | `benchmark/bench.ts` | CLI 客户端与独立 `serve` 入口，客户端命令使用已运行服务的调度器 |
@@ -53,7 +53,7 @@ TypeScript 在 Bun 上实现评测引擎和 HTTP 服务，原生浏览器 JavaSc
 | `benchmark/web/analysis.js`、`analysis-model.js` | 分析协调与按轴缓存的指标派生；呈现和历史归属变化不重新扫描逐题样本 |
 | `benchmark/web/` | 分析图与共用的跨渠道统一搜索选择器，支持渠道／模型／思考筛选，统一使用 `/api/bench/`；保留逐题详情，不设独立题库页 |
 | `package.json`、`magpie/index.ts`、`magpie/page/` | Magpie 插件声明、后端生命周期和页面引导 |
-| `benchmark/tools/` | 离线分析、基线导入和只读校准导入（`import_calibration.ts`，不可重试、不可升级为基线）和已结束运行日志的无损 gzip 归档（`compress_journals.ts`，SHA-256 校验，可还原），不在导入模块时发请求 |
+| `benchmark/tools/` | 离线分析、基线导入、只读校准导入（`import_calibration.ts`，直接写入 SQLite，不可重试、不可升级为基线）、旧目录迁移（`migrate_legacy_storage.ts`）和旧日志无损归档（`compress_journals.ts`），不在导入模块时发请求 |
 | `benchmark/tests/` | 离线 Bun 测试与前端验证 |
 
 ## 本地验证
@@ -100,7 +100,7 @@ bun benchmark/tools/import_assessment_baseline.ts --help
 - `bank_scope=subset` 不可提升为完整基线。缺失来源、不可评分和旧 schema 不能靠补默认值或改版本号升级。
 - 原始调用、失败尝试和工具轨迹先落盘，再评分。Token 和费用缺失保持 `null`；汇总包括工具后续请求，估算不是账单。
 - 个人工作区初始为空，不自动将外部基线加载到服务或分析界面。需要观察记录的浏览器测试应显式填充自己的临时数据目录。
-- 个人运行在数据目录的 `assessment/`，个人基线在 `assessment-baselines/`。不读写已退役的个人 `runs/`、`baselines/` 或自定义旧题库文件；删除项目外个人数据需单独授权。
+- 个人运行、任务、不可变 attempt 历史、Pi Session 风格事件流与个人基线统一保存在数据目录下的单个私有 SQLite 数据库（`mini-bench.sqlite`，WAL 模式，`0o600`）。题库、任务与源码哈希快照按内容去重存储，不再逐次复制 `source/*.ts` 或落盘原始 SSE `stream_chunk`。旧版 `assessment/` 与 `assessment-baselines/` 目录可用 `benchmark/tools/migrate_legacy_storage.ts` 无损迁移。不读写已退役的个人 `runs/`、`baselines/` 或自定义旧题库文件；删除项目外个人数据需单独授权。
 - 目录中的 `provider_id` 是 `owned_by` 声明的精确实例 ID，不是已核验的实际服务商或供应商类型。远端路由展开必须有经过边界校验的 `magpie_via` 目录证据及正式的 owner 前缀路径，排除本地 `auto/`、`group/` 条目，只展开一级命名空间，完整请求模型名不变。新快照保留 `remote_route` 元数据，不为历史推导补全，也不把随机 hop ID 保存为身份。目录握手会附带非对话模型，必须过滤。快照只保留当时记录的元数据，不用当前目录回填历史身份。`gateway-default` 是并发池，不是上游账号。未知供应商类型和图标使用中性展示，不编造异常标签或检测器。
 - 题库内容相同还不够，Thinking、输出预算、工具轮次等执行配置也必须可比。引擎层 `thinking` 可选：省略或 `default` 时不发送 `reasoning`，不等于显式 `none`；`mixed`、`unknown` 为保留值。任务界面对未声明档位的路由只提供 `default`，对声明了档位的路由只提供这些显式档位。
 
@@ -110,7 +110,7 @@ bun benchmark/tools/import_assessment_baseline.ts --help
 - 上游凭证只通过服务进程环境变量引用，不放进路由 JSON、前端、日志或文档。账号名称和模型回显不等于实际身份已核验。
 - 保持 loopback 监听、token、Host/Origin 校验、严格 JSON 和无重定向请求。错误响应不能泄露凭证或完整异常内容。
 - 临时 API 错误按 `max_api_retries` 重试，默认首次请求之外最多 3 次，同账号且共用整题超时时间。新任务默认每题总超时 600 秒，无 token、请求数、费用、工具调用数或交互轮数上限；历史任务手动重试保留原来显式记录的限制。能力问题不重试，不切换账号，重启不自动续跑。手动重试须由用户明确操作，覆盖失败、超时、已中断与已取消样本，保留历次尝试且不重跑已完成样本。创建任务超时先查历史，不自动重发任务创建请求。
-- 一个任务包含独立持久化的单目标子 run。新任务默认完整题库 3 轮、run 内样本并发 6、任务内 run 并发 3；各任务独立控制自身的 `run_concurrency` 与 `sample_concurrency`，并按渠道和模型交错调度子 run。直接 run 共享全局上限（`MAGPIE_BENCH_CONCURRENCY`，默认 18）、账号并发上限及每目标串行限制。全部子 run 证据和任务归属提交成功后才允许调度，不改写历史 run 字节。已结束运行的摘要和观察记录索引缓存在 `.run-index-cache.json`。修改调度器时覆盖取消、发布失败、存储失败与重启边界。
+- 一个任务包含独立持久化的单目标子 run。新任务默认完整题库 3 轮、run 内样本并发 6、任务内 run 并发 3；各任务独立控制自身的 `run_concurrency` 与 `sample_concurrency`，并按渠道和模型交错调度子 run。直接 run 共享全局上限（`MAGPIE_BENCH_CONCURRENCY`，默认 18）、账号并发上限及每目标串行限制。全部子 run 证据和任务归属提交成功后才允许调度，历史 attempt 记录在 SQLite 中保持不可变。修改调度器时覆盖取消、发布失败、存储失败与重启边界。
 - 新任务只暴露整题超时（默认 600 秒），另保留轮数及并发；不重新引入请求、token、费用、工具或交互轮数上限。提交前展示样本规模和超时，历史重试保留当时记录的限制。不能暗示 Magpie 目录路由固定了账号；宿主网关也可能内部重试。账号固定和禁止上游重试需要明确受支持的宿主能力，生成路由名称不构成证据。
 
 ## 维护习惯

@@ -173,49 +173,64 @@ test('journal scanning propagates visitor errors and accepts a strict parser', a
     ).toThrow('evidence mismatch');
 });
 
-test('service journals keep stream chunks to their identity and text only', async () => {
-    const { RunJournal, SampleJournal } = await import('./bench_execution_storage.ts');
+test('service session journals drop stream chunks and store compact redacted llm_turn events', async () => {
+    const { BenchDatabase } = await import('./bench_db.ts');
+    const { SessionJournal, SampleJournal } = await import('./bench_execution_storage.ts');
     const directory = mkdtempSync(join(tmpdir(), 'compact-journal-'));
-    const path = join(directory, 'journal.jsonl');
-    const run = new RunJournal(path, ['secret-key']);
-    const sample = new SampleJournal(
-        run,
-        { run_id: 'r', target_id: 't', route_id: 'route', account_ref: 'acct', account_evidence: 'gateway_binding', attempt_id: 'att' },
-        () => {}
-    );
-    sample.write({
-        type: 'stream_chunk',
-        task: 'K04',
-        model: 'm',
-        thinking: 'high',
-        round: 1,
-        domain: 'd',
-        sample_id: 's',
-        call_id: 'x',
-        turn: 1,
-        api_attempt: 2,
-        chunk_index: 0,
-        elapsed_seconds: 0.5,
-        raw_stream_text: 'data: secret-key\n\n'
-    });
-    sample.write({ type: 'call', task: 'K04', sample_id: 's', call_id: 'x', turn: 1, api_attempt: 2, raw_stream_chunks: 1 });
-    run.close?.();
-    const [chunk, call] = readFileSync(path, 'utf8')
-        .trim()
-        .split('\n')
-        .map(text => JSON.parse(text));
-    // redaction_applied is added only because this chunk contained a secret.
-    expect(Object.keys(chunk).sort()).toEqual([
-        'attempt_id',
-        'call_id',
-        'chunk_index',
-        'elapsed_seconds',
-        'raw_stream_text',
-        'redaction_applied',
-        'sample_id',
-        'type'
-    ]);
-    expect(chunk.call_id).toBe('att:1:2');
-    expect(chunk.raw_stream_text).not.toContain('secret-key');
-    expect(call).toMatchObject({ call_id: 'att:1:2', task: 'K04', run_id: 'r', route_id: 'route' });
+    const db = new BenchDatabase(join(directory, 'mini-bench.sqlite'));
+    try {
+        db.save_run({
+            id: 'r',
+            status: 'running',
+            created_at: '2026-11-22T00:00:00.000Z',
+            updated_at: '2026-11-22T00:00:00.000Z',
+            stop_reason: null,
+            plan: {
+                bank_version: '1.0',
+                bank_scope: 'subset',
+                bank_snapshot: {},
+                targets: [],
+                task_ids: ['K04'],
+                task_snapshots: [],
+                rounds: 1,
+                limits: { timeout: 60 },
+                source_sha256: {},
+                sample_count: 1
+            },
+            samples: [],
+            budget: {}
+        });
+        const run = new SessionJournal(db, 'r', ['secret-key']);
+        const sample = new SampleJournal(
+            run,
+            { run_id: 'r', target_id: 't', route_id: 'route', account_ref: 'acct', account_evidence: 'gateway_binding', attempt_id: 'att' },
+            () => {}
+        );
+        sample.write({
+            type: 'stream_chunk',
+            sample_id: 's',
+            call_id: 'x',
+            turn: 1,
+            api_attempt: 2,
+            chunk_index: 0,
+            elapsed_seconds: 0.5,
+            raw_stream_text: 'data: secret-key\n\n'
+        });
+        sample.write({
+            type: 'call',
+            task: 'K04',
+            sample_id: 's',
+            call_id: 'x',
+            turn: 1,
+            api_attempt: 2,
+            http_status: 200,
+            raw_response: { status: 'completed', output_text: 'ok', usage: { input_tokens: 3, output_tokens: 1 } }
+        });
+        run.close();
+        const events = db.read_run_session_events('r');
+        expect(events).toHaveLength(1);
+        expect(events[0]).toMatchObject({ kind: 'llm_turn', call_id: 'att:1:2', run_id: 'r', sample_id: 's', attempt_id: 'att' });
+    } finally {
+        db.close();
+    }
 });

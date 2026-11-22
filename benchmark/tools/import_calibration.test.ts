@@ -1,8 +1,9 @@
 import { expect, test } from 'bun:test';
-import { mkdtempSync, readFileSync, readdirSync, statSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdtempSync, statSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { calibration_run, main, CALIBRATION_IMPORT_KIND } from './import_calibration.ts';
+import { BenchDatabase } from '../src/bench_db.ts';
 import { BenchExecutionService } from '../src/bench_execution.ts';
 
 const metadata = {
@@ -50,22 +51,42 @@ test('calibration journals become read-only runs with explicit status and no rou
     expect(() => calibration_run([metadata, { ...observation('A'), model: 'other' }], 'r'.repeat(32), source)).toThrow('undeclared target');
 });
 
-test('import copies bytes privately, is idempotent and is never retried by the service', async () => {
+test('import writes directly into SQLite privately, is idempotent and is never retried by the service', async () => {
     const directory = mkdtempSync(join(tmpdir(), 'calibration-import-'));
     const input = join(directory, 'calibration.jsonl');
     const bytes =
-        [metadata, observation('A'), observation('B', 'api_failure'), { type: 'summary' }].map(row => JSON.stringify(row)).join('\n') +
-        '\n';
+        [
+            metadata,
+            { type: 'stream_chunk', sample_id: 'A', call_id: 'A:1', raw_stream_text: 'ignored' },
+            {
+                type: 'call',
+                sample_id: 'A',
+                call_id: 'A:1',
+                turn: 1,
+                http_status: 200,
+                raw_response: { status: 'completed', usage: { input_tokens: 1, output_tokens: 1 } }
+            },
+            observation('A'),
+            observation('B', 'api_failure'),
+            { type: 'summary' }
+        ]
+            .map(row => JSON.stringify(row))
+            .join('\n') + '\n';
     writeFileSync(input, bytes);
     const data = join(directory, 'data');
     expect(main(['--input', input, '--data-dir', data])).toBe(0);
     expect(main(['--input', input, '--data-dir', data])).toBe(0);
-    const runs = readdirSync(join(data, 'assessment')).filter(name => /^[0-9a-f]{32}$/.test(name));
+    const dbPath = join(data, 'mini-bench.sqlite');
+    expect(existsSync(dbPath)).toBe(true);
+    expect(statSync(dbPath).mode & 0o777).toBe(0o600);
+    expect(existsSync(join(data, 'assessment'))).toBe(false);
+    const db = new BenchDatabase(dbPath);
+    const runs = db.list_run_ids();
     expect(runs).toHaveLength(1);
-    const journal = join(data, 'assessment', runs[0]!, 'journal.jsonl');
-    expect(readFileSync(journal, 'utf8')).toBe(bytes);
-    expect(statSync(journal).mode & 0o777).toBe(0o600);
-    const service = new BenchExecutionService(join(data, 'assessment'), {
+    const events = db.read_run_session_events(runs[0]!);
+    expect(events.some(event => event.kind === 'llm_turn' && event.call_id === 'A:1')).toBe(true);
+    db.close();
+    const service = new BenchExecutionService(data, {
         resolve: () => {
             throw new Error('no route');
         },

@@ -1,5 +1,3 @@
-import { createHash } from 'node:crypto';
-import { journal_raw_response_text, raw_text_evidence, type StreamChunkDigest } from './assessment_runner.ts';
 import { describe, expect, test } from 'bun:test';
 import { GatewayClient } from './client.ts';
 import { ResponsesStreamDecoder, responses_stream_telemetry } from './responses_stream.ts';
@@ -126,7 +124,6 @@ describe('Responses SSE HTTP and runner integration', () => {
                 {
                     ...task,
                     grade(text) {
-                        expect(records.some(row => row.type === 'stream_chunk')).toBe(true);
                         expect(records.at(-1).type).toBe('call');
                         return task.grade(text);
                     }
@@ -139,7 +136,6 @@ describe('Responses SSE HTTP and runner integration', () => {
                 {
                     write(row) {
                         records.push(row);
-                        if (row.type === 'stream_chunk') frames.push(String(row.raw_stream_text));
                     }
                 }
             );
@@ -151,7 +147,7 @@ describe('Responses SSE HTTP and runner integration', () => {
             expect(call.stream.event_count).toBe(2);
             expect(call.stream.terminal_event).toBe('response.completed');
             expect(call.raw_response.usage).toEqual(answer.usage);
-            expect(frames.join('')).toContain('世界');
+            expect(records.some(row => row.type === 'stream_chunk')).toBe(false);
             expect(result.execution_protocol.requests.fixture!.stream).toBe(true);
         } finally {
             server.stop(true);
@@ -259,7 +255,7 @@ describe('Responses SSE HTTP and runner integration', () => {
             expect(call.stream.first_output_seconds).not.toBeNull();
             expect(call.stream.terminal_event).toBeNull();
             expect(call.stream.termination).toBe('timeout');
-            expect(records.some(row => row.type === 'stream_chunk')).toBe(true);
+            expect(records.some(row => row.type === 'stream_chunk')).toBe(false);
         } finally {
             server.stop(true);
         }
@@ -381,7 +377,7 @@ describe('Responses SSE HTTP and runner integration', () => {
             expect(result.grade?.content_score).toBe(1);
             const calls = records.filter(row => row.type === 'call');
             expect(calls[0].stream.termination).toBe('protocol_error');
-            expect(journal_raw_response_text(calls[0], records)).toContain('partial');
+            expect(calls[0].stream.first_output_seconds).not.toBeNull();
             expect(calls[1].stream.terminal_event).toBe('response.completed');
             expect(result.usage).toEqual(answer.usage);
             expect(result.estimated_uncached_cost_usd).toBe(0);
@@ -460,10 +456,10 @@ describe('Responses SSE HTTP and runner integration', () => {
         });
         try {
             const client = new GatewayClient(`http://127.0.0.1:${server.port}`, 'key');
-            // Without on_chunk, direct callers still receive the accumulated raw stream text.
+            // Direct callers decode SSE in constant memory without retaining a full-stream copy.
             const direct = await client.post_responses_stream({});
             expect(direct[0]).toBe(200);
-            expect(direct[4]).toBe(body);
+            expect(direct[4]).toBeUndefined();
 
             // With on_chunk, frames stream directly without retaining a full-stream copy in memory.
             const chunks: string[] = [];
@@ -479,7 +475,7 @@ describe('Responses SSE HTTP and runner integration', () => {
             expect(chunks[1]!.endsWith('\r\n\r\n')).toBe(true);
             expect(chunks.join('')).toContain('42世界😀');
 
-            // Runner references journaled chunks instead of duplicating raw_response_text on the call line.
+            // Runner streams without accumulating raw SSE chunks or writing stream_chunk rows.
             const records: any[] = [];
             const result = await run_assessment_sample(
                 client,
@@ -498,31 +494,9 @@ describe('Responses SSE HTTP and runner integration', () => {
             expect(result.status).toBe('completed');
             const call = records.find(row => row.type === 'call');
             expect(call.raw_response_text).toBeUndefined();
-            expect(call.raw_stream_chunks).toBe(2);
-            expect(journal_raw_response_text(call, records)).toBe(chunks.join(''));
+            expect(records.some(row => row.type === 'stream_chunk')).toBe(false);
         } finally {
             server.stop(true);
         }
-    });
-    test('raw_text_evidence verifies streaming chunk digests in constant memory', () => {
-        const makeDigest = (parts: string[]): StreamChunkDigest => {
-            const hash = createHash('sha256');
-            let length = 0;
-            for (const part of parts) {
-                hash.update(part);
-                length += part.length;
-            }
-            let hex: string | null = null;
-            return {
-                count: parts.length,
-                length,
-                sha256: () => (hex ??= hash.digest('hex'))
-            };
-        };
-        expect(raw_text_evidence(undefined, makeDigest([]))).toEqual({});
-        expect(raw_text_evidence(undefined, makeDigest(['a\n\n', 'b\n\n']))).toEqual({ raw_stream_chunks: 2 });
-        expect(raw_text_evidence('a\n\nb\n\n', makeDigest(['a\n\n', 'b\n\n']))).toEqual({ raw_stream_chunks: 2 });
-        expect(raw_text_evidence('a\n\nc\n\n', makeDigest(['a\n\n', 'b\n\n']))).toEqual({ raw_response_text: 'a\n\nc\n\n' });
-        expect(raw_text_evidence('error body', makeDigest([]))).toEqual({ raw_response_text: 'error body' });
     });
 });

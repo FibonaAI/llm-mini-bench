@@ -1,5 +1,4 @@
 /** Single-sample execution uses fixed simulators and persists raw evidence before grading. */
-import { createHash } from 'node:crypto';
 import { fsyncSync, writeSync } from 'node:fs';
 import { calibration_visible_text } from './assessment_response.ts';
 import type { GatewayResponse, GatewayStreamOptions } from './client.ts';
@@ -131,45 +130,6 @@ function assessment_usage(payload: unknown): AssessmentUsage | null {
     if (['input_tokens', 'output_tokens'].some(key => /[.eE]/.test(assessmentJsonNumberToken(payload.usage as object, key) ?? '')))
         return null;
     return { input_tokens, output_tokens };
-}
-/** Streaming digest verifies raw_response_text parity without retaining every frame in memory. */
-export interface StreamChunkDigest {
-    readonly count: number;
-    readonly length: number;
-    sha256(): string;
-}
-/**
- * The complete stream text is already journaled frame by frame. Store it again on the call only
- * when a returned response body is not reproduced byte for byte by the journaled chunks
- * (HTTP error bodies, non-stream responses, or mismatched raw text).
- */
-export function raw_text_evidence(
-    raw_response_text: string | undefined,
-    chunks: readonly string[] | StreamChunkDigest
-): Record<string, unknown> {
-    if ('sha256' in chunks) {
-        if (raw_response_text === undefined) return chunks.count ? { raw_stream_chunks: chunks.count } : {};
-        if (
-            chunks.count > 0 &&
-            chunks.length === raw_response_text.length &&
-            createHash('sha256').update(raw_response_text).digest('hex') === chunks.sha256()
-        )
-            return { raw_stream_chunks: chunks.count };
-        return { raw_response_text };
-    }
-    if (raw_response_text === undefined) return chunks.length ? { raw_stream_chunks: chunks.length } : {};
-    if (chunks.length && chunks.join('') === raw_response_text) return { raw_stream_chunks: chunks.length };
-    return { raw_response_text };
-}
-/** Rebuild a call's exact raw stream text from its own field or its journaled chunks; null if incomplete. */
-export function journal_raw_response_text(call: Record<string, unknown>, rows: readonly Record<string, unknown>[]): string | null {
-    if (typeof call.raw_response_text === 'string') return call.raw_response_text;
-    if (typeof call.raw_stream_chunks !== 'number') return null;
-    const chunks = rows
-        .filter(row => row.type === 'stream_chunk' && row.call_id === call.call_id)
-        .sort((a, b) => Number(a.chunk_index) - Number(b.chunk_index));
-    if (chunks.length !== call.raw_stream_chunks || chunks.some((chunk, index) => chunk.chunk_index !== index)) return null;
-    return chunks.map(chunk => String(chunk.raw_stream_text)).join('');
 }
 /** Reject duplicate keys, nonfinite numbers, non-object arguments and excessive nesting. */
 export function assessment_arguments(raw: unknown): Record<string, unknown> {
@@ -393,57 +353,17 @@ export async function run_assessment_sample(
             let cancellationTimer: ReturnType<typeof setInterval> | undefined;
             const controller = new AbortController(),
                 stream = responses_stream_telemetry();
-            let chunk_index = 0,
-                chunkLength = 0,
-                acceptingChunks = true,
-                journalFailed = false,
-                chunkDigestHex: string | null = null;
-            const chunkHash = createHash('sha256');
-            const chunkDigest: StreamChunkDigest = {
-                get count() {
-                    return chunk_index;
-                },
-                get length() {
-                    return chunkLength;
-                },
-                sha256() {
-                    return (chunkDigestHex ??= chunkHash.digest('hex'));
-                }
-            };
             const started = Date.now();
             try {
                 const remaining = deadline - Date.now();
                 const call = Promise.resolve(
                     client.post_responses_stream(body, Math.min(config.timeout, remaining / 1000), {
                         signal: controller.signal,
-                        telemetry: stream,
-                        on_chunk(raw_stream_text, elapsed_seconds) {
-                            if (!acceptingChunks) return;
-                            // Chunks carry only what identifies them; sample metadata lives on the call record.
-                            try {
-                                journal.write({
-                                    type: 'stream_chunk',
-                                    sample_id,
-                                    call_id,
-                                    turn,
-                                    ...(retryPolicy ? { api_attempt: retry + 1 } : {}),
-                                    chunk_index,
-                                    elapsed_seconds,
-                                    raw_stream_text
-                                });
-                                chunk_index++;
-                                chunkLength += raw_stream_text.length;
-                                chunkHash.update(raw_stream_text);
-                            } catch (error) {
-                                journalFailed = true;
-                                throw error;
-                            }
-                        }
+                        telemetry: stream
                     })
                 );
                 const stopped = new Promise<GatewayResponse>(resolve => {
                     const stop = (name: string) => {
-                        acceptingChunks = false;
                         stream.termination = name === 'TimeoutError' ? 'timeout' : 'aborted';
                         controller.abort(new DOMException(name, name));
                         resolve([-1, (Date.now() - started) / 1000, {}, { exception: name }]);
@@ -456,12 +376,10 @@ export async function run_assessment_sample(
                 });
                 [status, duration, headers, raw, raw_response_text] = await Promise.race([call, stopped]);
             } catch (error) {
-                if (journalFailed) throw error;
                 status = -1;
                 duration = 0;
                 raw = { error: error_name(error) };
             } finally {
-                acceptingChunks = false;
                 if (deadlineTimer !== undefined) clearTimeout(deadlineTimer);
                 if (cancellationTimer !== undefined) clearInterval(cancellationTimer);
                 controller.abort();
@@ -484,7 +402,7 @@ export async function run_assessment_sample(
                 estimated_uncached_cost_usd: cost,
                 raw_response: payload,
                 stream: structuredClone(stream),
-                ...raw_text_evidence(raw_response_text, chunkDigest)
+                ...(typeof raw_response_text === 'string' && raw_response_text.length ? { raw_response_text } : {})
             });
             calls.push(call_id);
             elapsed += duration;
