@@ -637,3 +637,121 @@ test('task preview labels gateway-binding accounts as 自动分配 and single-pi
     expect(nodes.get('bench-task-detail').innerHTML).toContain('<span class="task-preview-chip-label">自动分配</span>');
     expect(nodes.get('bench-task-detail').innerHTML).toContain('<span class="task-preview-chip-label">team-a</span>');
 });
+
+test('task card surfaces channel badges, non-zero status pills, and channel-pod preview with progress fills', () => {
+    const { state, view, nodes } = fixture();
+    const multiChannelTask = {
+        id: 'ea058bae56394729aee044cb7c83e0e2',
+        status: 'running',
+        created_at: '2026-11-22T01:14:24Z',
+        plan: { run_count: 5, rounds: 3, sample_count: 180, run_concurrency: 2, sample_concurrency: 4 },
+        children: [
+            {
+                run_id: 'r-g-run',
+                target: {
+                    provider_id: 'google',
+                    model: 'google/gemini-4-neon',
+                    model_display_name: 'Gemini 4 Neon',
+                    account_ref: 'gateway-default',
+                    account_evidence: 'gateway_binding',
+                    thinking: 'high'
+                },
+                status: 'running',
+                sample_count: 36,
+                sample_status_counts: { completed: 18, running: 4, pending: 14 }
+            },
+            {
+                run_id: 'r-g-queue',
+                target: {
+                    provider_id: 'google',
+                    model: 'google/gemini-4-neon',
+                    model_display_name: 'Gemini 4 Neon',
+                    account_ref: 'gateway-default',
+                    account_evidence: 'gateway_binding',
+                    thinking: 'low'
+                },
+                status: 'queued',
+                sample_count: 36,
+                sample_status_counts: { pending: 36 }
+            },
+            {
+                run_id: 'r-or-fail',
+                target: {
+                    provider_id: 'openrouter',
+                    model: 'openrouter/gemini-4-neon',
+                    model_display_name: 'Gemini 4 Neon',
+                    account_ref: 'prod-key-2',
+                    account_evidence: 'gateway_account_binding',
+                    thinking: 'high'
+                },
+                status: 'failed',
+                sample_count: 36,
+                sample_status_counts: { completed: 12, api_failure: 4, pending: 20 }
+            },
+            {
+                run_id: 'r-rem-ok',
+                target: {
+                    provider_id: 'tokyo-node',
+                    model: 'tokyo-node/openai/gpt-5.2',
+                    model_display_name: 'GPT-5.2',
+                    account_ref: 'gateway-default',
+                    account_evidence: 'gateway_binding',
+                    remote_route: { namespace: 'openai', evidence: 'magpie_via' },
+                    thinking: 'high'
+                },
+                status: 'completed',
+                sample_count: 36,
+                sample_status_counts: { completed: 36 }
+            },
+            {
+                run_id: 'r-rem-int',
+                target: {
+                    provider_id: 'tokyo-node',
+                    model: 'tokyo-node/openai/gpt-5.2',
+                    model_display_name: 'GPT-5.2',
+                    account_ref: 'gateway-default',
+                    account_evidence: 'gateway_binding',
+                    remote_route: { namespace: 'openai', evidence: 'magpie_via' },
+                    thinking: 'medium'
+                },
+                status: 'interrupted',
+                sample_count: 36,
+                sample_status_counts: { completed: 10, interrupted: 8, pending: 18 }
+            }
+        ]
+    };
+    state.tasks = [multiChannelTask];
+    state.selectedTaskId = multiChannelTask.id;
+    state.selectedRunId = null;
+    state.taskDetail = multiChannelTask;
+    view.renderDetails();
+
+    const listHtml = nodes.get('bench-run-list').innerHTML;
+    expect(listHtml).toContain('class="task-card-channels"');
+    expect(listHtml).toContain('class="task-channel-badge is-running"');
+    expect(listHtml).toContain('class="task-channel-badge is-failed"');
+    expect(listHtml).toContain('class="task-channel-badge is-interrupted"');
+    expect(listHtml).toContain('prod-key-2');
+    expect(listHtml).toContain('tokyo-node / openai');
+    expect(listHtml).toContain('总计 5');
+    expect(listHtml).toContain('运行中 1');
+    expect(listHtml).toContain('API 失败 1');
+    expect(listHtml).toContain('已中断 1');
+    expect(listHtml).not.toContain('已取消 0');
+    expect(listHtml).not.toContain('未完成 0');
+    expect(listHtml).toContain('class="task-progress-bar"');
+
+    const detailHtml = nodes.get('bench-task-detail').innerHTML;
+    expect(detailHtml).toContain('class="channel-pod is-running"');
+    expect(detailHtml).toContain('class="channel-pod is-failed"');
+    expect(detailHtml).toContain('class="channel-pod is-interrupted"');
+    expect(detailHtml).toContain('账号 prod-key-2');
+    expect(detailHtml).toContain('自动分配');
+    expect(detailHtml).toContain('远端路由');
+    expect(detailHtml).toContain('style="--pct:50%"');
+    expect(detailHtml).toContain('class="task-preview-chip-fill"');
+    expect(detailHtml).toContain('class="task-preview-chip is-queued"');
+    expect(detailHtml).toContain('× 失败');
+    expect(detailHtml).toContain('‖ 中断');
+    expect(detailHtml).toContain('✓ 完成');
+});

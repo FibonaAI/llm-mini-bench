@@ -2,12 +2,15 @@
   const taskCard=page.locator('[data-bench-task-id="mock-task-1"]');
   const outerCardText=await taskCard.innerText();
   require(outerCardText.includes('same-model'),'Outer task card must show which models were run: '+outerCardText);
+  require(await taskCard.locator('.task-channel-badge').count()>=1,'Outer task card must surface channel badges');
+  require(await page.locator('.history-entry .task-progress-bar').first().count()===1,'Task card must render a status progress bar');
   await taskCard.click();require(await taskCard.getAttribute('aria-expanded')==='false'&&await page.locator('#bench-task-section').count()===0,'Same task card must collapse');
   require(await taskCard.evaluate(node=>!!document.getElementById(node.getAttribute('aria-controls'))),'Collapsed task lost its associated disclosure slot');
   const refreshClosed=page.waitForResponse(response=>new URL(response.url()).pathname==='/api/bench/tasks');
   await page.evaluate(()=>window.dispatchEvent(new Event('mini-bench:refresh')));await refreshClosed;
   require(await taskCard.getAttribute('aria-expanded')==='false','Refresh reopened an explicitly collapsed task');
   await taskCard.focus();await taskCard.press('Enter');await page.locator('#bench-task-section').waitFor();
+  require(await page.locator('#bench-task-detail .task-preview .channel-pod').count()>=1,'Task preview must group runs inside channel pods');
   require(await page.locator('#bench-task-detail .task-preview [data-preview-run-id]').count()===7,'Task preview must render compact clickable run chips');
   require(!(await page.locator('#bench-task-detail details.task-all-runs').evaluate(node=>node.open)),'Full child run list must stay collapsed by default behind the task preview');
   await page.locator('#bench-task-detail [data-preview-run-id="mock-task-1-run-0"]').click();

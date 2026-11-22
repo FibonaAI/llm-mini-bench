@@ -66,6 +66,17 @@ export function createTaskHistoryView({ app, state, retryRequests, retrying }) {
     if (record.status === 'completed') return hasTimeoutSamples(record) ? 'is-timeout' : 'is-completed';
     return '';
   };
+  const statusTone = record => statusBadgeClass(record).replace(/^is-/, '') || 'queued';
+  const shortId = id => (typeof id === 'string' && id.length > 14 ? id.slice(0, 8) : String(id || ''));
+  const shortThink = target => (target?.thinking === 'default' ? '默认' : target?.thinking || '未记录');
+  const shortAccount = target => (target?.account_evidence === 'gateway_binding' ? '自动分配' : target?.account_ref || '未记录');
+  const isPinnedAccount = target => Boolean(target?.account_ref) && target?.account_evidence !== 'gateway_binding';
+  const CHANNEL_LOCAL_ICON =
+    '<svg class="channel-pod-svg" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="2.5" y="2.5" width="11" height="4.5" rx="1.2"/><rect x="2.5" y="9" width="11" height="4.5" rx="1.2"/><path d="M5 4.75h.01M5 11.25h.01"/></svg>';
+  const CHANNEL_REMOTE_ICON =
+    '<svg class="channel-pod-svg" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="8" cy="8" r="5.5"/><path d="M2.8 8h10.4M8 2.5a8 8 0 0 1 0 11M8 2.5a8 8 0 0 0 0 11"/></svg>';
+  const TIMEOUT_CHIP_ICON =
+    '<svg class="chip-state-svg" viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="7" cy="7" r="5.2"/><path d="M7 4.2V7l1.9 1.2"/></svg>';
   const retryCopy = (record, confirming) => {
     const counts = { api: 0, timeout: 0, interrupted: 0, cancelled: 0 };
     const collect = item => {
@@ -141,12 +152,6 @@ export function createTaskHistoryView({ app, state, retryRequests, retrying }) {
     const namespace = remoteRouteNamespace(target);
     if (namespace) return target?.provider_id ? `${target.provider_id} / ${namespace}` : namespace;
     return target?.provider_name || target?.provider_id || '渠道未记录';
-  };
-  const sharedChannelPrefix = channels => {
-    const unique = [...new Set(channels.filter(Boolean))];
-    if (unique.length <= 1 || !unique.every(ch => ch.includes(' / '))) return '';
-    const prefix = unique[0].slice(0, unique[0].indexOf(' / ') + 3);
-    return unique.every(ch => ch.startsWith(prefix)) ? prefix : '';
   };
   const taskHeadline = record => {
     const children = Array.isArray(record.children) ? record.children : [];
@@ -387,38 +392,172 @@ export function createTaskHistoryView({ app, state, retryRequests, retrying }) {
                 kind === 'task'
                   ? headline.text
                   : `${record.execution_kind === 'calibration-import-v1' ? '校准导入' : '旧运行'} · ${targets.map(targetLabel).join('、') || record.id}`;
-              const taskMetaPrefix =
+              const channelEntries =
                 kind === 'task'
-                  ? `${record.plan?.run_count ?? children.length} 个独立运行 · ${headline.modelCount || new Set(targets.map(targetModelName)).size} 个模型 · ${record.plan?.rounds ?? '?'} 轮 · `
-                  : '';
-              const counts = kind === 'task' ? runCounts(children) : '';
-              return `<article class="history-entry"><button class="run-list-item ${selected ? 'is-selected' : ''}" type="button" aria-expanded="${selected}" aria-controls="history-${kind === 'task' ? 'task' : 'run'}-${escapeHtml(record.id)}" data-history-focus="${escapeHtml(kind + ':' + record.id)}" ${kind === 'task' ? 'data-bench-task-id' : 'data-bench-run-id'}="${escapeHtml(record.id)}"><span><strong${headline?.title ? ` title="${escapeHtml(headline.title)}"` : ''}>${escapeHtml(title)}</strong><small>${escapeHtml(taskMetaPrefix)}${escapeHtml(formatDate(record.created_at))} · ${progress.done}/${progress.total} 样本已结束 · ${escapeHtml(record.id)}${kind === 'legacy' ? (record.execution_kind === 'calibration-import-v1' ? ' · 只读，不可重试' : ' · 未归入新任务') : ''}${qualityLabel(record) ? ' · ' + escapeHtml(qualityLabel(record)) : ''}</small></span><span class="run-list-status ${statusBadgeClass(record)}">${escapeHtml(recordStatusLabel(record))}</span></button>${counts ? `<p class="task-status-counts">${counts}</p>` : ''}<div id="history-${kind === 'task' ? 'task' : 'run'}-${escapeHtml(record.id)}" data-inline-${kind === 'task' ? 'task' : 'run'}="${escapeHtml(record.id)}"></div></article>`;
+                  ? children.length
+                    ? children
+                    : targets.map(target => ({ target, status: record.status }))
+                  : targets
+                      .slice(0, 1)
+                      .filter(target => Boolean(target?.provider_id || target?.provider_name || remoteRouteNamespace(target)))
+                      .map(target => ({ target, status: record.status }));
+              const channelGroups = groupByChannel(channelEntries);
+              const channelBadges = renderChannelBadges(channelGroups, kind === 'task', statusTone(record));
+              const modelCount = headline?.modelCount || new Set(targets.map(targetModelName)).size;
+              const channelCount = channelGroups.length;
+              const taskMetaParts =
+                kind === 'task'
+                  ? [
+                      `${record.plan?.run_count ?? children.length} 个独立运行`,
+                      modelCount ? `${modelCount} 个模型` : '',
+                      channelCount ? `${channelCount} 个渠道` : '',
+                      `${record.plan?.rounds ?? '?'} 轮`,
+                      formatDate(record.created_at)
+                    ].filter(Boolean)
+                  : [
+                      formatDate(record.created_at),
+                      `${progress.done}/${progress.total} 样本已结束`,
+                      record.execution_kind === 'calibration-import-v1' ? '只读，不可重试' : '未归入新任务'
+                    ].filter(Boolean);
+              const quality = qualityLabel(record);
+              if (quality) taskMetaParts.push(quality);
+              const idTag = `<code class="task-id-tag" title="${escapeHtml(record.id)}">${escapeHtml(shortId(record.id))}</code>`;
+              const counts = kind === 'task' ? renderTaskCountsBar(record, children, progress) : '';
+              const recordTone = statusTone(record);
+              return `<article class="history-entry${selected ? ' is-expanded' : ''}"><button class="run-list-item ${selected ? 'is-selected' : ''}" type="button" aria-expanded="${selected}" aria-controls="history-${kind === 'task' ? 'task' : 'run'}-${escapeHtml(record.id)}" data-history-focus="${escapeHtml(kind + ':' + record.id)}" ${kind === 'task' ? 'data-bench-task-id' : 'data-bench-run-id'}="${escapeHtml(record.id)}"><span class="run-list-main"><strong${headline?.title ? ` title="${escapeHtml(headline.title)}"` : ''}>${escapeHtml(title)}</strong>${channelBadges}<small>${taskMetaParts.map(escapeHtml).join(' · ')} · ${idTag}</small></span><span class="run-list-status ${statusBadgeClass(record)}"><i class="task-dot is-${recordTone}" aria-hidden="true"></i>${escapeHtml(recordStatusLabel(record))}</span></button>${counts ? `<div class="task-status-counts">${counts}</div>` : ''}<div id="history-${kind === 'task' ? 'task' : 'run'}-${escapeHtml(record.id)}" data-inline-${kind === 'task' ? 'task' : 'run'}="${escapeHtml(record.id)}"></div></article>`;
             })
             .join('')
         : `<div class="empty">${entries.length ? '没有匹配的任务，请调整搜索或状态筛选。' : '暂无任务。选择目标并点击“开始评测”，即可创建第一个任务。'}</div>`
     );
   }
-  function runCounts(children) {
-    const count = status => children.filter(child => child.status === status).length;
-    const timeouts = children.reduce((sum, child) => sum + (child.sample_status_counts?.timeout ?? 0), 0);
-    return (
-      '总计 ' +
-      children.length +
-      ' · 运行中 ' +
-      (count('running') + count('cancelling')) +
-      ' · 排队 ' +
-      count('queued') +
-      ' · 完成 ' +
-      count('completed') +
-      (timeouts ? '（含 ' + timeouts + ' 超时样本）' : '') +
-      ' · 未完成 ' +
-      count('incomplete') +
-      ' · API 失败 ' +
-      count('failed') +
-      ' · 取消 ' +
-      count('cancelled') +
-      (count('interrupted') ? ' · 中断 ' + count('interrupted') : '')
-    );
+  function groupByChannel(entries) {
+    const groups = [];
+    const byChannel = new Map();
+    for (const entry of entries) {
+      const target = entry?.target || {};
+      const name = targetShortChannel(target);
+      if (!byChannel.has(name)) {
+        const group = { name, children: [] };
+        byChannel.set(name, group);
+        groups.push(group);
+      }
+      byChannel.get(name).children.push(entry);
+    }
+    return groups;
+  }
+  function summarizeChildren(children) {
+    const counts = { running: 0, completed: 0, queued: 0, timeout: 0, incomplete: 0, failed: 0, interrupted: 0, cancelled: 0 };
+    const segments = { completed: 0, running: 0, timeout: 0, failed: 0, interrupted: 0, cancelled: 0 };
+    let sampleDone = 0;
+    let sampleTotal = 0;
+    let timeoutSamples = 0;
+    for (const child of children) {
+      const tone = childPreviewTone(child);
+      const progress = sampleProgress(child);
+      sampleDone += progress.done;
+      sampleTotal += progress.total;
+      timeoutSamples += child.sample_status_counts?.timeout ?? 0;
+      if (child.status === 'running' || child.status === 'cancelling') counts.running++;
+      else if (child.status === 'queued') counts.queued++;
+      else if (child.status === 'failed') counts.failed++;
+      else if (child.status === 'interrupted') counts.interrupted++;
+      else if (child.status === 'cancelled') counts.cancelled++;
+      else if (child.status === 'incomplete') counts.incomplete++;
+      else if (child.status === 'timeout' || (child.status === 'completed' && hasTimeoutSamples(child))) counts.timeout++;
+      else if (child.status === 'completed') counts.completed++;
+      if (Object.hasOwn(segments, tone) && progress.done > 0) segments[tone] += progress.done;
+    }
+    return { counts, segments, sampleDone, sampleTotal, timeoutSamples };
+  }
+  function channelHealthTone(children, fallbackTone = 'queued') {
+    if (!children.length) return fallbackTone;
+    const { counts } = summarizeChildren(children);
+    if (counts.failed > 0) return 'failed';
+    if (counts.timeout > 0 || counts.incomplete > 0) return 'timeout';
+    if (counts.interrupted > 0) return 'interrupted';
+    if (counts.running > 0) return 'running';
+    if (counts.completed === children.length) return 'completed';
+    if (counts.queued > 0) return 'queued';
+    if (counts.cancelled > 0) return 'cancelled';
+    return fallbackTone;
+  }
+  function describeChannelAccounts(children) {
+    const distinct = [...new Set(children.map(child => shortAccount(child.target)))];
+    const pinned = [...new Set(children.filter(child => isPinnedAccount(child.target)).map(child => child.target.account_ref))];
+    const allPinned = children.length > 0 && children.every(child => isPinnedAccount(child.target));
+    const singlePinned = allPinned && pinned.length === 1 ? pinned[0] : '';
+    const podBadge = singlePinned
+      ? `账号 ${singlePinned}`
+      : distinct.length === 1
+        ? distinct[0]
+        : distinct.length > 1
+          ? `${distinct.length} 个账号`
+          : '';
+    return { distinct, singlePinned, podBadge };
+  }
+  function renderProgressBar(segments, total, compact = false) {
+    const order = ['completed', 'running', 'timeout', 'failed', 'interrupted', 'cancelled'];
+    let used = 0;
+    const parts =
+      total > 0
+        ? order
+            .map(tone => {
+              const value = segments[tone] || 0;
+              if (value <= 0) return '';
+              const rawPct = Math.min(100 - used, (value / total) * 100);
+              if (rawPct <= 0) return '';
+              used += rawPct;
+              return `<span class="task-progress-seg is-${tone}" style="width:${rawPct.toFixed(2)}%"></span>`;
+            })
+            .filter(Boolean)
+            .join('')
+        : '';
+    return `<span class="task-progress-bar${compact ? ' is-compact' : ''}" aria-hidden="true">${parts}</span>`;
+  }
+  function renderChannelBadges(groups, showCount, fallbackTone) {
+    if (!groups.length) return '';
+    const maxVisible = groups.length > 5 ? 4 : groups.length;
+    const shown = groups.slice(0, maxVisible);
+    const hidden = groups.slice(maxVisible);
+    const badges = shown
+      .map(group => {
+        const tone = channelHealthTone(group.children, fallbackTone);
+        const { singlePinned } = describeChannelAccounts(group.children);
+        const isRemote = group.children.some(child => Boolean(remoteRouteNamespace(child.target)));
+        return `<span class="task-channel-badge is-${tone}"><i class="task-dot is-${tone}" aria-hidden="true"></i><span class="task-channel-name">${escapeHtml(group.name)}</span>${singlePinned ? `<span class="task-channel-tag">${escapeHtml(singlePinned)}</span>` : ''}${isRemote ? '<span class="task-channel-tag">远端</span>' : ''}${showCount ? `<span class="task-channel-count">${group.children.length} 运行</span>` : ''}</span>`;
+      })
+      .join('');
+    const overflow = hidden.length
+      ? `<span class="task-channel-badge is-more" title="${escapeHtml(hidden.map(group => `${group.name} (${group.children.length})`).join('、'))}">+${hidden.length} 个渠道</span>`
+      : '';
+    return `<span class="task-card-channels">${badges}${overflow}</span>`;
+  }
+  function renderTaskCountsBar(record, children, progress) {
+    if (!children.length) return '';
+    const sum = summarizeChildren(children);
+    const { counts, timeoutSamples } = sum;
+    const pills = [`<span class="task-count-pill is-total">总计 ${children.length}</span>`];
+    const pushPill = (tone, label) => {
+      pills.push(
+        `<span class="task-count-pill is-${tone}"><i class="task-dot is-${tone}" aria-hidden="true"></i>${escapeHtml(label)}</span>`
+      );
+    };
+    if (counts.running) pushPill('running', `运行中 ${counts.running}`);
+    if (counts.completed) pushPill('completed', `已完成 ${counts.completed}`);
+    if (counts.queued) pushPill('queued', `排队 ${counts.queued}`);
+    if (counts.timeout) pushPill('timeout', `超时 ${counts.timeout}${timeoutSamples ? `（${timeoutSamples} 样本）` : ''}`);
+    if (counts.incomplete) pushPill('timeout', `未完成 ${counts.incomplete}`);
+    if (counts.failed) pushPill('failed', `API 失败 ${counts.failed}`);
+    if (counts.interrupted) pushPill('interrupted', `已中断 ${counts.interrupted}`);
+    if (counts.cancelled) pushPill('cancelled', `已取消 ${counts.cancelled}`);
+    const total = progress?.total ?? record.plan?.sample_count ?? sum.sampleTotal;
+    const done = progress?.done ?? sum.sampleDone;
+    const pct = total > 0 ? Math.min(100, Math.round((done / total) * 100)) : 0;
+    const progressHtml =
+      total > 0
+        ? `<span class="task-count-progress">${renderProgressBar(sum.segments, total, false)}<span class="task-progress-readout"><strong>${done}</strong>/${total} (${pct}%)</span></span>`
+        : '';
+    return `<span class="task-count-pills">${pills.join('')}</span>${progressHtml}`;
   }
   function childPreviewTone(child) {
     if (!child) return 'queued';
@@ -431,106 +570,108 @@ export function createTaskHistoryView({ app, state, retryRequests, retrying }) {
     if (child.status === 'completed') return hasTimeoutSamples(child) ? 'timeout' : 'completed';
     return 'queued';
   }
-  function childPreviewStateText(child, progress) {
+  function childPreviewStateHtml(child, progress) {
     if (child.status === 'queued') return '排队';
     if (child.status === 'running' || child.status === 'cancelling') return `${progress.done}/${progress.total}`;
-    if (child.status === 'failed') return '失败';
-    if (child.status === 'interrupted') return '中断';
-    if (child.status === 'cancelled') return '取消';
+    if (child.status === 'failed') return '× 失败';
+    if (child.status === 'interrupted') return '‖ 中断';
+    if (child.status === 'cancelled') return '已取消';
     if (child.status === 'incomplete') return '未完成';
     if (child.status === 'completed') {
       const timeouts = child.sample_status_counts?.timeout ?? 0;
-      if (timeouts > 0) return `${timeouts}超时`;
-      return qualityLabel(child) ? '✓·注' : '✓';
+      if (timeouts > 0) return `${TIMEOUT_CHIP_ICON}${timeouts} 超时`;
+      return qualityLabel(child) ? '✓ · 注' : '✓ 完成';
     }
-    return statusText(child.status);
+    return escapeHtml(statusText(child.status));
   }
   function renderTaskPreview(task, visibleChildren) {
     if (!visibleChildren.length) return '<div class="empty">没有匹配的子运行。</div>';
-    const groups = [];
-    const byModel = new Map();
-    for (const child of visibleChildren) {
-      const modelName = targetModelName(child.target);
-      if (!byModel.has(modelName)) {
-        const group = { modelName, children: [] };
-        byModel.set(modelName, group);
-        groups.push(group);
-      }
-      byModel.get(modelName).children.push(child);
-    }
-    const prefix = sharedChannelPrefix(visibleChildren.map(child => targetShortChannel(child.target)));
-    const shortChannel = target => {
-      const raw = targetShortChannel(target);
-      return prefix && raw.startsWith(prefix) && raw.length > prefix.length ? raw.slice(prefix.length) : raw;
-    };
-    const shortThink = target => (target?.thinking === 'default' ? '默认' : target?.thinking || '未记录');
-    const shortAccount = target => (target?.account_evidence === 'gateway_binding' ? '自动分配' : target?.account_ref || '未记录');
-    const isPinnedAccount = target => Boolean(target?.account_ref) && target?.account_evidence !== 'gateway_binding';
+    const channelPods = groupByChannel(visibleChildren);
     const presentTones = new Set(visibleChildren.map(childPreviewTone));
-    const rows = groups
-      .map((group, index) => {
-        const channels = [...new Set(group.children.map(child => shortChannel(child.target)))];
-        const thinkings = [...new Set(group.children.map(child => shortThink(child.target)))];
-        const accountsByChannel = new Map();
-        for (const child of group.children) {
-          const ch = shortChannel(child.target);
-          if (!accountsByChannel.has(ch)) accountsByChannel.set(ch, new Set());
-          accountsByChannel.get(ch).add(shortAccount(child.target));
+    let slotIndex = 0;
+    const podsHtml = channelPods
+      .map(pod => {
+        const podSum = summarizeChildren(pod.children);
+        const podTone = channelHealthTone(pod.children);
+        const isRemote = pod.children.some(child => Boolean(remoteRouteNamespace(child.target)));
+        const { distinct: podAccounts, podBadge } = describeChannelAccounts(pod.children);
+        const statusBits = [
+          podSum.counts.running ? `运行中 ${podSum.counts.running}` : '',
+          podSum.counts.completed ? `完成 ${podSum.counts.completed}` : '',
+          podSum.counts.timeout ? `超时 ${podSum.counts.timeout}` : '',
+          podSum.counts.incomplete ? `未完成 ${podSum.counts.incomplete}` : '',
+          podSum.counts.failed ? `失败 ${podSum.counts.failed}` : '',
+          podSum.counts.interrupted ? `中断 ${podSum.counts.interrupted}` : '',
+          podSum.counts.queued ? `排队 ${podSum.counts.queued}` : '',
+          podSum.counts.cancelled ? `取消 ${podSum.counts.cancelled}` : ''
+        ]
+          .filter(Boolean)
+          .join(' · ');
+        const modelGroups = [];
+        const byModel = new Map();
+        for (const child of pod.children) {
+          const modelName = targetModelName(child.target);
+          if (!byModel.has(modelName)) {
+            const group = { modelName, children: [] };
+            byModel.set(modelName, group);
+            modelGroups.push(group);
+          }
+          byModel.get(modelName).children.push(child);
         }
-        const accounts = [...new Set(group.children.map(child => shortAccount(child.target)))];
-        const singleChannel = channels.length === 1 && group.children.length > 1;
-        const singleAccount = accounts.length === 1 && group.children.length > 1;
-        const singleThinking = thinkings.length === 1 && group.children.length > 1 && (channels.length > 1 || accounts.length > 1);
-        const doneRuns = group.children.filter(child => child.status === 'completed').length;
-        const failedRuns = group.children.filter(child => child.status === 'failed').length;
-        const runningRuns = group.children.filter(child => child.status === 'running' || child.status === 'cancelling').length;
-        const sampleDone = group.children.reduce((sum, child) => sum + sampleProgress(child).done, 0);
-        const sampleTotal = group.children.reduce((sum, child) => sum + sampleProgress(child).total, 0);
-        const firstTarget = group.children[0].target;
-        const singleChannelContext = singleChannel
-          ? singleAccount && isPinnedAccount(firstTarget)
-            ? `${targetShortChannel(firstTarget)} / ${firstTarget.account_ref}`
-            : targetShortChannel(firstTarget)
-          : '';
-        const contextParts = [
-          singleChannelContext,
-          singleThinking ? `Thinking ${thinkings[0]}` : '',
-          `完成 ${doneRuns}/${group.children.length}`,
-          runningRuns ? `运行中 ${runningRuns}` : '',
-          failedRuns ? `失败 ${failedRuns}` : '',
-          `${sampleDone}/${sampleTotal} 样本`
-        ].filter(Boolean);
-        const slotId = `history-preview-run-${task.id}-${index}`;
-        const chips = group.children
-          .map(child => {
-            const target = child.target || {},
-              progress = sampleProgress(child),
-              tone = childPreviewTone(child),
-              selected = child.run_id === state.selectedRunId,
-              ch = shortChannel(target),
-              th = shortThink(target),
-              acc = shortAccount(target),
-              showAcc = (accountsByChannel.get(ch)?.size ?? 0) > 1 || (!singleChannel && isPinnedAccount(target)),
-              origin = singleChannel ? (showAcc ? acc : '') : showAcc ? `${ch} / ${acc}` : ch,
-              budget = budgetLabel(child.budget, child.status),
-              quality = qualityLabel(child);
-            const label = origin && !singleThinking ? `${origin} · ${th}` : origin || th;
-            const stateLabel = childPreviewStateText(child, progress);
-            const tooltip = [
-              targetLabel(target),
-              targetIdentity(target),
-              recordStatusLabel(child),
-              `${progress.done}/${progress.total} 样本`,
-              budget,
-              quality,
-              child.retryable_samples > 0 && !inProgress(child) ? `${child.retryable_samples} 个可重试` : ''
-            ]
-              .filter(Boolean)
-              .join(' · ');
-            return `<button type="button" class="task-preview-chip is-${tone}${selected ? ' is-selected' : ''}" data-preview-run-id="${escapeHtml(child.run_id)}" data-history-focus="preview-run:${escapeHtml(child.run_id)}" aria-expanded="${selected}" aria-controls="${escapeHtml(slotId)}" title="${escapeHtml(tooltip)}"><span class="task-preview-chip-label">${escapeHtml(label)}</span><span class="task-preview-chip-state">${escapeHtml(stateLabel)}</span></button>`;
+        const modelRows = modelGroups
+          .map(group => {
+            const currentSlot = slotIndex++;
+            const slotId = `history-preview-run-${task.id}-${currentSlot}`;
+            const accounts = [...new Set(group.children.map(child => shortAccount(child.target)))];
+            const thinkings = [...new Set(group.children.map(child => shortThink(child.target)))];
+            const multiAccount = accounts.length > 1;
+            const singleThinking = thinkings.length === 1 && multiAccount;
+            const groupSum = summarizeChildren(group.children);
+            const doneRuns = group.children.filter(child => child.status === 'completed').length;
+            const contextParts = [
+              !multiAccount && podAccounts.length > 1 && accounts[0] ? accounts[0] : '',
+              `${groupSum.sampleDone}/${groupSum.sampleTotal} 样本`,
+              `完成 ${doneRuns}/${group.children.length}`,
+              groupSum.counts.running ? `运行中 ${groupSum.counts.running}` : '',
+              groupSum.counts.timeout ? `超时 ${groupSum.counts.timeout}` : '',
+              groupSum.counts.failed ? `失败 ${groupSum.counts.failed}` : '',
+              groupSum.counts.interrupted ? `中断 ${groupSum.counts.interrupted}` : ''
+            ].filter(Boolean);
+            const chips = group.children
+              .map(child => {
+                const target = child.target || {},
+                  progress = sampleProgress(child),
+                  tone = childPreviewTone(child),
+                  selected = child.run_id === state.selectedRunId,
+                  acc = shortAccount(target),
+                  th = shortThink(target),
+                  budget = budgetLabel(child.budget, child.status),
+                  quality = qualityLabel(child);
+                const label = multiAccount ? (singleThinking ? acc : `${acc} · ${th}`) : th;
+                const stateHtml = childPreviewStateHtml(child, progress);
+                const pct = progress.total > 0 ? Math.min(100, Math.round((progress.done / progress.total) * 100)) : 0;
+                const tooltip = [
+                  targetLabel(target),
+                  targetIdentity(target),
+                  recordStatusLabel(child),
+                  `${progress.done}/${progress.total} 样本`,
+                  budget,
+                  quality,
+                  child.retryable_samples > 0 && !inProgress(child) ? `${child.retryable_samples} 个可重试` : ''
+                ]
+                  .filter(Boolean)
+                  .join(' · ');
+                const runningDecor =
+                  tone === 'running'
+                    ? '<span class="task-preview-chip-fill" aria-hidden="true"></span><span class="task-preview-chip-track" aria-hidden="true"></span><i class="task-dot is-running is-pulse" aria-hidden="true"></i>'
+                    : '';
+                return `<button type="button" class="task-preview-chip is-${tone}${selected ? ' is-selected' : ''}"${tone === 'running' ? ` style="--pct:${pct}%"` : ''} data-preview-run-id="${escapeHtml(child.run_id)}" data-history-focus="preview-run:${escapeHtml(child.run_id)}" aria-expanded="${selected}" aria-controls="${escapeHtml(slotId)}" title="${escapeHtml(tooltip)}">${runningDecor}<span class="task-preview-chip-label">${escapeHtml(label)}</span><span class="task-preview-chip-state">${stateHtml}</span></button>`;
+              })
+              .join('');
+            return `<div class="task-preview-group"><div class="task-preview-head"><strong>${escapeHtml(group.modelName)}</strong><span class="task-preview-stats">${escapeHtml(contextParts.join(' · '))}</span></div><div class="task-preview-runs">${chips}</div><div id="${escapeHtml(slotId)}" class="task-preview-slot" data-preview-model-slot="${currentSlot}" data-preview-run-ids="${escapeHtml(group.children.map(child => child.run_id).join(','))}"></div></div>`;
           })
           .join('');
-        return `<div class="task-preview-group"><div class="task-preview-head"><strong>${escapeHtml(group.modelName)}</strong><span class="task-preview-stats">${escapeHtml(contextParts.join(' · '))}</span></div><div class="task-preview-runs">${chips}</div><div id="${escapeHtml(slotId)}" class="task-preview-slot" data-preview-model-slot="${index}" data-preview-run-ids="${escapeHtml(group.children.map(child => child.run_id).join(','))}"></div></div>`;
+        return `<section class="channel-pod is-${podTone}" aria-label="${escapeHtml(`渠道 ${pod.name}`)}"><header class="channel-pod-head"><div class="channel-pod-identity"><span class="channel-pod-icon">${isRemote ? CHANNEL_REMOTE_ICON : CHANNEL_LOCAL_ICON}</span><strong class="channel-pod-name">${escapeHtml(pod.name)}</strong>${podBadge ? `<span class="channel-pod-tag">${escapeHtml(podBadge)}</span>` : ''}${isRemote ? '<span class="channel-pod-tag is-remote">远端路由</span>' : ''}</div><div class="channel-pod-summary">${statusBits ? `<span class="channel-pod-status is-${podTone}"><i class="task-dot is-${podTone}" aria-hidden="true"></i>${escapeHtml(statusBits)}</span>` : ''}${podSum.sampleTotal > 0 ? `<span class="channel-pod-progress">${renderProgressBar(podSum.segments, podSum.sampleTotal, true)}<span class="channel-pod-count">${podSum.sampleDone}/${podSum.sampleTotal}</span></span>` : ''}</div></header><div class="channel-pod-body">${modelRows}</div></section>`;
       })
       .join('');
     const legend = [
@@ -543,9 +684,11 @@ export function createTaskHistoryView({ app, state, retryRequests, retrying }) {
       ['cancelled', '已取消']
     ]
       .filter(([tone]) => presentTones.has(tone))
-      .map(([tone, label]) => `<span class="task-preview-legend-item"><i class="task-preview-swatch is-${tone}"></i>${label}</span>`)
+      .map(
+        ([tone, label]) => `<span class="task-preview-legend-item"><i class="task-dot is-${tone}" aria-hidden="true"></i>${label}</span>`
+      )
       .join('');
-    return `<div class="task-preview" aria-label="任务按模型预览">${rows}</div><p class="task-preview-legend">${legend}<span class="muted">点击运行标签查看样本详情</span></p>`;
+    return `<div class="task-preview" aria-label="任务按渠道与模型预览">${podsHtml}</div><p class="task-preview-legend">${legend}<span class="muted">点击运行标签查看样本详情</span></p>`;
   }
   function taskCostLabel(children) {
     let total = 0,
@@ -589,13 +732,11 @@ export function createTaskHistoryView({ app, state, retryRequests, retrying }) {
     element('bench-retry-task').textContent = retrying.has(`tasks:${task.id}`)
       ? '正在提交重试…'
       : retryCopy(task, retryRequests.has(`tasks:${task.id}`));
-    const totalDone = children.reduce((sum, child) => sum + sampleProgress(child).done, 0);
-    const totalSamples = plan.sample_count ?? children.reduce((sum, child) => sum + sampleProgress(child).total, 0);
     const totalCost = taskCostLabel(children);
     const allRunsKey = escapeHtml(`${task.id}:all-runs`);
     replaceHistoryMarkup(
       element('bench-task-detail'),
-      `${retryRequests.has(`tasks:${task.id}`) && !retrying.has(`tasks:${task.id}`) ? `<p class="task-detail-note">待确认：仅重试失败、超时、中断或已取消样本，保留已完成结果；再次点击右上角“${escapeHtml(taskConfirmLabel)}”后开始。</p>` : ''}<div class="run-detail-meta"><span>任务 <strong>${escapeHtml(task.id)}</strong></span><span>状态 <strong>${escapeHtml(recordStatusLabel(task))}</strong></span><span>独立运行 <strong>${children.length}</strong></span><span>样本进度 <strong>${totalDone}/${escapeHtml(totalSamples)}</strong></span>${plan.rounds ? `<span>轮数 <strong>${escapeHtml(plan.rounds)}</strong></span>` : ''}<span>运行并发 <strong>${escapeHtml(plan.run_concurrency ?? '未记录')}</strong></span><span>每运行样本并发 <strong>${escapeHtml(plan.sample_concurrency ?? '未记录')}</strong></span>${totalCost ? `<span>估算费用 <strong>${escapeHtml(totalCost)}</strong></span>` : ''}</div>${filterChildren && visibleChildren.length < children.length ? `<p class="task-detail-note">已按搜索“${escapeHtml(rawQuery)}”筛选：仅显示 ${visibleChildren.length} / ${children.length} 个匹配子运行。</p>` : ''}${renderTaskPreview(task, visibleChildren)}<details class="raw-block task-all-runs" data-history-disclosure="${allRunsKey}"><summary data-history-focus="${allRunsKey}">全部 ${visibleChildren.length} 个独立运行列表${filterChildren && visibleChildren.length < children.length ? `（共 ${children.length} 个）` : ''}</summary><div class="task-child-list">${visibleChildren
+      `${retryRequests.has(`tasks:${task.id}`) && !retrying.has(`tasks:${task.id}`) ? `<p class="task-detail-note">待确认：仅重试失败、超时、中断或已取消样本，保留已完成结果；再次点击右上角“${escapeHtml(taskConfirmLabel)}”后开始。</p>` : ''}<div class="run-detail-meta">${plan.rounds ? `<span>轮数 <strong>${escapeHtml(plan.rounds)}</strong></span>` : ''}<span>并发 <strong>${escapeHtml(plan.run_concurrency ?? '未记录')} 运行 × ${escapeHtml(plan.sample_concurrency ?? '未记录')} 样本</strong></span>${totalCost ? `<span>估算费用 <strong>${escapeHtml(totalCost)}</strong></span>` : ''}<span>任务 ID <code class="task-meta-id">${escapeHtml(task.id)}</code></span></div>${filterChildren && visibleChildren.length < children.length ? `<p class="task-detail-note">已按搜索“${escapeHtml(rawQuery)}”筛选：仅显示 ${visibleChildren.length} / ${children.length} 个匹配子运行。</p>` : ''}${renderTaskPreview(task, visibleChildren)}<details class="raw-block task-all-runs" data-history-disclosure="${allRunsKey}"><summary data-history-focus="${allRunsKey}">全部 ${visibleChildren.length} 个独立运行列表${filterChildren && visibleChildren.length < children.length ? `（共 ${children.length} 个）` : ''}</summary><div class="task-child-list">${visibleChildren
         .map(child => {
           const target = child.target || {},
             progress = sampleProgress(child),
