@@ -115,7 +115,11 @@ function hydrateInspectorJson(node) {
 }
 
 function chartExclusionReason(record) {
-  return record.exclusionReason || (element('log-axis').checked && record.cost === 0 ? '零用量无法显示在对数轴；切换线性刻度可见' : null);
+  const axis = element('chart-axis').value;
+  return (
+    record.exclusionReason ||
+    (element('log-axis').checked && axis !== 'cost' && record.cost === 0 ? '零用量无法显示在对数轴；切换线性刻度可见' : null)
+  );
 }
 
 /** Optionally place usage-incomplete records at their known lower bound; strict metrics stay untouched. */
@@ -344,9 +348,15 @@ function renderObservations() {
   const records = matchingRecords();
   if (!records.some(record => record.id === state.selectedId)) state.selectedId = null;
   const log = element('log-axis').checked;
+  const axis = element('chart-axis').value;
+  const allowZero = !log || axis === 'cost';
   const plotted = records.filter(
     record =>
-      finite(record.score) && record.score >= 0 && record.score <= 100 && finite(record.cost) && (log ? record.cost > 0 : record.cost >= 0)
+      finite(record.score) &&
+      record.score >= 0 &&
+      record.score <= 100 &&
+      finite(record.cost) &&
+      (allowZero ? record.cost >= 0 : record.cost > 0)
   ).length;
   renderHistoryPicker();
   const modeLabel = { latest: '最新数据', all: '全部历史', selected: '指定记录' }[state.dataMode];
@@ -367,7 +377,7 @@ function renderObservations() {
     time: '颜色按记录的评测时间区分本地日期，使用多色调色板；日期颜色在全部已加载记录中固定，时间未记录用中性色'
   }[element('chart-color-by').value];
   element('analysis-method').textContent =
-    `均分 = 完整 ${app.taskCount || '全部'} 题、全部计划轮次的内容分等权平均 × 100（超时按 0 分计入完整完成，仍可重试）；横轴 = 累计估算 USD、输入与输出 tokens 总和或累计执行耗时 ÷ 轮数（每轮 ${app.taskCount || '全部'} 题）。仅绘制全部样本完成、分数与所选横轴指标齐全的记录。${colorDescription}，普通运行圆点、基线方块；最新实心、历史空心，时间未知用虚线边框；含异常项（样本超时、提交后异常中止、未调用 submit_answer 提交或用量不完整）的记录带橙色角标且不参与前沿。仅悬停、聚焦或选中时展开明确同批次、同渠道与账号、同一请求模型的不同可见 Thinking，不连接跨批次的最新记录。虚线前沿按当前可见点计算，不因 Thinking 协议不同而禁用。指令与工具检查独立报告，不计入均分；API 失败、取消、缺失不补零。零用量仅在线性刻度显示。未完成样本及执行限制可在任务详情中查阅。`;
+    `均分 = 完整 ${app.taskCount || '全部'} 题、全部计划轮次的内容分等权平均 × 100（超时按 0 分计入完整完成，仍可重试）；横轴 = 累计估算 USD、输入与输出 tokens 总和或累计执行耗时 ÷ 轮数（每轮 ${app.taskCount || '全部'} 题）。仅绘制全部样本完成、分数与所选横轴指标齐全的记录。${colorDescription}，普通运行圆点、基线方块；最新实心、历史空心，时间未知用虚线边框；含异常项（样本超时、提交后异常中止、未调用 submit_answer 提交或用量不完整）的记录带橙色角标且不参与前沿。仅悬停、聚焦或选中时展开明确同批次、同渠道与账号、同一请求模型的不同可见 Thinking，不连接跨批次的最新记录。虚线前沿按当前可见点计算，不因 Thinking 协议不同而禁用。指令与工具检查独立报告，不计入均分；API 失败、取消、缺失不补零。零费用记录绘制在坐标轴上，不计入前沿线；其余横轴零用量仅在线性刻度显示。未完成样本及执行限制可在任务详情中查阅。`;
   element('use-analysis').disabled = !records.length;
   chart.render(records, {
     taskCount: app.taskCount,

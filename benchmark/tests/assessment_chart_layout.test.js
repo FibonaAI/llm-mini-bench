@@ -63,6 +63,7 @@ test('Thinking lines never bridge channels, batches, accounts or duplicate level
     expect(thinkingSeries([...points, { ...points[0], id: 'duplicate' }])).toEqual([]);
     expect(
         scoreCostFrontier([
+            { cost: 0, score: 100 },
             { cost: 1, score: 90 },
             { cost: 2, score: 80 },
             { cost: 3, score: 100 }
