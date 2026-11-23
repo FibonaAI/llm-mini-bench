@@ -51,6 +51,7 @@ TypeScript 在 Bun 上实现评测引擎和 HTTP 服务，原生浏览器 JavaSc
 | `benchmark/web/app-context.js` | 共用前端状态、服务依赖与事件约定；兼容 getter 引用同一份状态 |
 | `benchmark/web/bench.js`、`task-submission.js`、`task-history-view.js`、`runs.js` | 分别负责任务协调与轮询、提交与重试、内联历史与详情、精确目标选择 |
 | `benchmark/web/analysis.js`、`analysis-model.js` | 分析协调与按轴缓存的指标派生；呈现和历史归属变化不重新扫描逐题样本 |
+| `benchmark/web/account-mask.js` | 仅用于展示与截图的账号／邮箱打码，覆盖 DOM 文本、悬浮提示、无障碍标签及 SVG 标注，不改动底层记录身份 |
 | `benchmark/web/` | 分析图与共用的跨渠道统一搜索选择器，支持渠道／模型／思考筛选，统一使用 `/api/bench/`；保留逐题详情，不设独立题库页 |
 | `package.json`、`magpie/index.ts`、`magpie/page/` | Magpie 插件声明、后端生命周期和页面引导 |
 | `benchmark/tools/` | 离线分析、基线导入、只读校准导入（`import_calibration.ts`，直接写入 SQLite，不可重试、不可升级为基线）、旧目录迁移（`migrate_legacy_storage.ts`）和旧日志无损归档（`compress_journals.ts`），不在导入模块时发请求 |

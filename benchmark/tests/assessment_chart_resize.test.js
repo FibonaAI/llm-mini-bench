@@ -873,3 +873,71 @@ test('all anomaly categories show amber badges, list details in tooltip, and sta
     expect(tooltipText).toContain('1 个样本未调用 submit_answer 提交（按 0 分计）');
     f.chart.destroy();
 });
+
+test('maskAccounts masks single-model multi-account SVG point labels before truncation and masks point aria-labels while preserving gateway defaults', () => {
+    const f = chartResizeFixture();
+    const rows = [
+        {
+            id: 'pinned-email',
+            source: 'run',
+            run_id: 'r1',
+            model: 'gpt-6-luna',
+            modelDisplayName: 'GPT-6 Luna',
+            providerId: 'provider:openai',
+            providerName: 'OpenAI',
+            provider: '网关目录归属',
+            accountId: 'account:alice.researcher@company.invalid',
+            account: 'alice.researcher@company.invalid（固定绑定）',
+            accountDisplayId: 'alice.researcher@company.invalid',
+            think: 'high',
+            created_at: '2026-11-19T12:00:00Z',
+            cost: 0.2,
+            score: 92,
+            rounds: 1
+        },
+        {
+            id: 'gateway-auto',
+            source: 'run',
+            run_id: 'r2',
+            model: 'gpt-6-luna',
+            modelDisplayName: 'GPT-6 Luna',
+            providerId: 'provider:openai',
+            providerName: 'OpenAI',
+            provider: '网关目录归属',
+            accountId: 'gateway-binding:gateway-default',
+            account: '网关自动分配（账号未记录）',
+            accountShortName: '网关自动分配',
+            accountDisplayId: '实际账号未记录',
+            think: 'high',
+            created_at: '2026-11-19T12:00:00Z',
+            cost: 0.8,
+            score: 84,
+            rounds: 1
+        }
+    ];
+    f.chart.render(rows, { labels: true, maskAccounts: false });
+    const unmaskedLabels = chartFixtureNodes(f, 'chart-point-label').map(node => node.textContent);
+    expect(unmaskedLabels).toContain('alice.researc…');
+    expect(unmaskedLabels).toContain('默认');
+    expect(
+        chartFixtureNodes(f, 'score-cost-point').find(node => node.attributes['data-record-id'] === 'pinned-email').attributes[
+            'data-color-key'
+        ]
+    ).toContain('alice.researcher');
+
+    f.chart.render(rows, { labels: true, maskAccounts: true });
+    const maskedLabels = chartFixtureNodes(f, 'chart-point-label').map(node => node.textContent);
+    expect(maskedLabels.some(label => label.includes('alice'))).toBe(false);
+    expect(maskedLabels).toContain('•••••.•••••••…');
+    expect(maskedLabels).toContain('默认');
+
+    const points = chartFixtureNodes(f, 'score-cost-point');
+    const pinnedPoint = points.find(node => node.attributes['data-record-id'] === 'pinned-email');
+    expect(pinnedPoint.attributes['data-color-key']).toBeUndefined();
+    const pinnedAria = pinnedPoint.attributes['aria-label'];
+    const autoAria = points.find(node => node.attributes['data-record-id'] === 'gateway-auto').attributes['aria-label'];
+    expect(pinnedAria).not.toContain('alice.researcher');
+    expect(pinnedAria).toContain('•••••.••••••••••@•••••••.•••••••（固定绑定）');
+    expect(autoAria).toContain('网关自动分配（账号未记录）');
+    f.chart.destroy();
+});

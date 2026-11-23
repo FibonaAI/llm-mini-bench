@@ -37,6 +37,8 @@
  *   'mini-bench:observations-changed': undefined, // Persisted observations need reloading.
  *   'mini-bench:refresh': undefined, // Explicit user refresh.
  *   'mini-bench:theme-changed': undefined, // Presentation-only invalidation.
+ *   'mini-bench:mask-accounts-changed': boolean, // Presentation-only account masking toggle.
+ *   'mini-bench:api-payload': unknown, // Authenticated JSON payload for passive UI observers.
  * }} MiniBenchEvents
  */
 
@@ -50,6 +52,7 @@ export function createAppContext(services, eventTarget) {
   let targets = Object.freeze({ routes: Object.freeze([]), leaves: Object.freeze([]), selectedKeys: Object.freeze([]) });
   let runTaskIds = new Map();
   let targetActions = null;
+  let maskAccounts = false;
   /** Subscribe to one documented event; callers may dispose the returned subscription. */
   const on = (name, handler) => {
     eventTarget.addEventListener(name, handler);
@@ -70,7 +73,17 @@ export function createAppContext(services, eventTarget) {
     get taskCount() {
       return bank?.tasks?.length || 0;
     },
+    get maskAccounts() {
+      return maskAccounts;
+    },
     getTaskId: runId => runTaskIds.get(runId),
+    /** Presentation-only account masking state; never mutates recorded identities. */
+    setMaskAccounts(value) {
+      const next = Boolean(value);
+      if (next === maskAccounts) return;
+      maskAccounts = next;
+      emit('mini-bench:mask-accounts-changed', maskAccounts);
+    },
     /** Replace the bank before notifying listeners; never infer a production bank. */
     setBank(value) {
       bank = value;

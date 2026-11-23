@@ -171,6 +171,41 @@ h3 {
   font-weight: 500;
   box-shadow: none;
 }
+.mask-accounts-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+}
+.mask-accounts-btn svg {
+  width: 13px;
+  height: 13px;
+  flex: none;
+  pointer-events: none;
+}
+.mask-accounts-btn[aria-pressed='true'] {
+  color: var(--accent);
+  background: var(--accent-soft);
+  border-color: var(--accent);
+}
+.pii {
+  filter: blur(2.2px);
+  opacity: 0.5;
+  user-select: none;
+}
+.masking .pii {
+  animation: mini-bench-pii 0.35s ease-out backwards;
+}
+@keyframes mini-bench-pii {
+  from {
+    filter: blur(0);
+    opacity: 1;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .masking .pii {
+    animation: none;
+  }
+}
 .text-control {
   min-height: 27px;
   padding: 3px 7px;
@@ -1568,6 +1603,12 @@ th {
     background: var(--accent);
     filter: brightness(0.96);
   }
+  .mask-accounts-btn[aria-pressed='true']:hover:not(:disabled) {
+    color: var(--accent);
+    background: var(--accent-soft);
+    border-color: var(--accent);
+    filter: brightness(0.97);
+  }
 }
 @media (max-width: 760px) {
   .top {
@@ -1632,6 +1673,7 @@ th {
   .top .actions {
     width: 100%;
     justify-content: flex-end;
+    flex-wrap: wrap;
   }
   .tabs {
     margin-left: auto;

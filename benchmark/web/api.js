@@ -143,6 +143,7 @@
       throw new Error(`服务返回了无效数据 (${response.status})`);
     }
     if (!response.ok) throw new Error(typeof data.error === 'string' ? data.error : `请求失败 (${response.status})`);
+    window.dispatchEvent(new CustomEvent('mini-bench:api-payload', { detail: data }));
     return data;
   }
   function renderView() {

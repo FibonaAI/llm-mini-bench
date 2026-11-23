@@ -227,8 +227,13 @@ writeFileSync(
  await frame.locator('#start-run').click();
  await frame.waitForFunction(()=>document.querySelector('#start-run')?.disabled===true&&window.MiniBench.runState.getSelectedTargets().length===0);
  const sandboxSubmit={startEnabledAfterSelect,clearedAfterSubmit:await frame.evaluate(()=>window.MiniBench.runState.getSelectedTargets().length===0)};
+ await frame.locator('#mask-accounts').click();
+ const maskedPressed=await frame.locator('#mask-accounts').getAttribute('aria-pressed')==='true'&&await frame.evaluate(()=>document.body.classList.contains('masked'));
+ await frame.locator('#mask-accounts').click();
+ const maskedRestored=await frame.locator('#mask-accounts').getAttribute('aria-pressed')==='false'&&await frame.evaluate(()=>!document.body.classList.contains('masked'));
+ const sandboxMask={maskedPressed,maskedRestored};
  await page.screenshot({path:${JSON.stringify(join(artifacts, 'sandbox.png'))},fullPage:true});
- return {passed:state.origin==='null'&&state.storageDenied&&state.pickers===1&&state.analysisFilters===4&&Object.values(legendState).every(Boolean)&&Object.values(analysisState).every(Boolean)&&state.chart&&state.points>0&&state.bank.includes('12')&&svg.ok&&svg.svg&&taskState.sampleConcurrency==='6'&&taskState.runConcurrency==='3'&&taskState.rounds==='3'&&taskState.planDisabled&&taskState.startDisabled&&Object.values(remoteState).every(Boolean)&&Object.values(sandboxSubmit).every(Boolean)&&!errors.length&&!consoleErrors.length&&!failures.length,state,legendState,analysisState,taskState,remoteState,sandboxSubmit,svg,readyError,errors,consoleErrors,failures};
+ return {passed:state.origin==='null'&&state.storageDenied&&state.pickers===1&&state.analysisFilters===4&&Object.values(legendState).every(Boolean)&&Object.values(analysisState).every(Boolean)&&state.chart&&state.points>0&&state.bank.includes('12')&&svg.ok&&svg.svg&&taskState.sampleConcurrency==='6'&&taskState.runConcurrency==='3'&&taskState.rounds==='3'&&taskState.planDisabled&&taskState.startDisabled&&Object.values(remoteState).every(Boolean)&&Object.values(sandboxSubmit).every(Boolean)&&Object.values(sandboxMask).every(Boolean)&&!errors.length&&!consoleErrors.length&&!failures.length,state,legendState,analysisState,taskState,remoteState,sandboxSubmit,sandboxMask,svg,readyError,errors,consoleErrors,failures};
 }`
 );
 let opened = false;
@@ -285,17 +290,19 @@ try {
             `Missing real opaque-origin history GET: ${path}`
         );
     }
-    assert(
-        requests.some(
-            request =>
-                request.path === '/chart-legend.js' &&
-                request.method === 'GET' &&
-                request.origin === 'null' &&
-                request.status === 200 &&
-                request.allowOrigin === 'null'
-        ),
-        'Legend module did not load through real opaque-origin CORS'
-    );
+    for (const modulePath of ['/chart-legend.js', '/account-mask.js']) {
+        assert(
+            requests.some(
+                request =>
+                    request.path === modulePath &&
+                    request.method === 'GET' &&
+                    request.origin === 'null' &&
+                    request.status === 200 &&
+                    request.allowOrigin === 'null'
+            ),
+            `Module did not load through real opaque-origin CORS: ${modulePath}`
+        );
+    }
     assert(
         requests.some(request => request.method === 'OPTIONS' && request.origin === 'null' && request.status === 204),
         'Opaque-origin preflight absent'
