@@ -48,7 +48,7 @@ Migrates legacy file-per-run workspaces (`<data-dir>/assessment/` and `<data-dir
 bun benchmark/tools/import_calibration.ts --input INPUT.jsonl [--data-dir DIR]
 ```
 
-Converts one `benchmark/calibrate_assessment.ts` journal into a read-only run directly inside `mini-bench.sqlite` (default `MAGPIE_BENCH_DATA_DIR` or `~/.local/share/magpie-mini-bench`), so the task page and analysis page can show its matrix, failure causes and scores. Structured session events are stored without copying raw SSE streams, and the input digest is recorded; importing the same file again does nothing. Imported runs are labelled 校准导入, have no route identity, can never be retried and can never be promoted to baselines. Experimental banks stay off the production chart. Reload the plugin (or restart the service) afterwards, because runs are loaded at startup.
+Converts one `benchmark/calibrate_assessment.ts` journal into a read-only run directly inside `mini-bench.sqlite` (default `MAGPIE_BENCH_DATA_DIR` or `~/.local/share/magpie-mini-bench`), so the task page and analysis page can show its matrix, failure causes and scores. Structured session events are stored without copying raw SSE streams, and the input digest is recorded; importing the same file again does nothing. Imported runs are labeled as calibration imports, have no route identity, can never be retried and can never be promoted to baselines. Experimental banks stay off the production chart. Reload the plugin (or restart the service) afterwards, because runs are loaded at startup.
 
 ## Import a baseline from a complete run
 
