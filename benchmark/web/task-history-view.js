@@ -837,12 +837,16 @@ export function createTaskHistoryView({ app, state, retryRequests, retrying }) {
     const text = JSON.stringify(lazyJsonPayloads.get(key), null, 2);
     const existing = node.querySelector?.('pre');
     if (existing) {
-      if (existing.textContent !== text) existing.textContent = text;
+      if ((existing.dataset?.rawJson ?? existing.textContent) !== text) {
+        if (existing.dataset) existing.dataset.rawJson = text;
+        existing.textContent = text;
+      }
       return;
     }
     const doc = node.ownerDocument || (typeof document !== 'undefined' ? document : null);
     if (!doc?.createElement || !node.append) return;
     const pre = doc.createElement('pre');
+    if (pre.dataset) pre.dataset.rawJson = text;
     pre.textContent = text;
     node.append(pre);
   }

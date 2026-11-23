@@ -194,5 +194,10 @@ test('analysis redraw events reuse derived metrics; source, bank and axes invali
     expect(renders.at(-1).map(record => record.id)).toEqual(['repeat']);
     element('analysis-data-selected').emit('change');
     expect(renders.at(-1).map(record => record.id)).toEqual(['one']);
+    expect(renderOptions.at(-1).maskAccounts).toBe(false);
+    app.setMaskAccounts(true);
+    expect(renderOptions.at(-1).maskAccounts).toBe(true);
+    app.setMaskAccounts(false);
+    expect(renderOptions.at(-1).maskAccounts).toBe(false);
     expect(metricCalls).toHaveLength(10);
 });

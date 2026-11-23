@@ -11,6 +11,7 @@
     <link rel="stylesheet" href="./score-cost-chart.css" />
     <script src="./startup.js"></script>
     <script src="./api.js" defer></script>
+    <script type="module" src="./account-mask.js"></script>
     <script type="module" src="./bench.js"></script>
     <script type="module" src="./analysis.js"></script>
   </head>
@@ -23,7 +24,28 @@
         ><button class="tab" type="button" data-view-link="runs">任务</button>
       </nav>
       <div class="actions">
-        <span id="connection-status" class="muted">本地工作区</span><button class="btn" id="refresh-data" type="button">刷新</button
+        <span id="connection-status" class="muted">本地工作区</span
+        ><button
+          class="btn mask-accounts-btn"
+          id="mask-accounts"
+          type="button"
+          aria-pressed="false"
+          data-no-pii
+          title="给所有页面的账号（邮箱地址和账号名）打码，方便截图分享"
+        >
+          <svg
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="currentColor"
+            stroke-width="2"
+            stroke-linecap="round"
+            stroke-linejoin="round"
+            aria-hidden="true"
+          >
+            <path d="M2 12s3.5-8 10-8 10 8 10 8-3.5 8-10 8-10-8-10-8zM12 9a3 3 0 1 0 0 6 3 3 0 0 0 0-6z" />
+          </svg>
+          <span id="mask-accounts-label">账号打码</span></button
+        ><button class="btn" id="refresh-data" type="button">刷新</button
         ><button class="btn" id="new-run-button" type="button">新建评测</button>
       </div>
     </header>

@@ -377,7 +377,8 @@ function renderObservations() {
     pareto: element('pareto-line').checked,
     colorBy: element('chart-color-by').value,
     axis: element('chart-axis').value,
-    selectedIds: state.selectedId ? [state.selectedId] : []
+    selectedIds: state.selectedId ? [state.selectedId] : [],
+    maskAccounts: Boolean(app.maskAccounts)
   });
   renderObservationDetails();
   dataPopover.position();
@@ -602,6 +603,7 @@ app.on('mini-bench:banks-changed', event => {
   rebuildAnalysisRecords();
 });
 app.on('mini-bench:theme-changed', renderObservations);
+app.on('mini-bench:mask-accounts-changed', renderObservations);
 app.on('mini-bench:history-changed', () => {
   const next = presentedRecords();
   const changed = next.length !== state.records.length || next.some((record, index) => record.task_id !== state.records[index]?.task_id);

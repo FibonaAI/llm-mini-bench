@@ -147,6 +147,34 @@ export function thinkingSeries(records) {
     .map(points => points.sort((a, b) => order.indexOf(a.think) - order.indexOf(b.think)));
 }
 
+const CHART_SYSTEM_ACCOUNTS = new Set([
+  'default',
+  'gateway-default',
+  'unknown',
+  'unknown-account',
+  '未记录',
+  '未记录账号',
+  '实际账号未记录',
+  '网关自动分配',
+  '网关自动分配（账号未记录）',
+  '网关自动分配（实际账号未记录）',
+  '自动分配',
+  '默认'
+]);
+function maskChartAccountBullets(value) {
+  const raw = String(value ?? '').trim();
+  if (!raw || CHART_SYSTEM_ACCOUNTS.has(raw) || CHART_SYSTEM_ACCOUNTS.has(raw.toLowerCase()) || /^•+$/u.test(raw))
+    return String(value ?? '');
+  const suffixed = /^(.+?)(（(?:固定绑定|配置绑定|未核验)）)$/.exec(raw);
+  if (suffixed) {
+    const inner = suffixed[1];
+    if (CHART_SYSTEM_ACCOUNTS.has(inner) || CHART_SYSTEM_ACCOUNTS.has(inner.toLowerCase())) return raw;
+    const maskedInner = inner.includes('@') ? inner.replace(/[^@.\s]/gu, '•') : inner.replace(/[^\s]/gu, '•');
+    return maskedInner + suffixed[2];
+  }
+  return raw.includes('@') ? raw.replace(/[^@.\s]/gu, '•') : raw.replace(/[^\s]/gu, '•');
+}
+
 function svgNode(tag, attributes = {}, text) {
   const node = document.createElementNS(SVG_NS, tag);
   for (const [key, value] of Object.entries(attributes)) node.setAttribute(key, String(value));
@@ -167,7 +195,7 @@ export function createScoreCostChart(container, { onSelect = _id => {}, onOpenRu
   container.append(svg, tooltip);
   const legend = createChartLegend(container, `${clipId}-legend`);
   let records = [],
-    options = { log: true, labels: true, pareto: true, axis: 'cost', colorBy: 'series', selectedIds: [] };
+    options = { log: true, labels: true, pareto: true, axis: 'cost', colorBy: 'series', selectedIds: [], maskAccounts: false };
   let zoomWindow = null,
     viewState = null,
     pinnedPointId = null,
@@ -695,7 +723,7 @@ export function createScoreCostChart(container, { onSelect = _id => {}, onOpenRu
         tabindex: 0,
         role: 'button',
         'aria-pressed': selected,
-        'aria-label': `${point.model}，${historyLabel}，${point.provider}，${point.account}，Thinking ${point.think}，均分 ${point.score} / 100，每轮${options.axis === 'tokens' ? '总 tokens ' : options.axis === 'duration' ? '平均耗时 ' : '平均费用 '}${point.usageIncomplete ? '至少 ' : ''}${quantity(point.cost)}，${sourceLabel(point)}，${formatChartRecordTime(point)}${overlapSummary ? '，重叠记录：' + overlapSummary : ''}${hasAnomalies ? '，含异常项（不参与前沿）：' + anomalyReasons.join('；') : ''}${point.anomaly ? '，' + point.anomaly : ''}`,
+        'aria-label': `${point.model}，${historyLabel}，${point.provider}，${options.maskAccounts ? maskChartAccountBullets(point.account) : point.account}，Thinking ${point.think}，均分 ${point.score} / 100，每轮${options.axis === 'tokens' ? '总 tokens ' : options.axis === 'duration' ? '平均耗时 ' : '平均费用 '}${point.usageIncomplete ? '至少 ' : ''}${quantity(point.cost)}，${sourceLabel(point)}，${formatChartRecordTime(point)}${overlapSummary ? '，重叠记录：' + overlapSummary : ''}${hasAnomalies ? '，含异常项（不参与前沿）：' + anomalyReasons.join('；') : ''}${point.anomaly ? '，' + point.anomaly : ''}`,
         'data-record-id': point.id,
         'data-overlap-count': overlaps.length
       });
@@ -716,7 +744,7 @@ export function createScoreCostChart(container, { onSelect = _id => {}, onOpenRu
       const bundled = point.source === 'baseline';
       group.setAttribute('data-channel-key', String(point.providerId ?? point.provider));
       group.setAttribute('data-model-color', pointColor);
-      group.setAttribute('data-color-key', colorKey);
+      if (!options.maskAccounts) group.setAttribute('data-color-key', colorKey);
       const markerStroke = 1.5;
       // Centered strokes stay inside identical visible bounds for filled and hollow markers.
       const markerRadius = ((bundled ? 10 : 12) - markerStroke) / 2;
@@ -993,11 +1021,10 @@ export function createScoreCostChart(container, { onSelect = _id => {}, onOpenRu
         return stripped.length > 14 ? stripped.slice(0, 13) + '…' : stripped;
       };
       const shortAccount = point => {
-        const raw =
-          point.accountId && String(point.accountId).startsWith('gateway-binding:')
-            ? '默认'
-            : String(point.accountDisplayId ?? point.account ?? '');
-        return raw.length > 14 ? raw.slice(0, 13) + '…' : raw;
+        if (point.accountId && String(point.accountId).startsWith('gateway-binding:')) return '默认';
+        const raw = String(point.accountDisplayId ?? point.account ?? '');
+        const shown = options.maskAccounts ? maskChartAccountBullets(raw) : raw;
+        return shown.length > 14 ? shown.slice(0, 13) + '…' : shown;
       };
       const channelAccounts = new Map();
       for (const point of visible) {
