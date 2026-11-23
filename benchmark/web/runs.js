@@ -69,13 +69,15 @@ export function createTaskTargets(app) {
       `${count} 个独立运行 × 每运行 ${app.taskCount} 题 × ${validRounds ? rounds : '?'} 轮 = 共 ${samples} 个样本。每个运行固定路由、模型与 Thinking；实际账号绑定以路由证据为准。`;
   }
 
-  /** Copy exact available leaves only; unknown selections never become wildcard targets. */
-  function setTaskSelection(keys, announce = false) {
+  /** Apply validated target leaves; picker-originated updates keep the picker's active channel, drafts and filters intact. */
+  function applyTaskSelection(keys, { announce = false, syncPicker = true, resetEmptyFilters = true, revealSelectedChannel = true } = {}) {
     const requested = [...new Set(keys)];
     const available = new Set(app.targets.leaves.map(selectionKey));
     app.setTargetSelection(requested.filter(key => available.has(key)));
-    picker?.setSelection(app.targets.selectedKeys);
-    if (!requested.length) picker?.resetFilters?.();
+    if (syncPicker) {
+      picker?.setSelection(app.targets.selectedKeys, { revealSelectedChannel });
+      if (resetEmptyFilters && !requested.length) picker?.resetFilters?.();
+    }
     renderSelection();
     app.emit('mini-bench:targets-changed');
     if (announce) {
@@ -84,6 +86,11 @@ export function createTaskTargets(app) {
         `已带入 ${app.targets.selectedKeys.length} 个目标${omitted ? `；${omitted} 项不受当前路由目录支持，未加入` : ''}。尚未发送模型请求，核对样本数与预算后即可开始评测。`
       );
     }
+  }
+
+  /** Copy exact available leaves only; unknown selections never become wildcard targets. */
+  function setTaskSelection(keys, announce = false) {
+    applyTaskSelection(keys, { announce });
   }
 
   /** Refresh catalog while retaining only still-supported leaves; never auto-select new routes. */
@@ -95,7 +102,7 @@ export function createTaskTargets(app) {
       records: app.targets.leaves,
       selectedKeys: app.targets.selectedKeys,
       mode: 'tasks',
-      onChange: keys => setTaskSelection(keys)
+      onChange: keys => applyTaskSelection(keys, { syncPicker: false, resetEmptyFilters: false })
     });
     renderSelection();
     app.emit('mini-bench:targets-changed');
@@ -105,7 +112,13 @@ export function createTaskTargets(app) {
     const removeBtn = event.target?.closest?.('[data-remove-target-key]');
     if (!removeBtn) return;
     const targetKey = removeBtn.dataset.removeTargetKey;
-    setTaskSelection(app.targets.selectedKeys.filter(key => key !== targetKey));
+    applyTaskSelection(
+      app.targets.selectedKeys.filter(key => key !== targetKey),
+      {
+        resetEmptyFilters: false,
+        revealSelectedChannel: false
+      }
+    );
   });
   element('run-rounds').addEventListener('input', updateEstimate);
   app.on('mini-bench:select-targets', event => {

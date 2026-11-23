@@ -76,7 +76,13 @@
   routes.splice(0,routes.length,...Array.from({length:23},(_,i)=>({id:'bulk-route-'+i,provider_id:'bulk-provider-'+i,model:'bulk-model-'+i,account_ref:'gateway-default',account_evidence:'gateway_binding',thinking_levels:i===22?[]:['high']})));
   await page.locator('[data-view-link="runs"]').click();await page.evaluate(()=>window.dispatchEvent(new Event('mini-bench:refresh')));
   await page.waitForFunction(()=>window.MiniBench.runState.routes.some(route=>route.id==='bulk-route-22'));
-  await page.locator('#task-picker .dp-trigger').click();await popup.locator('.dp-search').fill('bulk-model');
+  await page.locator('#task-picker .dp-trigger').click();
+  await popup.locator('.dp-model-row .dp-check').first().click();
+  await popup.locator('.dp-rail-item[data-provider-id="provider:bulk-provider-5"]').click();
+  await popup.locator('.dp-model-row .dp-check').first().click();
+  require(await popup.locator('.dp-rail-item.is-active').getAttribute('data-provider-id')==='provider:bulk-provider-5','Checking a later channel target must not jump back to an earlier selected channel');
+  await popup.locator('.dp-action').click();
+  await popup.locator('.dp-search').fill('bulk-model');
   const defaultOption=popup.locator('.dp-think[data-model="bulk-model-22"]');
   require(await defaultOption.count()===1&&await defaultOption.getAttribute('data-think')==='default'&&(await defaultOption.innerText())==='默认','Model without Thinking levels must offer exactly the default option');
   require(await popup.locator('.dp-think[data-think="default"]').count()===1,'Models with Thinking levels must not offer default');

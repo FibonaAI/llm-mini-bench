@@ -1225,11 +1225,16 @@ export function createDataPicker(container, { records, selectedKeys, mode = 'ana
 
   return {
     getSelection: () => [...selected],
-    setSelection(keys) {
+    setSelection(keys, { revealSelectedChannel = !open } = {}) {
       selected = new Set([...keys].filter(key => knownKeys.has(key)));
       syncAllChannelsFromSelected({ preserveDraft: false });
-      const firstSelected = channels.find(ch => ch.leaves.some(leaf => selected.has(leaf.key)));
-      if (firstSelected) activeChannelId = firstSelected.id;
+      if (revealSelectedChannel) {
+        const activeCh = channelById.get(activeChannelId);
+        if (!activeCh || !activeCh.leaves.some(leaf => selected.has(leaf.key))) {
+          const firstSelected = channels.find(ch => ch.leaves.some(leaf => selected.has(leaf.key)));
+          if (firstSelected) activeChannelId = firstSelected.id;
+        }
+      }
       render();
     },
     resetFilters: clearFilters,

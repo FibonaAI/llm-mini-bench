@@ -1,5 +1,7 @@
 import { expect, test } from 'bun:test';
+import { createAppContext } from '../web/app-context.js';
 import { createDataPicker, selectionKey } from '../web/data-picker.js';
+import { createTaskTargets } from '../web/runs.js';
 
 class TestElement {
     constructor(tag) {
@@ -603,4 +605,150 @@ test('local routing groups follow direct local channels and duplicate model disp
     // Cross-channel search also shows raw model IDs for colliding display names.
     search('Claude Sonnet 4.5');
     expect(findAll('dp-model-id').map(node => node.textContent)).toEqual(['claude/claude-sonnet-4-5', 'claude/claude-sonnet-4-5-20250929']);
+});
+
+test('task target controller preserves active channel, staged drafts and search filter during picker interactions', () => {
+    globalThis.document = Object.assign(new TestElement('document'), {
+        body: new TestElement('body'),
+        createElement: tag => new TestElement(tag),
+        createTextNode: text => ({ textContent: text })
+    });
+    globalThis.window = Object.assign(new TestElement('window'), { innerWidth: 900, innerHeight: 700 });
+    const domById = new Map();
+    const byId = id => {
+        if (!domById.has(id)) {
+            const el = new TestElement('div');
+            if (id === 'run-rounds') el.value = '3';
+            domById.set(id, el);
+        }
+        return domById.get(id);
+    };
+    const app = createAppContext(
+        {
+            byId,
+            escapeHtml: value => String(value ?? ''),
+            finite: Number.isFinite,
+            request: async () => ({}),
+            notify: () => {},
+            available: true,
+            activeStatus: () => false,
+            statusText: value => value,
+            formatDate: value => String(value ?? '')
+        },
+        new EventTarget()
+    );
+    app.setBank({ version: '1.0', tasks: Array(12).fill({ id: 't' }) });
+    createTaskTargets(app);
+
+    app.setTaskRoutes([
+        {
+            id: 'r-chatgpt',
+            provider_id: 'homelab',
+            remote_route: { namespace: 'chatgpt-api', evidence: 'magpie_via_catalog' },
+            account_ref: 'gateway-default',
+            account_evidence: 'gateway_binding',
+            model: 'homelab/chatgpt-api/gpt-5.4',
+            model_display_name: 'GPT-5.4',
+            thinking_levels: ['low', 'medium', 'high']
+        },
+        {
+            id: 'r-agy-gemini',
+            provider_id: 'homelab',
+            remote_route: { namespace: 'agy-cli', evidence: 'magpie_via_catalog' },
+            account_ref: 'gateway-default',
+            account_evidence: 'gateway_binding',
+            model: 'homelab/agy-cli/gemini-4-carbon',
+            model_display_name: 'Gemini 4 Carbon',
+            thinking_levels: ['low', 'medium', 'high', 'ultra']
+        },
+        {
+            id: 'r-local-a',
+            provider_id: 'openai',
+            account_ref: 'acct-a',
+            account_evidence: 'gateway_account_binding',
+            model: 'openai/gpt-5.4',
+            model_display_name: 'GPT-5.4',
+            thinking_levels: ['high']
+        }
+    ]);
+
+    const popup = () => document.body.children.at(-1);
+    const nodes = () => popup().querySelectorAll('*');
+    const findAll = className => nodes().filter(node => node.className?.split(/\s+/).filter(Boolean).includes(className));
+    const find = className => findAll(className)[0];
+    const activeRailId = () => find('is-active')?.dataset?.providerId;
+    const selectChannel = providerId => {
+        const btn = findAll('dp-rail-item').find(node => node.dataset.providerId === providerId);
+        if (!btn) throw new Error(`Missing channel ${providerId}`);
+        btn.events.click();
+    };
+
+    // Open picker, select all in earlier remote channel homelab / chatgpt-api (3 runs).
+    byId('task-picker').children.at(-1).events.click();
+    selectChannel('["homelab","chatgpt-api"]');
+    expect(activeRailId()).toBe('["homelab","chatgpt-api"]');
+    find('dp-select-channel').events.click();
+    expect(app.getSelectedTargets()).toHaveLength(3);
+
+    // Switch to later channel homelab / agy-cli and check Gemini 4 Carbon row checkbox.
+    selectChannel('["homelab","agy-cli"]');
+    expect(activeRailId()).toBe('["homelab","agy-cli"]');
+    const geminiCheck = findAll('dp-check')[0];
+    geminiCheck.events.change();
+    expect(activeRailId()).toBe('["homelab","agy-cli"]');
+    expect(app.getSelectedTargets()).toHaveLength(7);
+
+    // Toggle one thinking pill (row becomes indeterminate), re-select all 4, then uncheck row: channel stays on homelab / agy-cli.
+    findAll('dp-think')
+        .find(btn => btn.dataset.think === 'ultra')
+        .events.click();
+    expect(activeRailId()).toBe('["homelab","agy-cli"]');
+    expect(app.getSelectedTargets()).toHaveLength(6);
+    findAll('dp-check')[0].events.change();
+    expect(activeRailId()).toBe('["homelab","agy-cli"]');
+    expect(app.getSelectedTargets()).toHaveLength(7);
+    findAll('dp-check')[0].events.change();
+    expect(activeRailId()).toBe('["homelab","agy-cli"]');
+    expect(app.getSelectedTargets()).toHaveLength(3);
+
+    // Re-check one Gemini thinking level, close popup, and remove that chip externally via #run-selected-targets.
+    findAll('dp-think')
+        .find(btn => btn.dataset.think === 'high')
+        .events.click();
+    expect(app.getSelectedTargets()).toHaveLength(4);
+    find('dp-done').events.click();
+    const geminiKey = JSON.stringify([
+        '["homelab","agy-cli"]',
+        'gateway-binding:gateway-default',
+        'homelab/agy-cli/gemini-4-carbon',
+        'high'
+    ]);
+    byId('run-selected-targets').events.click({
+        target: { closest: selector => (selector === '[data-remove-target-key]' ? { dataset: { removeTargetKey: geminiKey } } : null) }
+    });
+    expect(app.getSelectedTargets()).toHaveLength(3);
+    byId('task-picker').children.at(-1).events.click();
+    expect(activeRailId()).toBe('["homelab","agy-cli"]');
+
+    // Clear all selections, then verify staged drafts survive unchecking fixed account in local channel.
+    find('dp-action').events.click();
+    selectChannel('provider:openai');
+    findAll('dp-think')[0].events.click();
+    expect(app.getSelectedTargets()).toHaveLength(1);
+    findAll('dp-acc-pill')[0].events.click();
+    expect(app.getSelectedTargets()).toHaveLength(0);
+    expect(findAll('dp-draft-note')).toHaveLength(1);
+
+    // Verify unchecking the last item during search keeps search query, while external setTaskSelection([]) resets it.
+    const searchInput = find('dp-search');
+    searchInput.value = 'Gemini';
+    searchInput.events.input();
+    findAll('dp-think')[0].events.click();
+    expect(app.getSelectedTargets()).toHaveLength(1);
+    findAll('dp-think')[0].events.click();
+    expect(app.getSelectedTargets()).toHaveLength(0);
+    expect(find('dp-search').value).toBe('Gemini');
+
+    app.setTaskSelection([]);
+    expect(find('dp-search').value).toBe('');
 });
