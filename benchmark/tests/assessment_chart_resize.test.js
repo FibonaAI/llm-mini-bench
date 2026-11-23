@@ -238,8 +238,10 @@ test('legend includes only rendered points and follows axis eligibility and zoom
         { ...base, id: 'far', cost: 100 }
     ];
     f.chart.render(rows, { labels: false, colorBy: 'model' });
+    expect(f.legendEntries[0].count).toBe(3);
+    f.chart.render(rows, { axis: 'tokens', log: true });
     expect(f.legendEntries[0].count).toBe(2);
-    f.chart.render(rows, { log: false });
+    f.chart.render(rows, { axis: 'tokens', log: false });
     expect(f.legendEntries[0].count).toBe(3);
     f.chart.zoom(16);
     expect(f.legendEntries).toEqual([]);
@@ -247,6 +249,66 @@ test('legend includes only rendered points and follows axis eligibility and zoom
     expect(f.legendEntries[0].count).toBe(3);
     f.chart.render([]);
     expect(f.legendEntries).toEqual([]);
+});
+
+test('zero-cost records plot on the y-axis in log and linear cost modes without joining the Pareto frontier', () => {
+    const collectNodes = root => {
+        const result = [];
+        const visit = node => {
+            result.push(node);
+            node.children?.forEach(visit);
+        };
+        visit(root);
+        return result;
+    };
+    for (const log of [true, false]) {
+        const f = chartResizeFixture();
+        const rows = [
+            { id: 'free-top', model: 'Free Top', cost: 0, score: 99 },
+            { id: 'cheap', model: 'Cheap', cost: 1, score: 70 },
+            { id: 'dominated', model: 'Dominated', cost: 2, score: 65 },
+            { id: 'best-paid', model: 'Best Paid', cost: 4, score: 90 }
+        ];
+        f.chart.render(rows, { labels: false, axis: 'cost', log });
+        const nodes = collectNodes(f.container);
+        const pointNodes = nodes.filter(node => node.attributes?.class === 'score-cost-point');
+        expect(pointNodes.map(node => node.attributes['data-record-id'])).toEqual(['free-top', 'cheap', 'dominated', 'best-paid']);
+        const freePoint = pointNodes.find(node => node.attributes['data-record-id'] === 'free-top');
+        const freeMarker = freePoint.children.find(node => node.attributes?.class === 'record-marker');
+        expect(Number(freeMarker.attributes.cx)).toBe(58);
+        expect(Number.isFinite(Number(freeMarker.attributes.cy))).toBe(true);
+        expect(freePoint.children.some(node => node.attributes?.class === 'score-cost-anomaly-badge')).toBe(false);
+        expect(freePoint.attributes['aria-label']).toContain('零费用（不计入前沿）');
+        const frontier = nodes.find(node => node.attributes?.class === 'pareto-frontier');
+        const frontierPoints = frontier.attributes.points
+            .split(' ')
+            .slice(0, -1)
+            .map(pair => pair.split(',').map(Number));
+        const expectedPaid = ['cheap', 'best-paid'].map(id => {
+            const point = pointNodes.find(node => node.attributes['data-record-id'] === id);
+            const marker = point.children.find(node => node.attributes?.class === 'record-marker');
+            return [Number(marker.attributes.cx), Number(marker.attributes.cy)];
+        });
+        expect(frontierPoints).toEqual(expectedPaid);
+        // Zooming on the zero-cost point keeps finite coordinates on the y-axis.
+        f.chart.render(rows, { labels: false, axis: 'cost', log, selectedIds: ['free-top'] });
+        f.chart.zoom(4);
+        const zoomedFree = collectNodes(f.container).find(node => node.attributes?.['data-record-id'] === 'free-top');
+        expect(Number(zoomedFree.children.find(node => node.attributes?.class === 'record-marker').attributes.cx)).toBe(58);
+        // Zooming into a paid region moves the zero-cost point offscreen.
+        f.chart.resetZoom();
+        f.chart.render(rows, { labels: false, axis: 'cost', log, selectedIds: ['best-paid'] });
+        f.chart.zoom(16);
+        expect(collectNodes(f.container).some(node => node.attributes?.['data-record-id'] === 'free-top')).toBe(false);
+        // Only zero-cost records still plot cleanly without a frontier line.
+        f.chart.resetZoom();
+        f.chart.render([{ id: 'only-free', model: 'Only Free', cost: 0, score: 85 }], { labels: false, axis: 'cost', log });
+        const onlyNodes = collectNodes(f.container);
+        const onlyFree = onlyNodes.find(node => node.attributes?.['data-record-id'] === 'only-free');
+        expect(Number(onlyFree.children.find(node => node.attributes?.class === 'record-marker').attributes.cx)).toBe(58);
+        expect(onlyNodes.some(node => node.attributes?.class === 'pareto-frontier')).toBe(false);
+        f.chart.destroy();
+    }
 });
 
 test('zoomed frontier shares the rendered point set and ignores offscreen dominators', () => {

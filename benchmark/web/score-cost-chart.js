@@ -80,12 +80,13 @@ function roundMetrics(point) {
         : '未记录';
   return { durationText, costText, tokenText };
 }
-const validPoint = (record, log) =>
+const allowZeroOnAxis = (log, axis = 'cost') => !log || axis === 'cost';
+const validPoint = (record, log, axis = 'cost') =>
   Number.isFinite(record.score) &&
   record.score >= 0 &&
   record.score <= 100 &&
   Number.isFinite(record.cost) &&
-  (log ? record.cost > 0 : record.cost >= 0);
+  (allowZeroOnAxis(log, axis) ? record.cost >= 0 : record.cost > 0);
 
 /** Score axis floor snaps below the lowest plotted score so clustered results stay distinguishable. */
 export function scoreAxisDomain(scores) {
@@ -107,12 +108,13 @@ function pointAnomalyReasons(point) {
 }
 const hasPointAnomalies = point => pointAnomalyReasons(point).length > 0 || Boolean(point.usageIncomplete);
 
-/** Pareto frontier minimizes the selected usage axis and maximizes score; equal-usage lower scores are dominated. */
+/** Pareto frontier minimizes the selected usage axis and maximizes score; zero-cost/usage records are excluded and equal-usage lower scores are dominated. */
 export function scoreCostFrontier(records) {
-  return records
+  const eligible = records.filter(point => Number.isFinite(point.cost) && point.cost > 0);
+  return eligible
     .filter(
       point =>
-        !records.some(
+        !eligible.some(
           other => other.cost <= point.cost && other.score >= point.score && (other.cost < point.cost || other.score > point.score)
         )
     )
@@ -450,16 +452,18 @@ export function createScoreCostChart(container, { onSelect = _id => {}, onOpenRu
     svg.setAttribute('font-family', '-apple-system, BlinkMacSystemFont, Segoe UI, sans-serif');
     svg.setAttribute('font-size', '12');
     svg.append(svgNode('rect', { width, height, fill: theme.card }));
-    const points = records.filter(record => validPoint(record, options.log));
+    const points = records.filter(record => validPoint(record, options.log, options.axis));
     const costs = points.map(point => point.cost);
+    const positiveCosts = costs.filter(cost => cost > 0);
     const transform = value => (options.log ? Math.log10(value) : value);
     const inverse = value => (options.log ? 10 ** value : value);
-    const logMin = Math.log10(costs.length ? Math.min(...costs) : 0.01);
-    const logMax = Math.log10(costs.length ? Math.max(...costs) : 0.1);
+    const logMin = Math.log10(positiveCosts.length ? Math.min(...positiveCosts) : 0.01);
+    const logMax = Math.log10(positiveCosts.length ? Math.max(...positiveCosts) : 0.1);
     const logPadding = Math.max(0.12, (logMax - logMin) * 0.1);
     let fullLower = options.log ? logMin - logPadding : 0;
     let fullUpper = options.log ? logMax + logPadding : Math.max(...costs, 0.1) * 1.12;
     if (fullLower === fullUpper) fullUpper = fullLower + 1;
+    const pointXValue = cost => (options.log && cost === 0 ? fullLower : transform(cost));
     const { min: fullYMin, step: fullYStep } = scoreAxisDomain(points.map(point => point.score));
     const fullYMax = 100;
     if (zoomWindow) {
@@ -487,7 +491,7 @@ export function createScoreCostChart(container, { onSelect = _id => {}, onOpenRu
       fullYMax,
       hasPoints: points.length > 0
     };
-    const x = cost => margin.left + ((transform(cost) - lower) / (upper - lower)) * plotWidth;
+    const x = cost => margin.left + ((pointXValue(cost) - lower) / (upper - lower)) * plotWidth;
     const y = score => margin.top + ((yMax - score) / Math.max(1e-9, yMax - yMin)) * plotHeight;
     const text = (label, px, py, attrs = {}) => svg.appendChild(svgNode('text', { x: px, y: py, fill: theme.secondary, ...attrs }, label));
     const line = (x1, y1, x2, y2, attrs = {}) => svg.appendChild(svgNode('line', { x1, y1, x2, y2, stroke: theme.line, ...attrs }));
@@ -526,7 +530,17 @@ export function createScoreCostChart(container, { onSelect = _id => {}, onOpenRu
       }
     }
     if (ticks.length < 2) ticks = [inverse(lower), inverse((upper + lower) / 2), inverse(upper)];
+    const hasVisibleZeroOnLogAxis =
+      options.log &&
+      options.axis === 'cost' &&
+      lower <= fullLower + 1e-9 &&
+      points.some(point => point.cost === 0 && point.score >= yMin - 1e-9 && point.score <= yMax + 1e-9);
     let lastTickX = -Infinity;
+    if (hasVisibleZeroOnLogAxis) {
+      line(margin.left, margin.top, margin.left, height - margin.bottom, { stroke: theme.axis });
+      text(quantity(0), margin.left, height - margin.bottom + 23, { 'text-anchor': 'middle', fill: theme.muted, 'font-size': 11 });
+      lastTickX = margin.left;
+    }
     for (const cost of ticks) {
       const px = x(cost);
       if (px - lastTickX < (mobile ? 58 : 65)) continue;
@@ -553,8 +567,8 @@ export function createScoreCostChart(container, { onSelect = _id => {}, onOpenRu
     svg.append(hoverLabels);
     const visible = points.filter(
       point =>
-        transform(point.cost) >= lower - 1e-9 &&
-        transform(point.cost) <= upper + 1e-9 &&
+        pointXValue(point.cost) >= lower - 1e-9 &&
+        pointXValue(point.cost) <= upper + 1e-9 &&
         point.score >= yMin - 1e-9 &&
         point.score <= yMax + 1e-9
     );
@@ -652,7 +666,7 @@ export function createScoreCostChart(container, { onSelect = _id => {}, onOpenRu
       seriesNodes.push([node, thinkingGroupKey(series[0]), selected, series[0]]);
       plotted.append(node);
     }
-    const frontier = scoreCostFrontier(visible.filter(point => !hasPointAnomalies(point)));
+    const frontier = scoreCostFrontier(visible.filter(point => !hasPointAnomalies(point) && point.cost > 0));
     const frontierIds = new Set(frontier.map(point => point.id));
     highlightSeriesFn = highlightSeries;
     if (options.pareto && frontier.length)
@@ -717,13 +731,14 @@ export function createScoreCostChart(container, { onSelect = _id => {}, onOpenRu
       const historyLabel = { latest: '最新', historical: '历史', unknown: '最新状态未知（时间未记录）' }[historyState];
       const anomalyReasons = pointAnomalyReasons(point);
       const hasAnomalies = anomalyReasons.length > 0;
+      const isZeroCostExcludedFromFrontier = options.axis === 'cost' && point.cost === 0;
       const group = svgNode('g', {
         class: 'score-cost-point',
         'data-history-state': historyState,
         tabindex: 0,
         role: 'button',
         'aria-pressed': selected,
-        'aria-label': `${point.model}，${historyLabel}，${point.provider}，${options.maskAccounts ? maskChartAccountBullets(point.account) : point.account}，Thinking ${point.think}，均分 ${point.score} / 100，每轮${options.axis === 'tokens' ? '总 tokens ' : options.axis === 'duration' ? '平均耗时 ' : '平均费用 '}${point.usageIncomplete ? '至少 ' : ''}${quantity(point.cost)}，${sourceLabel(point)}，${formatChartRecordTime(point)}${overlapSummary ? '，重叠记录：' + overlapSummary : ''}${hasAnomalies ? '，含异常项（不参与前沿）：' + anomalyReasons.join('；') : ''}${point.anomaly ? '，' + point.anomaly : ''}`,
+        'aria-label': `${point.model}，${historyLabel}，${point.provider}，${options.maskAccounts ? maskChartAccountBullets(point.account) : point.account}，Thinking ${point.think}，均分 ${point.score} / 100，每轮${options.axis === 'tokens' ? '总 tokens ' : options.axis === 'duration' ? '平均耗时 ' : '平均费用 '}${point.usageIncomplete ? '至少 ' : ''}${quantity(point.cost)}，${sourceLabel(point)}，${formatChartRecordTime(point)}${overlapSummary ? '，重叠记录：' + overlapSummary : ''}${hasAnomalies ? '，含异常项（不参与前沿）：' + anomalyReasons.join('；') : isZeroCostExcludedFromFrontier ? '，零费用（不计入前沿）' : ''}${point.anomaly ? '，' + point.anomaly : ''}`,
         'data-record-id': point.id,
         'data-overlap-count': overlaps.length
       });
@@ -853,6 +868,10 @@ export function createScoreCostChart(container, { onSelect = _id => {}, onOpenRu
             for (const reason of anomalyReasons) list.append(node('li', '', reason));
             note.append(list);
           }
+          tooltip.append(note);
+        } else if (isZeroCostExcludedFromFrontier) {
+          const note = node('div', 'score-cost-tooltip-note');
+          note.append(node('span', '', '零费用记录绘制在坐标轴上，不计入前沿线。'));
           tooltip.append(note);
         }
         if (point.anomaly) {
@@ -1129,7 +1148,9 @@ export function createScoreCostChart(container, { onSelect = _id => {}, onOpenRu
         'font-weight': 600
       });
       text(
-        options.log ? '调整筛选条件；对数刻度仅显示正用量。' : '调整筛选条件，或选择有分数与所选横轴用量的记录。',
+        options.log && options.axis !== 'cost'
+          ? '调整筛选条件；对数刻度仅显示正用量。'
+          : '调整筛选条件，或选择有分数与所选横轴用量的记录。',
         margin.left + plotWidth / 2,
         margin.top + plotHeight / 2 + 18,
         { 'text-anchor': 'middle', 'font-size': mobile ? 10 : 12 }
@@ -1200,10 +1221,10 @@ export function createScoreCostChart(container, { onSelect = _id => {}, onOpenRu
       if (!Number.isFinite(factor) || factor <= 0 || !viewState?.hasPoints) return;
       clearPan();
       const state = viewState;
-      const points = records.filter(record => validPoint(record, options.log));
-      const transform = value => (options.log ? Math.log10(value) : value);
+      const points = records.filter(record => validPoint(record, options.log, options.axis));
+      const pointXValue = cost => (options.log && cost === 0 ? state.fullLower : options.log ? Math.log10(cost) : cost);
       const selectedPoint = points.find(point => options.selectedIds.includes(point.id));
-      const center = selectedPoint ? transform(selectedPoint.cost) : (state.lower + state.upper) / 2;
+      const center = selectedPoint ? pointXValue(selectedPoint.cost) : (state.lower + state.upper) / 2;
       const nextXSpan = (state.upper - state.lower) / factor;
       let nextYMin = state.yMin,
         nextYMax = state.yMax;
