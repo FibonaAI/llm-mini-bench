@@ -66,7 +66,8 @@ export function recordMatchesSearch(record, query) {
 }
 
 const EFFORT_ORDER = ['default', 'none', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max', 'ultra', 'unknown'];
-const sortEfforts = efforts =>
+/** Sort recorded thinking effort keys from default/none through ultra, keeping unknown last. */
+export const sortThinkingEfforts = efforts =>
   [...efforts].sort(
     (a, b) =>
       (EFFORT_ORDER.includes(a) ? EFFORT_ORDER.indexOf(a) : 99) - (EFFORT_ORDER.includes(b) ? EFFORT_ORDER.indexOf(b) : 99) ||
@@ -166,7 +167,7 @@ function buildChannels(leaves) {
       modelDisplayCounts.set(modelEntry.displayName, (modelDisplayCounts.get(modelEntry.displayName) ?? 0) + 1);
     }
     for (const modelEntry of ch.models) {
-      modelEntry.thinks = sortEfforts(modelEntry.thinkSet);
+      modelEntry.thinks = sortThinkingEfforts(modelEntry.thinkSet);
       modelEntry.duplicateDisplayName =
         (modelDisplayCounts.get(modelEntry.displayName) ?? 0) > 1 && modelEntry.model !== modelEntry.displayName;
     }
@@ -301,7 +302,7 @@ export function createDataPicker(container, { records, selectedKeys, mode = 'ana
   const allThinkOption = element('option', '', '全部');
   allThinkOption.value = '';
   thinking.append(allThinkOption);
-  for (const effort of sortEfforts(new Set(leaves.map(leaf => leaf.think)))) {
+  for (const effort of sortThinkingEfforts(new Set(leaves.map(leaf => leaf.think)))) {
     const option = element('option', '', thinkingLabel(effort));
     option.value = effort;
     thinking.append(option);

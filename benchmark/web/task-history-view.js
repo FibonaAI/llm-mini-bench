@@ -1,4 +1,5 @@
 import { remoteRouteNamespace } from './data-adapter.js';
+import { sortThinkingEfforts, thinkingLabel } from './data-picker.js';
 
 /** Render history and movable inline details; coordinator owns selection and polling. */
 export function createTaskHistoryView({ app, state, retryRequests, retrying }) {
@@ -68,13 +69,17 @@ export function createTaskHistoryView({ app, state, retryRequests, retrying }) {
   };
   const statusTone = record => statusBadgeClass(record).replace(/^is-/, '') || 'queued';
   const shortId = id => (typeof id === 'string' && id.length > 14 ? id.slice(0, 8) : String(id || ''));
-  const shortThink = target => (target?.thinking === 'default' ? '默认' : target?.thinking || '未记录');
+  const rawThinkingKey = target => (typeof target?.thinking === 'string' && target.thinking ? target.thinking : 'unknown');
+  const shortThink = target => thinkingLabel(rawThinkingKey(target));
+  const collectSortedThinkingKeys = entries => sortThinkingEfforts(new Set(entries.map(entry => rawThinkingKey(entry?.target ?? entry))));
   const shortAccount = target => (target?.account_evidence === 'gateway_binding' ? '自动分配' : target?.account_ref || '未记录');
   const isPinnedAccount = target => Boolean(target?.account_ref) && target?.account_evidence !== 'gateway_binding';
   const CHANNEL_LOCAL_ICON =
     '<svg class="channel-pod-svg" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="2.5" y="2.5" width="11" height="4.5" rx="1.2"/><rect x="2.5" y="9" width="11" height="4.5" rx="1.2"/><path d="M5 4.75h.01M5 11.25h.01"/></svg>';
   const CHANNEL_REMOTE_ICON =
     '<svg class="channel-pod-svg" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="8" cy="8" r="5.5"/><path d="M2.8 8h10.4M8 2.5a8 8 0 0 1 0 11M8 2.5a8 8 0 0 0 0 11"/></svg>';
+  const THINKING_BADGE_ICON =
+    '<svg class="task-thinking-svg" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.45" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M6.2 12.5h3.6M6.8 14.2h2.4M8 2.2a4.1 4.1 0 0 0-2.4 7.4c.5.4.8 1 .8 1.6h3.2c0-.6.3-1.2.8-1.6A4.1 4.1 0 0 0 8 2.2Z"/></svg>';
   const TIMEOUT_CHIP_ICON =
     '<svg class="chip-state-svg" viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="7" cy="7" r="5.2"/><path d="M7 4.2V7l1.9 1.2"/></svg>';
   const retryCopy = (record, confirming) => {
@@ -357,8 +362,10 @@ export function createTaskHistoryView({ app, state, retryRequests, retrying }) {
       target.model,
       target.model_display_name,
       target.thinking,
+      shortThink(target),
       target.route_id,
       target.account_ref,
+      shortAccount(target),
       target.provider_id,
       target.provider_name,
       remoteRouteNamespace(target)
@@ -444,7 +451,8 @@ export function createTaskHistoryView({ app, state, retryRequests, retrying }) {
                       .filter(target => Boolean(target?.provider_id || target?.provider_name || remoteRouteNamespace(target)))
                       .map(target => ({ target, status: record.status }));
               const channelGroups = groupByChannel(channelEntries);
-              const channelBadges = renderChannelBadges(channelGroups, kind === 'task', statusTone(record));
+              const thinkingBadge = kind === 'task' ? renderThinkingBadge(channelEntries) : '';
+              const channelBadges = renderChannelBadges(channelGroups, kind === 'task', statusTone(record), thinkingBadge);
               const modelCount = headline?.modelCount || new Set(targets.map(targetModelName)).size;
               const channelCount = channelGroups.length;
               const taskMetaParts =
@@ -556,8 +564,17 @@ export function createTaskHistoryView({ app, state, retryRequests, retrying }) {
         : '';
     return `<span class="task-progress-bar${compact ? ' is-compact' : ''}" aria-hidden="true">${parts}</span>`;
   }
-  function renderChannelBadges(groups, showCount, fallbackTone) {
-    if (!groups.length) return '';
+  function renderThinkingBadge(entries) {
+    if (!entries.length) return '';
+    const keys = collectSortedThinkingKeys(entries);
+    if (!keys.length) return '';
+    const levelsHtml = keys
+      .map(key => `<code class="task-thinking-code">${escapeHtml(thinkingLabel(key))}</code>`)
+      .join('<span class="task-thinking-sep" aria-hidden="true">·</span>');
+    return `<span class="task-thinking-badge">${THINKING_BADGE_ICON}<span class="task-thinking-prefix">思考</span><span class="task-thinking-levels">${levelsHtml}</span></span>`;
+  }
+  function renderChannelBadges(groups, showCount, fallbackTone, extraBadgeHtml = '') {
+    if (!groups.length && !extraBadgeHtml) return '';
     const maxVisible = groups.length > 5 ? 4 : groups.length;
     const shown = groups.slice(0, maxVisible);
     const hidden = groups.slice(maxVisible);
@@ -572,7 +589,7 @@ export function createTaskHistoryView({ app, state, retryRequests, retrying }) {
     const overflow = hidden.length
       ? `<span class="task-channel-badge is-more" title="${escapeHtml(hidden.map(group => `${group.name} (${group.children.length})`).join('、'))}">+${hidden.length} 个渠道</span>`
       : '';
-    return `<span class="task-card-channels">${badges}${overflow}</span>`;
+    return `<span class="task-card-channels">${badges}${overflow}${extraBadgeHtml}</span>`;
   }
   function renderTaskCountsBar(record, children, progress) {
     if (!children.length) return '';
@@ -660,14 +677,38 @@ export function createTaskHistoryView({ app, state, retryRequests, retrying }) {
           }
           byModel.get(modelName).children.push(child);
         }
+        const renderPreviewChip = (child, label, slotId, describedById = '') => {
+          const target = child.target || {},
+            progress = sampleProgress(child),
+            tone = childPreviewTone(child),
+            selected = child.run_id === state.selectedRunId,
+            budget = budgetLabel(child.budget, child.status),
+            quality = qualityLabel(child);
+          const stateHtml = childPreviewStateHtml(child, progress);
+          const pct = progress.total > 0 ? Math.min(100, Math.round((progress.done / progress.total) * 100)) : 0;
+          const tooltip = [
+            targetLabel(target),
+            targetIdentity(target),
+            recordStatusLabel(child),
+            `${progress.done}/${progress.total} 样本`,
+            budget,
+            quality,
+            child.retryable_samples > 0 && !inProgress(child) ? `${child.retryable_samples} 个可重试` : ''
+          ]
+            .filter(Boolean)
+            .join(' · ');
+          const runningDecor =
+            tone === 'running'
+              ? '<span class="task-preview-chip-fill" aria-hidden="true"></span><span class="task-preview-chip-track" aria-hidden="true"></span><i class="task-dot is-running is-pulse" aria-hidden="true"></i>'
+              : '';
+          return `<button type="button" class="task-preview-chip is-${tone}${selected ? ' is-selected' : ''}"${tone === 'running' ? ` style="--pct:${pct}%"` : ''} data-preview-run-id="${escapeHtml(child.run_id)}" data-history-focus="preview-run:${escapeHtml(child.run_id)}" aria-expanded="${selected}" aria-controls="${escapeHtml(slotId)}"${describedById ? ` aria-describedby="${escapeHtml(describedById)}"` : ''} title="${escapeHtml(tooltip)}">${runningDecor}<span class="task-preview-chip-label">${escapeHtml(label)}</span><span class="task-preview-chip-state">${stateHtml}</span></button>`;
+        };
         const modelRows = modelGroups
           .map(group => {
             const currentSlot = slotIndex++;
             const slotId = `history-preview-run-${task.id}-${currentSlot}`;
             const accounts = [...new Set(group.children.map(child => shortAccount(child.target)))];
-            const thinkings = [...new Set(group.children.map(child => shortThink(child.target)))];
             const multiAccount = accounts.length > 1;
-            const singleThinking = thinkings.length === 1 && multiAccount;
             const groupSum = summarizeChildren(group.children);
             const doneRuns = group.children.filter(child => child.status === 'completed').length;
             const contextParts = [
@@ -679,38 +720,36 @@ export function createTaskHistoryView({ app, state, retryRequests, retrying }) {
               groupSum.counts.failed ? `失败 ${groupSum.counts.failed}` : '',
               groupSum.counts.interrupted ? `中断 ${groupSum.counts.interrupted}` : ''
             ].filter(Boolean);
-            const chips = group.children
-              .map(child => {
-                const target = child.target || {},
-                  progress = sampleProgress(child),
-                  tone = childPreviewTone(child),
-                  selected = child.run_id === state.selectedRunId,
-                  acc = shortAccount(target),
-                  th = shortThink(target),
-                  budget = budgetLabel(child.budget, child.status),
-                  quality = qualityLabel(child);
-                const label = multiAccount ? (singleThinking ? acc : `${acc} · ${th}`) : th;
-                const stateHtml = childPreviewStateHtml(child, progress);
-                const pct = progress.total > 0 ? Math.min(100, Math.round((progress.done / progress.total) * 100)) : 0;
-                const tooltip = [
-                  targetLabel(target),
-                  targetIdentity(target),
-                  recordStatusLabel(child),
-                  `${progress.done}/${progress.total} 样本`,
-                  budget,
-                  quality,
-                  child.retryable_samples > 0 && !inProgress(child) ? `${child.retryable_samples} 个可重试` : ''
-                ]
-                  .filter(Boolean)
-                  .join(' · ');
-                const runningDecor =
-                  tone === 'running'
-                    ? '<span class="task-preview-chip-fill" aria-hidden="true"></span><span class="task-preview-chip-track" aria-hidden="true"></span><i class="task-dot is-running is-pulse" aria-hidden="true"></i>'
-                    : '';
-                return `<button type="button" class="task-preview-chip is-${tone}${selected ? ' is-selected' : ''}"${tone === 'running' ? ` style="--pct:${pct}%"` : ''} data-preview-run-id="${escapeHtml(child.run_id)}" data-history-focus="preview-run:${escapeHtml(child.run_id)}" aria-expanded="${selected}" aria-controls="${escapeHtml(slotId)}" title="${escapeHtml(tooltip)}">${runningDecor}<span class="task-preview-chip-label">${escapeHtml(label)}</span><span class="task-preview-chip-state">${stateHtml}</span></button>`;
-              })
-              .join('');
-            return `<div class="task-preview-group"><div class="task-preview-head"><strong>${escapeHtml(group.modelName)}</strong><span class="task-preview-stats">${escapeHtml(contextParts.join(' · '))}</span></div><div class="task-preview-runs">${chips}</div><div id="${escapeHtml(slotId)}" class="task-preview-slot" data-preview-model-slot="${currentSlot}" data-preview-run-ids="${escapeHtml(group.children.map(child => child.run_id).join(','))}"></div></div>`;
+            const sortedThinkingKeys = collectSortedThinkingKeys(group.children);
+            let runsMarkup;
+            if (multiAccount) {
+              const byThinking = new Map();
+              for (const child of group.children) {
+                const key = rawThinkingKey(child.target);
+                if (!byThinking.has(key)) byThinking.set(key, []);
+                byThinking.get(key).push(child);
+              }
+              const lanesHtml = sortedThinkingKeys
+                .map((thinkKey, laneIdx) => {
+                  const laneChildren = byThinking.get(thinkKey) || [];
+                  const laneDone = laneChildren.filter(child => child.status === 'completed').length;
+                  const laneRailId = `history-preview-lane-${task.id}-${currentSlot}-${laneIdx}`;
+                  const chips = laneChildren
+                    .map(child => renderPreviewChip(child, shortAccount(child.target), slotId, laneRailId))
+                    .join('');
+                  return `<div class="task-thinking-lane" data-thinking-lane="${escapeHtml(thinkKey)}"><div class="task-thinking-rail" id="${escapeHtml(laneRailId)}"><span class="task-thinking-rail-kicker">思考</span><code class="task-thinking-rail-value">${escapeHtml(thinkingLabel(thinkKey))}</code><span class="task-thinking-rail-stat">${laneDone}/${laneChildren.length} 完成</span></div><div class="task-preview-runs">${chips}</div></div>`;
+                })
+                .join('');
+              runsMarkup = `<div class="task-thinking-lanes">${lanesHtml}</div>`;
+            } else {
+              const keyRank = new Map(sortedThinkingKeys.map((key, idx) => [key, idx]));
+              const sortedChildren = [...group.children].sort(
+                (a, b) => (keyRank.get(rawThinkingKey(a.target)) ?? 99) - (keyRank.get(rawThinkingKey(b.target)) ?? 99)
+              );
+              const chips = sortedChildren.map(child => renderPreviewChip(child, shortThink(child.target), slotId)).join('');
+              runsMarkup = `<div class="task-preview-runs is-single-account"><span class="task-thinking-inline-label">思考档位</span>${chips}</div>`;
+            }
+            return `<div class="task-preview-group"><div class="task-preview-head"><strong>${escapeHtml(group.modelName)}</strong><span class="task-preview-stats">${escapeHtml(contextParts.join(' · '))}</span></div>${runsMarkup}<div id="${escapeHtml(slotId)}" class="task-preview-slot" data-preview-model-slot="${currentSlot}" data-preview-run-ids="${escapeHtml(group.children.map(child => child.run_id).join(','))}"></div></div>`;
           })
           .join('');
         return `<section class="channel-pod is-${podTone}" aria-label="${escapeHtml(`渠道 ${pod.name}`)}"><header class="channel-pod-head"><div class="channel-pod-identity"><span class="channel-pod-icon">${isRemote ? CHANNEL_REMOTE_ICON : CHANNEL_LOCAL_ICON}</span><strong class="channel-pod-name">${escapeHtml(pod.name)}</strong>${podBadge ? `<span class="channel-pod-tag">${escapeHtml(podBadge)}</span>` : ''}${isRemote ? '<span class="channel-pod-tag is-remote">远端路由</span>' : ''}</div><div class="channel-pod-summary">${statusBits ? `<span class="channel-pod-status is-${podTone}"><i class="task-dot is-${podTone}" aria-hidden="true"></i>${escapeHtml(statusBits)}</span>` : ''}${podSum.sampleTotal > 0 ? `<span class="channel-pod-progress">${renderProgressBar(podSum.segments, podSum.sampleTotal, true)}<span class="channel-pod-count">${podSum.sampleDone}/${podSum.sampleTotal}</span></span>` : ''}</div></header><div class="channel-pod-body">${modelRows}</div></section>`;
@@ -871,11 +910,31 @@ export function createTaskHistoryView({ app, state, retryRequests, retrying }) {
       runConfirmLabel === '确认重试 API 失败'
         ? '待确认：仅重试 API 失败及因其停止的未执行样本，保留成功结果'
         : '待确认：仅重试失败、超时、中断或已取消样本，保留已完成结果';
-    const summary = `${retryRequests.has(`runs:${run.id}`) && !retrying.has(`runs:${run.id}`) ? `<p class="task-detail-note">${retryNotePrefix}；再次点击右上角“${escapeHtml(runConfirmLabel)}”后开始。</p>` : ''}<div class="run-detail-meta"><span>运行 <strong>${escapeHtml(run.id)}</strong></span><span>状态 <strong>${escapeHtml(recordStatusLabel(run))}</strong></span><span>样本 <strong>${samples.length}</strong></span><span>已结束 <strong>${sampleProgress(run).done}</strong></span>${retryBatches.length ? `<span>手动重试 <strong>${retryBatches.length} 次${latestRetry?.created_at ? `（最近 ${escapeHtml(formatDate(latestRetry.created_at))}）` : ''}</strong></span>` : ''}${run.budget?.stop_reason ? `<span>停止原因 <strong>${escapeHtml(run.budget.stop_reason)}</strong></span>` : ''}</div><p class="task-detail-note">${escapeHtml(
-      fixedTargets(run)
-        .map(target => `${targetLabel(target)} · ${targetIdentity(target)}`)
-        .join('；')
-    )}${!run.task_id ? ' · 旧运行记录，未迁移为新任务。' : ''}</p>`;
+    const runTargets = fixedTargets(run);
+    const runProgress = sampleProgress(run);
+    const sampleTotal = samples.length || runProgress.total;
+    const targetBanner = runTargets.length
+      ? `<div class="run-target-banner"><div class="run-target-primary">${runTargets
+          .map(
+            target =>
+              `<span class="run-target-item"><strong class="run-target-model">${escapeHtml(targetModelName(target))}</strong><span class="run-thinking-pill"><span class="run-thinking-pill-prefix">思考</span><code>${escapeHtml(shortThink(target))}</code></span><span class="run-account-pill">账号 ${escapeHtml(shortAccount(target))}</span></span>`
+          )
+          .join(
+            ''
+          )}</div><span class="run-list-status ${statusBadgeClass(run)}"><i class="task-dot is-${statusTone(run)}" aria-hidden="true"></i>${escapeHtml(recordStatusLabel(run))}${sampleTotal ? ` · ${runProgress.done}/${sampleTotal} 样本` : ''}</span></div>`
+      : '';
+    const provenanceBits = [
+      `运行 <code class="task-meta-id">${escapeHtml(run.id)}</code>`,
+      !runTargets.length ? `状态 <strong>${escapeHtml(recordStatusLabel(run))}</strong>` : '',
+      !runTargets.length ? `已结束 <strong>${runProgress.done}/${sampleTotal}</strong>` : '',
+      retryBatches.length
+        ? `手动重试 <strong>${retryBatches.length} 次${latestRetry?.created_at ? `（最近 ${escapeHtml(formatDate(latestRetry.created_at))}）` : ''}</strong>`
+        : '',
+      run.budget?.stop_reason ? `停止原因 <strong>${escapeHtml(run.budget.stop_reason)}</strong>` : '',
+      runTargets.length ? escapeHtml(runTargets.map(target => `${targetLabel(target)} · ${targetIdentity(target)}`).join('；')) : '',
+      !run.task_id ? '旧运行记录，未迁移为新任务。' : ''
+    ].filter(Boolean);
+    const summary = `${retryRequests.has(`runs:${run.id}`) && !retrying.has(`runs:${run.id}`) ? `<p class="task-detail-note">${retryNotePrefix}；再次点击右上角“${escapeHtml(runConfirmLabel)}”后开始。</p>` : ''}${targetBanner}<p class="task-detail-note run-detail-provenance">${provenanceBits.join(' · ')}</p>`;
     const sampleTone = sample =>
       isTimeoutSample(sample)
         ? 'timeout'

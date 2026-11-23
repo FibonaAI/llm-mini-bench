@@ -515,7 +515,7 @@ test('run detail defers raw JSON formatting until a disclosure is opened', () =>
     expect(appended[0].textContent).toContain('very-large-model-answer-payload');
 });
 
-test('task preview distinguishes multiple accounts on the same channel and model', () => {
+test('task preview groups multiple accounts into effort-ordered thinking lanes and surfaces card thinking badge', () => {
     const { state, view, nodes } = fixture();
     const mkTarget = (account_ref, thinking, account_evidence = 'gateway_account_binding') => ({
         provider_id: 'bench-mock',
@@ -528,16 +528,10 @@ test('task preview distinguishes multiple accounts on the same channel and model
     });
     const multiAcctTask = {
         id: 'task-multi-acct',
+        bank_version: '1.0',
         status: 'completed',
         plan: { run_count: 3, rounds: 1 },
         children: [
-            {
-                run_id: 'r-a-low',
-                target: mkTarget('alpha', 'low'),
-                status: 'completed',
-                sample_count: 12,
-                sample_status_counts: { completed: 12 }
-            },
             {
                 run_id: 'r-a-high',
                 target: mkTarget('alpha', 'high'),
@@ -551,20 +545,82 @@ test('task preview distinguishes multiple accounts on the same channel and model
                 status: 'completed',
                 sample_count: 12,
                 sample_status_counts: { completed: 12 }
+            },
+            {
+                run_id: 'r-a-low',
+                target: mkTarget('alpha', 'low'),
+                status: 'completed',
+                sample_count: 12,
+                sample_status_counts: { completed: 12 }
             }
         ]
     };
-    state.tasks = [multiAcctTask];
+    const multiAcctSingleThinkTask = {
+        id: 'task-multi-acct-medium',
+        bank_version: '1.0',
+        status: 'running',
+        plan: { run_count: 2, rounds: 3 },
+        children: [
+            {
+                run_id: 'r-m-1',
+                target: mkTarget('acc-one@example.com', 'medium'),
+                status: 'completed',
+                sample_count: 36,
+                sample_status_counts: { completed: 36 }
+            },
+            {
+                run_id: 'r-m-2',
+                target: mkTarget('acc-two@example.com', 'medium'),
+                status: 'running',
+                sample_count: 36,
+                sample_status_counts: { completed: 18, running: 2, pending: 16 }
+            }
+        ]
+    };
+    state.tasks = [multiAcctTask, multiAcctSingleThinkTask];
     state.selectedTaskId = 'task-multi-acct';
-    state.selectedRunId = null;
+    state.selectedRunId = 'r-a-high';
     state.taskDetail = multiAcctTask;
+    state.runDetail = {
+        id: 'r-a-high',
+        task_id: 'task-multi-acct',
+        bank_version: '1.0',
+        status: 'completed',
+        plan: { bank_version: '1.0', targets: [mkTarget('alpha', 'high')] },
+        samples: [{ sample_id: 's-1', task: 't1', round: 1, status: 'completed', grade: { content_score: 1 } }]
+    };
     view.renderDetails();
     const html = nodes.get('bench-task-detail').innerHTML;
-    expect(html).toContain('<span class="task-preview-chip-label">alpha · low</span>');
-    expect(html).toContain('<span class="task-preview-chip-label">alpha · high</span>');
-    expect(html).toContain('<span class="task-preview-chip-label">beta · high</span>');
+    expect(html.indexOf('data-thinking-lane="low"')).toBeGreaterThan(-1);
+    expect(html.indexOf('data-thinking-lane="high"')).toBeGreaterThan(html.indexOf('data-thinking-lane="low"'));
+    expect(html).toContain('<code class="task-thinking-rail-value">low</code><span class="task-thinking-rail-stat">1/1 完成</span>');
+    expect(html).toContain('<code class="task-thinking-rail-value">high</code><span class="task-thinking-rail-stat">2/2 完成</span>');
+    expect(html).toContain('<span class="task-preview-chip-label">alpha</span>');
+    expect(html).toContain('<span class="task-preview-chip-label">beta</span>');
+    expect(html).toContain('aria-describedby="history-preview-lane-task-multi-acct-0-0"');
     const listHtml = nodes.get('bench-run-list').innerHTML;
     expect(listHtml).toContain('GPT-6 Luna · bench-mock（2 个账号）');
+    expect(listHtml).toContain('class="task-thinking-badge"');
+    expect(listHtml).toContain(
+        '<code class="task-thinking-code">low</code><span class="task-thinking-sep" aria-hidden="true">·</span><code class="task-thinking-code">high</code>'
+    );
+    expect(listHtml).toContain('<code class="task-thinking-code">medium</code>');
+    const runHtml = nodes.get('bench-run-detail').innerHTML;
+    expect(runHtml).toContain('class="run-target-banner"');
+    expect(runHtml).toContain('<span class="run-thinking-pill"><span class="run-thinking-pill-prefix">思考</span><code>high</code></span>');
+    expect(runHtml).toContain('<span class="run-account-pill">账号 alpha</span>');
+
+    // Multi-account × single thinking (e.g. 7 accounts × medium) keeps medium explicitly visible on the lane rail.
+    state.selectedTaskId = 'task-multi-acct-medium';
+    state.selectedRunId = null;
+    state.taskDetail = multiAcctSingleThinkTask;
+    state.runDetail = null;
+    view.renderDetails();
+    const singleThinkHtml = nodes.get('bench-task-detail').innerHTML;
+    expect(singleThinkHtml).toContain('data-thinking-lane="medium"');
+    expect(singleThinkHtml).toContain(
+        '<code class="task-thinking-rail-value">medium</code><span class="task-thinking-rail-stat">1/2 完成</span>'
+    );
 });
 
 test('task preview labels gateway-binding accounts as 自动分配 and single-pinned tasks show account in headline', () => {
@@ -634,8 +690,13 @@ test('task preview labels gateway-binding accounts as 自动分配 and single-pi
     state.taskDetail = mixedDefaultTask;
     view.renderDetails();
     expect(nodes.get('bench-run-list').innerHTML).toContain('GPT-5.4 · openai / team-a');
+    expect(nodes.get('bench-task-detail').innerHTML).toContain('<code class="task-thinking-rail-value">默认</code>');
     expect(nodes.get('bench-task-detail').innerHTML).toContain('<span class="task-preview-chip-label">自动分配</span>');
     expect(nodes.get('bench-task-detail').innerHTML).toContain('<span class="task-preview-chip-label">team-a</span>');
+    nodes.get('history-search').value = '默认';
+    nodes.get('history-search').handlers.get('input')();
+    expect(nodes.get('bench-run-list').innerHTML).toContain('task-mixed-auto');
+    expect(nodes.get('bench-run-list').innerHTML).not.toContain('task-single-pin');
 });
 
 test('task card surfaces channel badges, non-zero status pills, and channel-pod preview with progress fills', () => {

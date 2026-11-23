@@ -3,6 +3,7 @@
   const outerCardText=await taskCard.innerText();
   require(outerCardText.includes('same-model'),'Outer task card must show which models were run: '+outerCardText);
   require(await taskCard.locator('.task-channel-badge').count()>=1,'Outer task card must surface channel badges');
+  require(await taskCard.locator('.task-thinking-badge').count()===1,'Outer task card must surface thinking badge');
   require(await page.locator('.history-entry .task-progress-bar').first().count()===1,'Task card must render a status progress bar');
   await taskCard.click();require(await taskCard.getAttribute('aria-expanded')==='false'&&await page.locator('#bench-task-section').count()===0,'Same task card must collapse');
   require(await taskCard.evaluate(node=>!!document.getElementById(node.getAttribute('aria-controls'))),'Collapsed task lost its associated disclosure slot');
@@ -15,6 +16,7 @@
   require(!(await page.locator('#bench-task-detail details.task-all-runs').evaluate(node=>node.open)),'Full child run list must stay collapsed by default behind the task preview');
   await page.locator('#bench-task-detail [data-preview-run-id="mock-task-1-run-0"]').click();
   await page.waitForFunction(()=>document.querySelector('#bench-run-detail').textContent.includes('答案解析有歧义'));
+  require(await page.locator('#bench-run-detail .run-target-banner .run-thinking-pill').count()>=1,'Run detail banner must surface prominent thinking pill');
   require(await page.locator('#bench-run-section').evaluate(node=>!!node.parentElement.dataset.previewModelSlot),'Clicking a preview chip must mount run details inside the visible preview slot');
   await page.locator('#bench-task-detail [data-preview-run-id="mock-task-1-run-0"]').click();
   require(await page.locator('#bench-run-section').isHidden(),'Repeat click on preview chip must collapse run details');

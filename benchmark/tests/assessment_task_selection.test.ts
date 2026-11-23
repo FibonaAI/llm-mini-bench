@@ -4,7 +4,7 @@ import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import vm from 'node:vm';
 import { remoteRouteNamespace } from '../web/data-adapter.js';
-import { thinkingLabel } from '../web/data-picker.js';
+import { sortThinkingEfforts, thinkingLabel } from '../web/data-picker.js';
 
 class TestNode {
     constructor(value = '') {
@@ -133,6 +133,7 @@ function fixture() {
         Uint8Array,
         remoteRouteNamespace,
         selectionKey: key,
+        sortThinkingEfforts,
         thinkingLabel,
         createDataPicker: () => ({ setQuotaCatalog() {}, setSelection() {}, destroy() {} }),
         routePickerLeaves: records =>
