@@ -293,7 +293,7 @@ test('zero-cost records plot on the y-axis in log and linear cost modes without 
         // Zooming on the zero-cost point keeps finite coordinates on the y-axis.
         f.chart.render(rows, { labels: false, axis: 'cost', log, selectedIds: ['free-top'] });
         f.chart.zoom(4);
-        const zoomedFree = collectNodes(f.container).find(node => node.attributes?.['data-record-id'] === 'free-top');
+        const zoomedFree = chartFixtureNodes(f, 'score-cost-point').find(node => node.attributes?.['data-record-id'] === 'free-top');
         expect(Number(zoomedFree.children.find(node => node.attributes?.class === 'record-marker').attributes.cx)).toBe(58);
         // Zooming into a paid region moves the zero-cost point offscreen.
         f.chart.resetZoom();
@@ -690,12 +690,13 @@ test('wheel zoom at cursor, drag-to-pan when zoomed, duration axis, and pinned t
     expect(chartFixtureNodes(f, 'score-cost-point')).toHaveLength(2);
     expect(chartFixtureNodes(f, 'chart-brush-rect')).toHaveLength(0);
     expect(tooltip.hidden).toBe(true);
+    expect(f.selections).toEqual(['p1', null, 'p1', null]);
 
     // Clicking a point selected externally via options.selectedIds also toggles it off
     f.chart.render(rows, { axis: 'duration', log: false, selectedIds: ['p2'] });
     const point2 = chartFixtureNodes(f, 'score-cost-point').find(node => node.attributes['data-record-id'] === 'p2');
     point2.emit('click', { stopPropagation() {} });
-    expect(f.selections).toEqual(['p1', null, 'p1', null]);
+    expect(f.selections).toEqual(['p1', null, 'p1', null, null]);
     expect(tooltip.hidden).toBe(true);
     f.chart.render(rows, { axis: 'duration', log: false, selectedIds: [] });
 
@@ -1001,5 +1002,114 @@ test('maskAccounts masks single-model multi-account SVG point labels before trun
     expect(pinnedAria).not.toContain('alice.researcher');
     expect(pinnedAria).toContain('•••••.••••••••••@•••••••.•••••••（固定绑定）');
     expect(autoAria).toContain('网关自动分配（账号未记录）');
+    f.chart.destroy();
+});
+
+test('crosshair tracks pointer hover, snaps to points, pins on click, and clears on unpin', () => {
+    const f = chartResizeFixture();
+    const rows = [
+        {
+            id: 'p1',
+            source: 'run',
+            run_id: 'run-1',
+            model: 'm1',
+            modelDisplayName: 'Model 1',
+            providerName: 'ch1',
+            account: 'a1',
+            think: 'low',
+            created_at: '2026-11-18T10:00:00Z',
+            cost: 0.05,
+            score: 72.5,
+            rounds: 1
+        },
+        {
+            id: 'p2',
+            source: 'run',
+            run_id: 'run-2',
+            model: 'm2',
+            modelDisplayName: 'Model 2',
+            providerName: 'ch2',
+            account: 'a2',
+            think: 'high',
+            created_at: '2026-11-18T12:00:00Z',
+            cost: 0.4,
+            score: 91.2,
+            rounds: 1
+        }
+    ];
+    f.chart.render(rows, { axis: 'cost', log: true });
+    const svg = f.container.children[0];
+    const crosshair = () => chartFixtureNodes(f, 'score-cost-crosshair')[0];
+    const hLine = () => chartFixtureNodes(f, 'score-cost-crosshair-line score-cost-crosshair-h')[0];
+    const vLine = () => chartFixtureNodes(f, 'score-cost-crosshair-line score-cost-crosshair-v')[0];
+    const yLabel = () => chartFixtureNodes(f, 'score-cost-crosshair-label score-cost-crosshair-y-label')[0];
+    const xLabel = () => chartFixtureNodes(f, 'score-cost-crosshair-label score-cost-crosshair-x-label')[0];
+    const pointNode = id => chartFixtureNodes(f, 'score-cost-point').find(node => node.attributes['data-record-id'] === id);
+    const markerOf = id => pointNode(id).children.find(child => child.attributes?.class === 'record-marker');
+
+    // Starts hidden
+    expect(crosshair().attributes['data-visible']).toBe('false');
+    expect(crosshair().attributes['data-pinned']).toBe('false');
+    expect(crosshair().attributes.display).toBe('none');
+
+    // Moving pointer inside plot area shows free-moving crosshair
+    svg.emit('pointermove', { clientX: 300, clientY: 180 });
+    expect(crosshair().attributes['data-visible']).toBe('true');
+    expect(crosshair().attributes['data-pinned']).toBe('false');
+    expect(Number(vLine().attributes.x1)).toBe(300);
+    expect(Number(hLine().attributes.y1)).toBe(180);
+    expect(xLabel().textContent.startsWith('$')).toBe(true);
+
+    // Moving outside plot area hides crosshair
+    svg.emit('pointermove', { clientX: 10, clientY: 10 });
+    expect(crosshair().attributes['data-visible']).toBe('false');
+    expect(crosshair().attributes.display).toBe('none');
+
+    // Hovering a data point snaps crosshair to exact point coordinates and labels
+    const p1Marker = markerOf('p1');
+    pointNode('p1').emit('pointerenter');
+    expect(crosshair().attributes['data-visible']).toBe('true');
+    expect(crosshair().attributes['data-pinned']).toBe('false');
+    expect(crosshair().attributes['data-record-id']).toBe('p1');
+    expect(vLine().attributes.x1).toBe(p1Marker.attributes.cx);
+    expect(hLine().attributes.y1).toBe(p1Marker.attributes.cy);
+    expect(yLabel().textContent).toBe('72.5');
+    expect(xLabel().textContent).toBe('$0.05');
+
+    // Leaving point hides unpinned crosshair
+    pointNode('p1').emit('pointerleave');
+    expect(crosshair().attributes['data-visible']).toBe('false');
+
+    // Clicking a point pins the crosshair; pointermove & pointerleave do not move or hide it
+    pointNode('p1').emit('click', { stopPropagation() {} });
+    expect(crosshair().attributes['data-visible']).toBe('true');
+    expect(crosshair().attributes['data-pinned']).toBe('true');
+    expect(crosshair().attributes['data-record-id']).toBe('p1');
+    expect(vLine().attributes.x1).toBe(p1Marker.attributes.cx);
+    expect(hLine().attributes.y1).toBe(p1Marker.attributes.cy);
+
+    svg.emit('pointermove', { clientX: 520, clientY: 120 });
+    svg.emit('pointerleave');
+    expect(crosshair().attributes['data-visible']).toBe('true');
+    expect(crosshair().attributes['data-pinned']).toBe('true');
+    expect(vLine().attributes.x1).toBe(p1Marker.attributes.cx);
+    expect(hLine().attributes.y1).toBe(p1Marker.attributes.cy);
+
+    // Clicking another point switches the pinned crosshair to that point
+    const p2Marker = markerOf('p2');
+    pointNode('p2').emit('click', { stopPropagation() {} });
+    expect(crosshair().attributes['data-visible']).toBe('true');
+    expect(crosshair().attributes['data-pinned']).toBe('true');
+    expect(crosshair().attributes['data-record-id']).toBe('p2');
+    expect(vLine().attributes.x1).toBe(p2Marker.attributes.cx);
+    expect(hLine().attributes.y1).toBe(p2Marker.attributes.cy);
+    expect(yLabel().textContent).toBe('91.2');
+    expect(xLabel().textContent).toBe('$0.4');
+
+    // Clicking the same point again unpins and hides the crosshair
+    pointNode('p2').emit('click', { stopPropagation() {} });
+    expect(crosshair().attributes['data-visible']).toBe('false');
+    expect(crosshair().attributes['data-pinned']).toBe('false');
+    expect(crosshair().attributes.display).toBe('none');
     f.chart.destroy();
 });

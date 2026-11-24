@@ -201,10 +201,12 @@ export function createScoreCostChart(container, { onSelect = _id => {}, onOpenRu
   let zoomWindow = null,
     viewState = null,
     pinnedPointId = null,
+    hoveredPointId = null,
     pan = null,
     suppressPlotClick = false,
     showPointTooltipById = new Map(),
     highlightSeriesFn = _key => {},
+    crosshairCtrl = null,
     disposed = false,
     resizeFrame = null,
     drawnWidth = null;
@@ -213,11 +215,14 @@ export function createScoreCostChart(container, { onSelect = _id => {}, onOpenRu
     1, 2, 5, 10, 15, 20, 30, 60, 120, 180, 300, 600, 900, 1200, 1800, 3600, 5400, 7200, 10800, 14400, 21600, 28800, 43200
   ];
 
-  function unpinTooltip() {
+  function unpinTooltip({ notifySelect = false } = {}) {
+    const hadSelection = Boolean(pinnedPointId || options.selectedIds.length);
     pinnedPointId = null;
     tooltip.hidden = true;
     tooltip.classList?.remove?.('is-pinned');
     highlightSeriesFn(null);
+    crosshairCtrl?.hide();
+    if (notifySelect && hadSelection) onSelect(null);
   }
 
   function svgPointFromEvent(event) {
@@ -325,40 +330,57 @@ export function createScoreCostChart(container, { onSelect = _id => {}, onOpenRu
   }
 
   function onPointerMove(event) {
-    if (!pan || pan.unpinOnly || !viewState) return;
-    if (pan.pointerId !== undefined && event.pointerId !== undefined && pan.pointerId !== event.pointerId) return;
+    if (disposed || !viewState) return;
+    if (pan && !pan.unpinOnly) {
+      if (pan.pointerId !== undefined && event.pointerId !== undefined && pan.pointerId !== event.pointerId) return;
+      const pt = svgPointFromEvent(event);
+      if (!pt) return;
+      const dx = pt.x - pan.startX;
+      const dy = pt.y - pan.startY;
+      if (!pan.active && Math.hypot(dx, dy) >= 4) {
+        pan.active = true;
+        svg.classList?.add?.('is-panning');
+        try {
+          svg.setPointerCapture?.(event.pointerId);
+        } catch {
+          /* Synthetic events may not carry a capturable pointerId. */
+        }
+      }
+      if (!pan.active) return;
+      const { plotWidth, plotHeight } = pan.state;
+      const xSpan = pan.startWindow.xMax - pan.startWindow.xMin;
+      const ySpan = pan.startWindow.yMax - pan.startWindow.yMin;
+      const deltaX = -(dx / plotWidth) * xSpan;
+      const deltaY = (dy / plotHeight) * ySpan;
+      const nextWindow = clampZoomWindow(
+        {
+          xMin: pan.startWindow.xMin + deltaX,
+          xMax: pan.startWindow.xMax + deltaX,
+          yMin: pan.startWindow.yMin + deltaY,
+          yMax: pan.startWindow.yMax + deltaY
+        },
+        pan.state
+      );
+      if (nextWindow) {
+        zoomWindow = nextWindow;
+        drawChart();
+      }
+      return;
+    }
+    if (!viewState.hasPoints || pinnedPointId || hoveredPointId) return;
     const pt = svgPointFromEvent(event);
     if (!pt) return;
-    const dx = pt.x - pan.startX;
-    const dy = pt.y - pan.startY;
-    if (!pan.active && Math.hypot(dx, dy) >= 4) {
-      pan.active = true;
-      svg.classList?.add?.('is-panning');
-      try {
-        svg.setPointerCapture?.(event.pointerId);
-      } catch {
-        /* Synthetic events may not carry a capturable pointerId. */
-      }
+    const { margin, plotWidth, plotHeight } = viewState;
+    if (pt.x < margin.left || pt.x > margin.left + plotWidth || pt.y < margin.top || pt.y > margin.top + plotHeight) {
+      crosshairCtrl?.hide();
+      return;
     }
-    if (!pan.active) return;
-    const { plotWidth, plotHeight } = pan.state;
-    const xSpan = pan.startWindow.xMax - pan.startWindow.xMin;
-    const ySpan = pan.startWindow.yMax - pan.startWindow.yMin;
-    const deltaX = -(dx / plotWidth) * xSpan;
-    const deltaY = (dy / plotHeight) * ySpan;
-    const nextWindow = clampZoomWindow(
-      {
-        xMin: pan.startWindow.xMin + deltaX,
-        xMax: pan.startWindow.xMax + deltaX,
-        yMin: pan.startWindow.yMin + deltaY,
-        yMax: pan.startWindow.yMax + deltaY
-      },
-      pan.state
-    );
-    if (nextWindow) {
-      zoomWindow = nextWindow;
-      drawChart();
-    }
+    crosshairCtrl?.showAt(pt.x, pt.y);
+  }
+
+  function onPointerLeave() {
+    hoveredPointId = null;
+    if (!pinnedPointId) crosshairCtrl?.hide();
   }
 
   function onPointerUp(event) {
@@ -375,7 +397,7 @@ export function createScoreCostChart(container, { onSelect = _id => {}, onOpenRu
     }
     clearPan();
     if (!current.active && !current.startedOnPoint && pinnedPointId) {
-      unpinTooltip();
+      unpinTooltip({ notifySelect: true });
     }
   }
 
@@ -394,13 +416,14 @@ export function createScoreCostChart(container, { onSelect = _id => {}, onOpenRu
 
   function onDocumentKeyDown(event) {
     if (!disposed && event.key === 'Escape' && pinnedPointId) {
-      unpinTooltip();
+      unpinTooltip({ notifySelect: true });
     }
   }
 
   svg.addEventListener?.('wheel', onWheel, { passive: false });
   svg.addEventListener?.('pointerdown', onPointerDown);
   svg.addEventListener?.('pointermove', onPointerMove);
+  svg.addEventListener?.('pointerleave', onPointerLeave);
   svg.addEventListener?.('pointerup', onPointerUp);
   svg.addEventListener?.('pointercancel', clearPan);
   svg.addEventListener?.('click', onSvgClick);
@@ -409,6 +432,8 @@ export function createScoreCostChart(container, { onSelect = _id => {}, onOpenRu
 
   function drawChart() {
     if (disposed) return;
+    hoveredPointId = null;
+    crosshairCtrl = null;
     tooltip.hidden = true;
     tooltip.classList?.remove?.('is-pinned');
     showPointTooltipById = new Map();
@@ -429,6 +454,7 @@ export function createScoreCostChart(container, { onSelect = _id => {}, onOpenRu
       axis: token('--line', '#e3e3e8'),
       card: token('--card', '#fff'),
       accent: token('--accent', '#4f46e5'),
+      accentFg: token('--accent-fg', '#fff'),
       amber: token('--amber', '#b45309')
     };
     const explicitTheme = document.documentElement.dataset.theme;
@@ -561,6 +587,131 @@ export function createScoreCostChart(container, { onSelect = _id => {}, onOpenRu
     clip.append(svgNode('rect', { x: margin.left - 12, y: margin.top - 13, width: plotWidth + 24, height: plotHeight + 26 }));
     defs.append(clip);
     svg.append(defs);
+    const crosshair = svgNode('g', {
+      class: 'score-cost-crosshair',
+      'pointer-events': 'none',
+      'data-visible': 'false',
+      'data-pinned': 'false',
+      display: 'none'
+    });
+    const crosshairH = svgNode('line', {
+      class: 'score-cost-crosshair-line score-cost-crosshair-h',
+      x1: margin.left,
+      x2: width - margin.right,
+      y1: margin.top,
+      y2: margin.top,
+      stroke: theme.muted,
+      'stroke-width': 1,
+      'stroke-dasharray': '4 4',
+      opacity: 0.75
+    });
+    const crosshairV = svgNode('line', {
+      class: 'score-cost-crosshair-line score-cost-crosshair-v',
+      x1: margin.left,
+      x2: margin.left,
+      y1: margin.top,
+      y2: height - margin.bottom,
+      stroke: theme.muted,
+      'stroke-width': 1,
+      'stroke-dasharray': '4 4',
+      opacity: 0.75
+    });
+    const yBadgeBg = svgNode('rect', { class: 'score-cost-crosshair-badge', rx: 4, fill: theme.secondary });
+    const yBadgeText = svgNode('text', {
+      class: 'score-cost-crosshair-label score-cost-crosshair-y-label',
+      'text-anchor': 'middle',
+      fill: theme.card,
+      'font-size': 10.5,
+      'font-weight': 600
+    });
+    const xBadgeBg = svgNode('rect', { class: 'score-cost-crosshair-badge', rx: 4, fill: theme.secondary });
+    const xBadgeText = svgNode('text', {
+      class: 'score-cost-crosshair-label score-cost-crosshair-x-label',
+      'text-anchor': 'middle',
+      fill: theme.card,
+      'font-size': 10.5,
+      'font-weight': 600
+    });
+    crosshair.append(crosshairH, crosshairV, yBadgeBg, yBadgeText, xBadgeBg, xBadgeText);
+    svg.append(crosshair);
+    const formatCrosshairX = value =>
+      options.axis === 'tokens' ? compactTokens(value) : options.axis === 'duration' ? formatDuration(value) : money(value);
+    const updateCrosshair = (px, py, { pinned = false, recordId = '', scoreLabel = null, xLabel = null } = {}) => {
+      const cx = Math.max(margin.left, Math.min(width - margin.right, px));
+      const cy = Math.max(margin.top, Math.min(height - margin.bottom, py));
+      const strokeColor = pinned ? theme.accent : theme.muted;
+      const strokeWidth = pinned ? 1.25 : 1;
+      const dash = pinned ? '5 3' : '4 4';
+      const lineOpacity = pinned ? 0.9 : 0.75;
+      const badgeBg = pinned ? theme.accent : theme.secondary;
+      const badgeFg = pinned ? theme.accentFg : theme.card;
+      crosshairH.setAttribute('y1', cy);
+      crosshairH.setAttribute('y2', cy);
+      crosshairH.setAttribute('stroke', strokeColor);
+      crosshairH.setAttribute('stroke-width', strokeWidth);
+      crosshairH.setAttribute('stroke-dasharray', dash);
+      crosshairH.setAttribute('opacity', lineOpacity);
+      crosshairV.setAttribute('x1', cx);
+      crosshairV.setAttribute('x2', cx);
+      crosshairV.setAttribute('stroke', strokeColor);
+      crosshairV.setAttribute('stroke-width', strokeWidth);
+      crosshairV.setAttribute('stroke-dasharray', dash);
+      crosshairV.setAttribute('opacity', lineOpacity);
+      const rawScore = Math.max(0, Math.min(100, yMax - ((cy - margin.top) / plotHeight) * (yMax - yMin)));
+      const yText = scoreLabel ?? rawScore.toFixed(1);
+      const xVal = lower + ((cx - margin.left) / plotWidth) * (upper - lower);
+      const rawCost = hasVisibleZeroOnLogAxis && Math.abs(cx - margin.left) < 1.5 ? 0 : Math.max(0, inverse(xVal));
+      const xText = xLabel ?? formatCrosshairX(rawCost);
+      crosshair.setAttribute('data-visible', 'true');
+      crosshair.setAttribute('data-pinned', String(Boolean(pinned)));
+      crosshair.setAttribute('data-record-id', recordId);
+      crosshair.setAttribute('display', 'inline');
+      yBadgeText.textContent = yText;
+      const yTextW = Math.max(24, yBadgeText.getComputedTextLength?.() || yText.length * 7);
+      const yBadgeW = Math.min(margin.left - 4, Math.ceil(yTextW + 12));
+      const yBadgeH = 18;
+      const yBadgeX = Math.max(1, margin.left - yBadgeW - 4);
+      const yBadgeY = Math.max(margin.top - yBadgeH / 2, Math.min(height - margin.bottom - yBadgeH / 2, cy - yBadgeH / 2));
+      yBadgeBg.setAttribute('x', yBadgeX);
+      yBadgeBg.setAttribute('y', yBadgeY);
+      yBadgeBg.setAttribute('width', yBadgeW);
+      yBadgeBg.setAttribute('height', yBadgeH);
+      yBadgeBg.setAttribute('fill', badgeBg);
+      yBadgeText.setAttribute('x', yBadgeX + yBadgeW / 2);
+      yBadgeText.setAttribute('y', yBadgeY + 12.5);
+      yBadgeText.setAttribute('fill', badgeFg);
+      xBadgeText.textContent = xText;
+      const xTextW = Math.max(28, xBadgeText.getComputedTextLength?.() || xText.length * 7);
+      const xBadgeW = Math.ceil(xTextW + 14);
+      const xBadgeH = 18;
+      const xBadgeX = Math.max(margin.left, Math.min(width - margin.right - xBadgeW, cx - xBadgeW / 2));
+      const xBadgeY = height - margin.bottom + 8;
+      xBadgeBg.setAttribute('x', xBadgeX);
+      xBadgeBg.setAttribute('y', xBadgeY);
+      xBadgeBg.setAttribute('width', xBadgeW);
+      xBadgeBg.setAttribute('height', xBadgeH);
+      xBadgeBg.setAttribute('fill', badgeBg);
+      xBadgeText.setAttribute('x', xBadgeX + xBadgeW / 2);
+      xBadgeText.setAttribute('y', xBadgeY + 12.5);
+      xBadgeText.setAttribute('fill', badgeFg);
+    };
+    const hideCrosshair = () => {
+      crosshair.setAttribute('data-visible', 'false');
+      crosshair.setAttribute('data-pinned', 'false');
+      crosshair.setAttribute('data-record-id', '');
+      crosshair.setAttribute('display', 'none');
+    };
+    crosshairCtrl = {
+      showAt: (px, py) => updateCrosshair(px, py),
+      showPoint: (point, px, py, pinned) =>
+        updateCrosshair(px, py, {
+          pinned,
+          recordId: point.id,
+          scoreLabel: point.score.toFixed(1),
+          xLabel: `${point.usageIncomplete ? '≥ ' : ''}${formatCrosshairX(point.cost)}`
+        }),
+      hide: hideCrosshair
+    };
     const plotted = svgNode('g', { 'clip-path': `url(#${clipId})` });
     svg.append(plotted);
     const hoverLabels = svgNode('g', { class: 'thinking-hover-labels', 'pointer-events': 'none' });
@@ -829,7 +980,7 @@ export function createScoreCostChart(container, { onSelect = _id => {}, onOpenRu
           closeBtn.setAttribute('aria-label', '关闭卡片');
           closeBtn.addEventListener('click', event => {
             event.stopPropagation();
-            unpinTooltip();
+            unpinTooltip({ notifySelect: true });
           });
           headerRight.append(closeBtn);
         }
@@ -889,14 +1040,15 @@ export function createScoreCostChart(container, { onSelect = _id => {}, onOpenRu
             event.stopPropagation();
             onOpenRun(runId);
           });
-          actions.append(openBtn, node('span', 'score-cost-tooltip-hint', pinned ? '已固定 · 再次点击取消' : '点击固定卡片'));
+          actions.append(openBtn, node('span', 'score-cost-tooltip-hint', pinned ? '已固定 · 再次点击取消' : '点击固定卡片与参考线'));
           tooltip.append(actions);
         } else {
           const actions = node('div', 'score-cost-tooltip-actions');
-          actions.append(node('span', 'score-cost-tooltip-hint', pinned ? '已固定 · 再次点击取消' : '点击固定卡片'));
+          actions.append(node('span', 'score-cost-tooltip-hint', pinned ? '已固定 · 再次点击取消' : '点击固定卡片与参考线'));
           tooltip.append(actions);
         }
         tooltip.hidden = false;
+        crosshairCtrl?.showPoint(point, px, py, Boolean(pinned));
         const cardWidth = tooltip.offsetWidth || 348,
           cardHeight = tooltip.offsetHeight || 176,
           gap = 14;
@@ -980,11 +1132,14 @@ export function createScoreCostChart(container, { onSelect = _id => {}, onOpenRu
         tooltip.hidden = true;
         tooltip.classList?.remove?.('is-pinned');
         highlightSeries(null);
+        crosshairCtrl?.hide();
       };
       group.addEventListener('pointerenter', () => {
+        hoveredPointId = point.id;
         if (!pan?.active && (!pinnedPointId || pinnedPointId === point.id)) showTooltip(pinnedPointId === point.id);
       });
       group.addEventListener('pointerleave', () => {
+        if (hoveredPointId === point.id) hoveredPointId = null;
         if (!pan?.active && !pinnedPointId) restoreOrHide();
       });
       group.addEventListener('focus', () => showTooltip(pinnedPointId === point.id));
@@ -1013,7 +1168,7 @@ export function createScoreCostChart(container, { onSelect = _id => {}, onOpenRu
           toggleSelectAndPin();
         }
         if (event.key === ' ') event.preventDefault();
-        if (event.key === 'Escape') unpinTooltip();
+        if (event.key === 'Escape') unpinTooltip({ notifySelect: true });
       });
       group.addEventListener('keyup', event => {
         if (event.key === ' ') {
@@ -1166,7 +1321,10 @@ export function createScoreCostChart(container, { onSelect = _id => {}, onOpenRu
       buildChartLegendGroups(visible, colorBy).map(entry => ({ ...entry, color: color(entry.record) })),
       colorBy,
       key => {
-        if (!pinnedPointId) tooltip.hidden = true;
+        if (!pinnedPointId) {
+          tooltip.hidden = true;
+          crosshairCtrl?.hide();
+        }
         highlightSeries(null);
         if (key === null) {
           if (pinnedPointId && showPointTooltipById.has(pinnedPointId)) showPointTooltipById.get(pinnedPointId)(true);
@@ -1210,8 +1368,11 @@ export function createScoreCostChart(container, { onSelect = _id => {}, onOpenRu
         clearPan();
         zoomWindow = null;
       }
-      if (nextOptions.selectedIds && nextOptions.selectedIds.length === 0 && options.selectedIds.length > 0) {
-        pinnedPointId = null;
+      if (Array.isArray(nextOptions.selectedIds)) {
+        const nextSelectedId = nextOptions.selectedIds[0] ?? null;
+        if (nextSelectedId !== (options.selectedIds[0] ?? null)) {
+          pinnedPointId = nextSelectedId;
+        }
       }
       records = [...nextRecords];
       options = { ...options, ...nextOptions };
@@ -1244,6 +1405,9 @@ export function createScoreCostChart(container, { onSelect = _id => {}, onOpenRu
     },
     exportSvg() {
       const copy = svg.cloneNode(true);
+      for (const node of copy.querySelectorAll?.('.score-cost-crosshair') || []) {
+        if (node.getAttribute('data-pinned') !== 'true') node.remove();
+      }
       copy.setAttribute('xmlns', SVG_NS);
       return new XMLSerializer().serializeToString(copy);
     },
@@ -1254,6 +1418,7 @@ export function createScoreCostChart(container, { onSelect = _id => {}, onOpenRu
       svg.removeEventListener?.('wheel', onWheel);
       svg.removeEventListener?.('pointerdown', onPointerDown);
       svg.removeEventListener?.('pointermove', onPointerMove);
+      svg.removeEventListener?.('pointerleave', onPointerLeave);
       svg.removeEventListener?.('pointerup', onPointerUp);
       svg.removeEventListener?.('pointercancel', clearPan);
       svg.removeEventListener?.('click', onSvgClick);
