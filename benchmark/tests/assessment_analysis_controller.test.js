@@ -6,6 +6,7 @@ import { createAnalysisModel, attachAnalysisBatchIds } from '../web/analysis-mod
 import { assessmentChartMetric, buildObservationAnomalies, observationQualitySummary } from '../web/assessment-chart-metric.js';
 import { selectAnalysisHistoryRecords } from '../web/analysis-history.js';
 import { renderAnalysisRecordList } from '../web/analysis-record-list.js';
+import { compareRecordToBaseline, dedupePromotedRuns, findMatchingBaselines, findPromotedBaseline } from '../web/baseline-comparison.js';
 
 class ControllerNode {
     value = '';
@@ -13,6 +14,8 @@ class ControllerNode {
     hidden = false;
     textContent = '';
     innerHTML = '';
+    className = '';
+    classList = { toggle() {} };
     dataset = {};
     handlers = new Map();
     addEventListener(name, handler) {
@@ -122,6 +125,10 @@ test('analysis redraw events reuse derived metrics; source, bank and axes invali
         },
         selectionKey: record => record.id,
         thinkingLabel: value => value,
+        compareRecordToBaseline,
+        dedupePromotedRuns,
+        findMatchingBaselines,
+        findPromotedBaseline,
         document: { documentElement: {}, addEventListener() {} },
         window: {
             matchMedia: () => ({

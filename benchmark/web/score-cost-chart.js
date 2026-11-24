@@ -1,5 +1,6 @@
 /* Native SVG chart; metric calculation belongs to the observation adapter. */
 import { buildAnalysisHistoryStates } from './analysis-history.js';
+import { compareRecordToBaseline, findMatchingBaselines, findPromotedBaseline } from './baseline-comparison.js';
 import { chartCategory, createChartColorRegistry } from './chart-colors.js';
 import { buildChartLegendGroups, createChartLegend } from './chart-legend.js';
 import { placeChartLabels, placeThinkingLabels } from './chart-layout.js';
@@ -79,6 +80,28 @@ function roundMetrics(point) {
         ? '≥ ' + compactTokens(tokenBound / rounds)
         : '未记录';
   return { durationText, costText, tokenText };
+}
+function formatBaselineIneligibilityReason(reason, point) {
+  const raw = typeof reason === 'string' ? reason.trim() : '';
+  const text = raw.replace(/^Assessment baseline:\s*/i, '');
+  if (text.includes('retry execution sources differ')) return '重试时源码版本发生变化';
+  if (text.includes('failed or incomplete samples')) {
+    return point?.timeoutCount > 0 ? `含 ${point.timeoutCount} 个超时样本` : '含未完成或失败样本';
+  }
+  if (text.includes('run must be completed')) return '运行尚未完成';
+  if (text.includes('only whole released Mini Bench banks')) return '仅全量官方题库可设为基线';
+  if (text.includes('all 12 tasks are required')) return '缺少完整 12 题';
+  if (text.includes('current bank provenance mismatch') || text.includes('task snapshots differ')) {
+    return '题库版本与当前不一致';
+  }
+  if (text.includes('source hashes are missing or stale') || text.includes('execution source provenance is missing')) {
+    return '题库或源码快照已过期';
+  }
+  if (text.includes('invalid round count')) return '轮次不在 1~3 范围内';
+  if (text.includes('every planned round must contain exactly 12 samples')) return '轮次样本数不完整';
+  if (text.includes('ungradable content')) return '含无法评分样本';
+  if (text.includes('sample execution protocol is unknown')) return '执行协议与当前不兼容';
+  return text ? '不符合当前基线校验条件' : '不符合基线条件';
 }
 const allowZeroOnAxis = (log, axis = 'cost') => !log || axis === 'cost';
 const validPoint = (record, log, axis = 'cost') =>
@@ -185,7 +208,10 @@ function svgNode(tag, attributes = {}, text) {
 }
 
 /** Native score / cost / tokens / duration scatter plot. render is synchronous; exportSvg returns standalone SVG text. */
-export function createScoreCostChart(container, { onSelect = _id => {}, onOpenRun = _runId => {}, catalog = [] } = {}) {
+export function createScoreCostChart(
+  container,
+  { onSelect = _id => {}, onOpenRun = _runId => {}, onPromoteBaseline = _id => {}, catalog = [] } = {}
+) {
   const colors = createChartColorRegistry(catalog);
   container.classList.add('score-cost-chart');
   const clipId = `score-cost-clip-${++chartSequence}`;
@@ -197,7 +223,16 @@ export function createScoreCostChart(container, { onSelect = _id => {}, onOpenRu
   container.append(svg, tooltip);
   const legend = createChartLegend(container, `${clipId}-legend`);
   let records = [],
-    options = { log: true, labels: true, pareto: true, axis: 'cost', colorBy: 'series', selectedIds: [], maskAccounts: false };
+    options = {
+      log: true,
+      labels: true,
+      pareto: true,
+      axis: 'cost',
+      colorBy: 'series',
+      selectedIds: [],
+      promotingIds: null,
+      maskAccounts: false
+    };
   let zoomWindow = null,
     viewState = null,
     pinnedPointId = null,
@@ -873,7 +908,22 @@ export function createScoreCostChart(container, { onSelect = _id => {}, onOpenRu
       return found.map(entry => entry.point);
     };
     const selectedIdSet = new Set(options.selectedIds);
-    for (const item of visibleCoords) {
+    const baselinePool = (Array.isArray(options.historyRecords) && options.historyRecords.length ? options.historyRecords : points).filter(
+      entry => entry?.source === 'baseline'
+    );
+    const formatRatioDelta = ratio => {
+      const pct = ratio * 100;
+      if (Math.abs(pct) < 0.5) return '持平';
+      return `${pct > 0 ? '+' : '−'}${Math.abs(pct) >= 10 ? Math.round(Math.abs(pct)) : Math.abs(pct).toFixed(1)}%`;
+    };
+    const drawCoords = [...visibleCoords].sort((a, b) => {
+      const rank = item => {
+        if (selectedIdSet.has(item.point.id)) return 2;
+        return item.point.source === 'baseline' ? 1 : 0;
+      };
+      return rank(a) - rank(b) || a.index - b.index;
+    });
+    for (const item of drawCoords) {
       const { point, px, py, pointColor, colorKey } = item;
       const selected = selectedIdSet.has(point.id);
       const overlaps = findOverlaps(item);
@@ -960,6 +1010,7 @@ export function createScoreCostChart(container, { onSelect = _id => {}, onOpenRu
       const showTooltip = (pinned = false) => {
         highlightSeries(seriesKey);
         tooltip.replaceChildren();
+        tooltip.setAttribute('data-tooltip-record-id', point.id);
         tooltip.classList?.toggle?.('is-pinned', pinned);
         const node = (tag, className, text) => {
           const child = document.createElement(tag);
@@ -1008,6 +1059,53 @@ export function createScoreCostChart(container, { onSelect = _id => {}, onOpenRu
           node('span', '', formatChartRecordTime(point))
         );
         tooltip.append(header, channel, metrics, meta);
+        const matchingBaselines = point.source !== 'baseline' ? findMatchingBaselines(point, baselinePool) : [];
+        const baselineComparison = matchingBaselines.length ? compareRecordToBaseline(point, matchingBaselines[0]) : null;
+        if (baselineComparison) {
+          const chips = [];
+          if (baselineComparison.score.delta !== null) {
+            const d = baselineComparison.score.delta;
+            const cls = Math.abs(d) < 0.05 ? 'is-neutral' : d > 0 ? 'is-better' : 'is-worse';
+            chips.push(['均分', Math.abs(d) < 0.05 ? '持平' : `${d > 0 ? '+' : '−'}${Math.abs(d).toFixed(1)}`, cls]);
+          }
+          if (baselineComparison.cost.ratio !== null) {
+            const r = baselineComparison.cost.ratio;
+            const cls = Math.abs(r * 100) < 0.5 ? 'is-neutral' : r < 0 ? 'is-better' : 'is-worse';
+            chips.push(['费用', formatRatioDelta(r), cls]);
+          }
+          if (baselineComparison.tokens.ratio !== null) {
+            const r = baselineComparison.tokens.ratio;
+            const cls = Math.abs(r * 100) < 0.5 ? 'is-neutral' : r < 0 ? 'is-better' : 'is-worse';
+            chips.push(['Tokens', formatRatioDelta(r), cls]);
+          }
+          if (baselineComparison.duration.ratio !== null) {
+            const r = baselineComparison.duration.ratio;
+            const cls = Math.abs(r * 100) < 0.5 ? 'is-neutral' : r < 0 ? 'is-better' : 'is-worse';
+            chips.push(['耗时', formatRatioDelta(r), cls]);
+          }
+          if (chips.length) {
+            const box = node('div', 'score-cost-tooltip-baseline');
+            const head = node('div', 'score-cost-tooltip-baseline-head');
+            const base = baselineComparison.baseline;
+            const baseProvider = base.providerName ?? base.providerDisplayId ?? base.provider ?? '';
+            head.append(
+              node('strong', '', '对比基线'),
+              node(
+                'span',
+                'score-cost-tooltip-baseline-ref',
+                `${baseProvider}${matchingBaselines.length > 1 ? `（最新 · 共 ${matchingBaselines.length} 份）` : ''}${baselineComparison.protocolKnown && baselineComparison.protocolMatch === false ? ' · 协议不同' : ''}`
+              )
+            );
+            const row = node('div', 'score-cost-tooltip-baseline-deltas');
+            for (const [label, text, cls] of chips) {
+              const chip = node('span', `score-cost-tooltip-delta ${cls}`);
+              chip.textContent = `${label} ${text}`;
+              row.append(chip);
+            }
+            box.append(head, row);
+            tooltip.append(box);
+          }
+        }
         if (overlapSummary) tooltip.append(node('div', 'score-cost-tooltip-overlap', `重叠记录：${overlapSummary}`));
         if (hasAnomalies) {
           const note = node('div', 'score-cost-tooltip-note');
@@ -1031,22 +1129,52 @@ export function createScoreCostChart(container, { onSelect = _id => {}, onOpenRu
           tooltip.append(anomaly);
         }
         const runId = point.run_id ?? point.original?.run_id;
-        if (point.source === 'run' && runId) {
-          const actions = node('div', 'score-cost-tooltip-actions');
-          const openBtn = node('button', 'score-cost-tooltip-link', '查看任务详情 →');
+        const actions = node('div', 'score-cost-tooltip-actions');
+        const actionButtons = node('div', 'score-cost-tooltip-action-buttons');
+        let hasActionButtons = false;
+        if (runId) {
+          const openBtn = node('button', 'score-cost-tooltip-link', point.source === 'baseline' ? '查看原任务 →' : '查看任务详情 →');
           openBtn.type = 'button';
           openBtn.dataset.tooltipOpenRun = runId;
+          openBtn.dataset.openRun = runId;
           openBtn.addEventListener('click', event => {
             event.stopPropagation();
             onOpenRun(runId);
           });
-          actions.append(openBtn, node('span', 'score-cost-tooltip-hint', pinned ? '已固定 · 再次点击取消' : '点击固定卡片与参考线'));
-          tooltip.append(actions);
-        } else {
-          const actions = node('div', 'score-cost-tooltip-actions');
-          actions.append(node('span', 'score-cost-tooltip-hint', pinned ? '已固定 · 再次点击取消' : '点击固定卡片与参考线'));
-          tooltip.append(actions);
+          actionButtons.append(openBtn);
+          hasActionButtons = true;
         }
+        const promotedBaseline = point.source === 'run' ? findPromotedBaseline(point, baselinePool) : null;
+        const canPromote = point.source === 'run' && Boolean(point.original?.baseline_eligible) && !promotedBaseline;
+        if (canPromote) {
+          const promoting = Boolean(options.promotingIds?.has?.(point.id));
+          const promoteBtn = node('button', 'score-cost-tooltip-link', promoting ? '保存中…' : '设为基线');
+          promoteBtn.type = 'button';
+          promoteBtn.dataset.promoteId = point.id;
+          promoteBtn.disabled = promoting;
+          promoteBtn.title = '保存该运行目标为基线';
+          promoteBtn.addEventListener('click', event => {
+            event.stopPropagation();
+            onPromoteBaseline(point.id);
+          });
+          actionButtons.append(promoteBtn);
+          hasActionButtons = true;
+        } else if (promotedBaseline) {
+          const promotedBadge = node('span', 'score-cost-tooltip-status is-promoted', '已设为基线');
+          promotedBadge.title = '该运行目标已保存为基线';
+          actionButtons.append(promotedBadge);
+          hasActionButtons = true;
+        }
+        if (point.source === 'run' && !promotedBaseline && !point.original?.baseline_eligible) {
+          const rawReason = point.original?.ineligibility_reason;
+          const reasonText = formatBaselineIneligibilityReason(rawReason, point);
+          const inelig = node('div', 'score-cost-tooltip-ineligible', `不可设为基线：${reasonText}`);
+          if (typeof rawReason === 'string' && rawReason.trim()) inelig.title = rawReason.trim();
+          tooltip.append(inelig);
+        }
+        if (hasActionButtons) actions.append(actionButtons);
+        actions.append(node('span', 'score-cost-tooltip-hint', pinned ? '已固定 · 再次点击取消' : '点击固定卡片与参考线'));
+        tooltip.append(actions);
         tooltip.hidden = false;
         crosshairCtrl?.showPoint(point, px, py, Boolean(pinned));
         const cardWidth = tooltip.offsetWidth || 348,

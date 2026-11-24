@@ -900,117 +900,6 @@ input::placeholder {
   max-width: 100ch;
   line-height: 1.8;
 }
-.model-inspector {
-  position: static;
-  width: 100%;
-  min-width: 0;
-  margin-top: 16px;
-  padding: 16px;
-  border: 1px solid var(--line);
-  border-radius: var(--radius-panel);
-  background: var(--card);
-}
-.inspector-headline {
-  display: flex;
-  align-items: baseline;
-  gap: 8px;
-  margin-bottom: 8px;
-  color: var(--fg-2);
-  font-size: 12px;
-}
-.inspector-score {
-  font-size: 24px;
-  font-weight: 650;
-  color: var(--fg);
-  font-variant-numeric: tabular-nums;
-}
-.inspector-warning {
-  margin: 0 0 10px;
-  padding: 8px 10px;
-  border-radius: 8px;
-  background: var(--amber-soft, rgba(180, 83, 9, 0.08));
-  color: var(--fg-2);
-  font-size: 12px;
-  line-height: 1.5;
-}
-.inspector-facts {
-  display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
-  gap: 10px 18px;
-  margin: 12px 0 14px;
-  font-size: 12px;
-}
-.inspector-facts dt {
-  color: var(--readable-muted);
-  font-size: 11px;
-}
-.inspector-facts dd {
-  margin: 2px 0 0;
-  color: var(--fg);
-  overflow-wrap: anywhere;
-}
-.inspector-facts small {
-  display: block;
-  color: var(--readable-muted);
-  font-size: 11px;
-}
-.sample-chips {
-  display: inline-flex;
-  gap: 4px;
-  margin-left: auto;
-  flex: none;
-}
-.sample-chip {
-  min-width: 30px;
-  padding: 1px 6px;
-  border-radius: 6px;
-  font-size: 11px;
-  line-height: 18px;
-  text-align: center;
-  font-variant-numeric: tabular-nums;
-  background: var(--pill);
-  color: var(--fg-2);
-}
-.sample-chip.is-full {
-  background: var(--green-soft, rgba(22, 163, 74, 0.12));
-  color: var(--green, #15803d);
-}
-.sample-chip.is-partial {
-  background: var(--amber-soft, rgba(180, 83, 9, 0.1));
-  color: var(--amber, #b45309);
-}
-.sample-chip.is-zero,
-.sample-chip.is-failed {
-  background: var(--red-soft, rgba(220, 38, 38, 0.1));
-  color: var(--red, #b91c1c);
-}
-.sample-chip.is-unscored {
-  background: var(--pill);
-  color: var(--readable-muted);
-  outline: 1px dashed var(--line);
-}
-.sample-chip.is-anomaly {
-  outline: 1px dashed var(--amber, #b45309);
-  outline-offset: -1px;
-}
-.inspector-heading {
-  display: flex;
-  align-items: flex-start;
-  justify-content: space-between;
-  gap: 15px;
-  margin-bottom: 16px;
-}
-.inspector-identity {
-  margin-top: 6px;
-  font-size: 11px;
-  color: var(--muted);
-  overflow-wrap: anywhere;
-}
-.panel-close {
-  font-size: 20px;
-  border: 0;
-  background: transparent;
-}
 .list {
   border: 1px solid var(--line);
   border-radius: var(--radius-panel);
@@ -1656,9 +1545,6 @@ th {
   .history-filters input {
     flex: 1;
     width: 0;
-  }
-  .model-inspector {
-    padding: 15px;
   }
   .chart-footer {
     gap: 12px;

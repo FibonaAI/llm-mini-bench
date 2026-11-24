@@ -1,5 +1,5 @@
-  await point('top-cluster-1').press('Enter');require((await page.locator('#inspector-identity').innerText()).includes('top-cluster-1'),'Dense chart selection lost its exact record');
-  await page.locator('#close-inspector').click();
+  await point('top-cluster-1').press('Enter');require(await page.locator('.score-cost-tooltip.is-pinned[data-tooltip-record-id="top-cluster-1"]').isVisible(),'Dense chart selection lost its exact record');
+  await page.locator('.score-cost-tooltip-close').click();
 
   // Verify Magpie-style account masking across Analysis (legend, tooltip, SVG export, inspector, raw JSON) and Tasks.
   const maskAccountsRoutes=[
@@ -31,12 +31,11 @@
   await point('obs-mask-email').focus();await page.locator('.score-cost-tooltip').waitFor({state:'visible'});
   const maskedTipText=await page.locator('.score-cost-tooltip').innerText();
   require(!maskedTipText.includes('alice.researcher')&&maskedTipText.includes('（固定绑定）'),'Tooltip leaked email or dropped binding suffix: '+maskedTipText);
-  await point('obs-mask-short').press('Enter');await page.locator('#model-inspector').waitFor({state:'visible'});
-  const rawDetails=page.locator('#inspector-content details.raw-block').last();
-  await rawDetails.locator('summary').click();await rawDetails.locator('pre').waitFor({state:'visible'});
-  const maskedInspector=await page.locator('#model-inspector').innerText();
-  require(!maskedInspector.includes('"account_ref": "a"')&&maskedInspector.includes('same-model')&&await rawDetails.locator('pre .pii').count()>=1,'Inspector or raw JSON leaked 1-char account_ref while masked');
-  await page.locator('#close-inspector').click();
+  await point('obs-mask-short').press('Enter');await page.locator('.score-cost-tooltip.is-pinned[data-tooltip-record-id="obs-mask-short"]').waitFor({state:'visible'});
+  const maskedPinnedTip=await page.locator('.score-cost-tooltip.is-pinned').innerText();
+  const maskedAccountText=await page.locator('.score-cost-tooltip.is-pinned .score-cost-tooltip-account').innerText();
+  require(!maskedAccountText.startsWith('a（')&&maskedPinnedTip.includes('（配置绑定）')&&await page.locator('.score-cost-tooltip.is-pinned .pii').count()>=1,'Pinned tooltip leaked 1-char account_ref while masked: '+maskedAccountText);
+  await page.locator('.score-cost-tooltip-close').click();
   await page.locator('[data-view-link="runs"]').click();
   const maskPopup=page.locator('#task-picker .dp-popup.dp-inline:not([hidden])');
   await maskPopup.waitFor({state:'visible'});
