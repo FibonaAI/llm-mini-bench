@@ -672,7 +672,7 @@ test('task target controller preserves active channel, staged drafts and search 
         }
     ]);
 
-    const popup = () => document.body.children.at(-1);
+    const popup = () => byId('task-picker').children.at(-1);
     const nodes = () => popup().querySelectorAll('*');
     const findAll = className => nodes().filter(node => node.className?.split(/\s+/).filter(Boolean).includes(className));
     const find = className => findAll(className)[0];
@@ -683,8 +683,13 @@ test('task target controller preserves active channel, staged drafts and search 
         btn.events.click();
     };
 
-    // Open picker, select all in earlier remote channel homelab / chatgpt-api (3 runs).
-    byId('task-picker').children.at(-1).events.click();
+    // Task target picker is always visible inline without a trigger or done button.
+    expect(popup().hidden).toBe(false);
+    expect(popup().className).toContain('dp-inline');
+    expect(findAll('dp-trigger')).toHaveLength(0);
+    expect(findAll('dp-done')).toHaveLength(0);
+
+    // Select all in earlier remote channel homelab / chatgpt-api (3 runs).
     selectChannel('["homelab","chatgpt-api"]');
     expect(activeRailId()).toBe('["homelab","chatgpt-api"]');
     find('dp-select-channel').events.click();
@@ -711,12 +716,11 @@ test('task target controller preserves active channel, staged drafts and search 
     expect(activeRailId()).toBe('["homelab","agy-cli"]');
     expect(app.getSelectedTargets()).toHaveLength(3);
 
-    // Re-check one Gemini thinking level, close popup, and remove that chip externally via #run-selected-targets.
+    // Re-check one Gemini thinking level and remove that chip externally via #run-selected-targets.
     findAll('dp-think')
         .find(btn => btn.dataset.think === 'high')
         .events.click();
     expect(app.getSelectedTargets()).toHaveLength(4);
-    find('dp-done').events.click();
     const geminiKey = JSON.stringify([
         '["homelab","agy-cli"]',
         'gateway-binding:gateway-default',
@@ -727,7 +731,6 @@ test('task target controller preserves active channel, staged drafts and search 
         target: { closest: selector => (selector === '[data-remove-target-key]' ? { dataset: { removeTargetKey: geminiKey } } : null) }
     });
     expect(app.getSelectedTargets()).toHaveLength(3);
-    byId('task-picker').children.at(-1).events.click();
     expect(activeRailId()).toBe('["homelab","agy-cli"]');
 
     // Clear all selections, then verify staged drafts survive unchecking fixed account in local channel.

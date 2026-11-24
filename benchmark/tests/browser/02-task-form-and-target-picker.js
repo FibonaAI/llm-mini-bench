@@ -1,4 +1,8 @@
   await page.locator('[data-view-link="runs"]').click();
+  const popup=page.locator('#task-picker .dp-popup.dp-inline:not([hidden])');
+  await popup.waitFor({state:'visible'});
+  require(await page.locator('#task-picker .dp-trigger').count()===0,'Inline task picker must not render a collapsed trigger button');
+  require(await popup.locator('.dp-done').count()===0,'Inline task picker must not render a done button');
   require(await page.locator('#start-run').isDisabled(),'Default auto-selected paid targets');
   const configGeometry=await page.locator('.run-config-grid').evaluate(node=>{
     const labels=[...node.querySelectorAll('label')].slice(1);
@@ -11,7 +15,6 @@
   require(await page.locator('#bench-timeout').inputValue()==='600','Every sample must default to a 600-second deadline');
   require(!posts.some(post=>post.path==='/api/bench/tasks'||post.path==='/api/bench/runs'),'Opening the task view submitted paid work');
   require((await page.locator('#bench-bank-label').innerText()).includes('12'),'Bank 12 not loaded');
-  await page.locator('#task-picker .dp-trigger').click();const popup=page.locator('.dp-popup:not([hidden])');
   const chooseProvider=async id=>{
     if(!id){await popup.locator('.dp-search').fill('');return;}
     await popup.locator('.dp-search').fill('');
@@ -55,7 +58,6 @@
   await chooseProvider('provider:chatgpt-lab');require(await popup.locator('.dp-think[data-think="high"]').getAttribute('aria-pressed')==='false','Cross-instance selection leaked');await popup.locator('.dp-think[data-think="low"]').click();
   await chooseProvider('provider:chatgpt-main');require(await popup.locator('.dp-think[data-think="high"]').getAttribute('aria-pressed')==='true','Channel switch cleared selection');
   for(let i=2;i<7;i++){await chooseProvider('provider:fixture-provider-'+i);await popup.locator('.dp-think[data-think="high"]').click();}
-  await popup.getByRole('button',{name:'完成',exact:true}).click();
   for(const [id,bad,good] of [['bench-timeout','0','600'],['run-rounds','4','3'],['sample-concurrency','65','6'],['run-concurrency','11','3']]){await page.locator('#'+id).fill(bad);require(await page.locator('#start-run').isDisabled(),'Invalid config accepted: '+id);await page.locator('#'+id).fill(good);}
   require(await page.locator('#bench-plan').count()===0,'Manual plan button remains');
   await page.locator('#bench-plan-preview').waitFor({state:'visible'});

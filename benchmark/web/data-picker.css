@@ -36,6 +36,14 @@
 .dp-popup[hidden] {
   display: none;
 }
+.dp-popup.dp-inline {
+  position: static;
+  z-index: auto;
+  width: 100%;
+  max-height: min(520px, 64vh);
+  border-radius: var(--radius-panel, 10px);
+  box-shadow: none;
+}
 .dp-popup button {
   cursor: pointer;
   color: var(--fg-2);
@@ -861,6 +869,9 @@
 
 /* Responsive layout for narrow viewports */
 @media (max-width: 680px) {
+  .dp-popup.dp-inline {
+    max-height: min(560px, 72vh);
+  }
   .dp-header {
     padding: 10px 12px 6px;
   }

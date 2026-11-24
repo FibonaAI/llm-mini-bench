@@ -184,7 +184,7 @@ function buildChannels(leaves) {
 let pickerSequence = 0;
 
 /** Shared cross-channel search and orthogonal channel/account/thinking target selector. */
-export function createDataPicker(container, { records, selectedKeys, mode = 'analysis', onChange = _keys => {} }) {
+export function createDataPicker(container, { records, selectedKeys, mode = 'analysis', inline = false, onChange = _keys => {} }) {
   const leaves = [...new Map(records.map(record => [selectionKey(record), { ...record }])).entries()].map(([key, record]) => ({
     ...record,
     key
@@ -193,7 +193,7 @@ export function createDataPicker(container, { records, selectedKeys, mode = 'ana
   const channels = buildChannels(leaves);
   const channelById = new Map(channels.map(ch => [ch.id, ch]));
   let selected = new Set((selectedKeys === undefined ? [...knownKeys] : selectedKeys).filter(key => knownKeys.has(key)));
-  let open = false;
+  let open = inline;
   let destroyed = false;
   let activeChannelId = channels[0]?.id ?? null;
   let visibleRowCount = 0;
@@ -270,14 +270,16 @@ export function createDataPicker(container, { records, selectedKeys, mode = 'ana
     return node;
   };
 
-  const trigger = button('dp-trigger', '', () => (open ? hide() : show()));
-  const popup = element('section', 'dp-popup');
+  const trigger = inline ? null : button('dp-trigger', '', () => (open ? hide() : show()));
+  const popup = element('section', inline ? 'dp-popup dp-inline' : 'dp-popup');
   popup.id = `dp-popup-${++pickerSequence}`;
-  popup.hidden = true;
-  popup.setAttribute('role', 'dialog');
+  popup.hidden = !inline;
+  popup.setAttribute('role', inline ? 'region' : 'dialog');
   popup.setAttribute('aria-label', title);
-  trigger.setAttribute('aria-haspopup', 'dialog');
-  trigger.setAttribute('aria-controls', popup.id);
+  if (trigger) {
+    trigger.setAttribute('aria-haspopup', 'dialog');
+    trigger.setAttribute('aria-controls', popup.id);
+  }
 
   const header = element('div', 'dp-header');
   header.append(element('strong', 'dp-title', title), element('span', 'dp-hint', '同渠道按 账号 × 思考 组合，跨渠道搜索保留已选'));
@@ -327,14 +329,21 @@ export function createDataPicker(container, { records, selectedKeys, mode = 'ana
     render();
     onChange([]);
   });
-  const done = button('dp-done', '完成', () => {
-    hide();
-    trigger.focus();
-  });
-  footer.append(summary, clear, done);
+  const done = inline
+    ? null
+    : button('dp-done', '完成', () => {
+        hide();
+        trigger.focus();
+      });
+  if (done) footer.append(summary, clear, done);
+  else footer.append(summary, clear);
   popup.append(header, toolbar, body, footer);
-  container.append(trigger);
-  document.body.append(popup);
+  if (inline) {
+    container.append(popup);
+  } else {
+    container.append(trigger);
+    document.body.append(popup);
+  }
 
   search.addEventListener('input', () => render());
 
@@ -1115,8 +1124,10 @@ export function createDataPicker(container, { records, selectedKeys, mode = 'ana
       }
     }
 
-    trigger.textContent = `${title} ${selected.size}/${leaves.length} ▾`;
-    trigger.setAttribute('aria-expanded', String(open));
+    if (trigger) {
+      trigger.textContent = `${title} ${selected.size}/${leaves.length} ▾`;
+      trigger.setAttribute('aria-expanded', String(open));
+    }
     clear.disabled = selected.size === 0;
     clearSearch.disabled = !search.value;
     resetFilters.disabled = !search.value && !thinking.value;
@@ -1130,7 +1141,7 @@ export function createDataPicker(container, { records, selectedKeys, mode = 'ana
         }
       }
     }
-    if (open) position();
+    if (!inline && open) position();
   }
 
   function position() {
@@ -1193,6 +1204,10 @@ export function createDataPicker(container, { records, selectedKeys, mode = 'ana
 
   function show() {
     if (destroyed) return;
+    if (inline) {
+      search.focus();
+      return;
+    }
     open = true;
     popup.hidden = false;
     render();
@@ -1200,9 +1215,10 @@ export function createDataPicker(container, { records, selectedKeys, mode = 'ana
     search.focus();
   }
   function hide() {
+    if (inline) return;
     open = false;
     popup.hidden = true;
-    trigger.setAttribute('aria-expanded', 'false');
+    trigger?.setAttribute('aria-expanded', 'false');
   }
   function outsideClick(event) {
     if (open && !popup.contains(event.target) && !trigger.contains(event.target)) hide();
@@ -1218,15 +1234,17 @@ export function createDataPicker(container, { records, selectedKeys, mode = 'ana
     if (!open || (event?.target && popup.contains(event.target))) return;
     position();
   }
-  document.addEventListener('pointerdown', outsideClick);
-  document.addEventListener('keydown', escape);
-  window.addEventListener('resize', position);
-  window.addEventListener('scroll', onScroll, true);
+  if (!inline) {
+    document.addEventListener('pointerdown', outsideClick);
+    document.addEventListener('keydown', escape);
+    window.addEventListener('resize', position);
+    window.addEventListener('scroll', onScroll, true);
+  }
   render();
 
   return {
     getSelection: () => [...selected],
-    setSelection(keys, { revealSelectedChannel = !open } = {}) {
+    setSelection(keys, { revealSelectedChannel = inline || !open } = {}) {
       selected = new Set([...keys].filter(key => knownKeys.has(key)));
       syncAllChannelsFromSelected({ preserveDraft: false });
       if (revealSelectedChannel) {
@@ -1244,12 +1262,14 @@ export function createDataPicker(container, { records, selectedKeys, mode = 'ana
     destroy() {
       destroyed = true;
       hide();
-      trigger.remove();
+      trigger?.remove();
       popup.remove();
-      document.removeEventListener('pointerdown', outsideClick);
-      document.removeEventListener('keydown', escape);
-      window.removeEventListener('resize', position);
-      window.removeEventListener('scroll', onScroll, true);
+      if (!inline) {
+        document.removeEventListener('pointerdown', outsideClick);
+        document.removeEventListener('keydown', escape);
+        window.removeEventListener('resize', position);
+        window.removeEventListener('scroll', onScroll, true);
+      }
     }
   };
 }

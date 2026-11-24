@@ -1,6 +1,6 @@
-  await page.locator('[data-view-link="runs"]').click();await page.locator('#task-picker .dp-trigger').click();const bounds=await popup.boundingBox();require(bounds.x>=0&&bounds.x+bounds.width<=390,'Mobile picker clipped');require(await popup.locator('.dp-results').evaluate(node=>node.scrollWidth<=node.clientWidth),'Mobile results overflow horizontally');require(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth),'Mobile popup page overflow');await page.screenshot({path:(ARTIFACTS + '/mobile-picker.png'),fullPage:true});await page.keyboard.press('Escape');require(await page.locator('#task-picker .dp-trigger').evaluate(node=>node===document.activeElement),'Escape failed focus restore');
+  await page.locator('[data-view-link="runs"]').click();await popup.waitFor({state:'visible'});await popup.scrollIntoViewIfNeeded();const bounds=await popup.boundingBox();require(bounds.x>=0&&bounds.x+bounds.width<=390,'Mobile picker clipped');require(await popup.locator('.dp-results').evaluate(node=>node.scrollWidth<=node.clientWidth),'Mobile results overflow horizontally');require(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth),'Mobile inline picker page overflow');await page.screenshot({path:(ARTIFACTS + '/mobile-picker.png'),fullPage:true});await page.keyboard.press('Escape');require(await popup.isVisible(),'Escape must not hide inline task picker');
   await page.setViewportSize({width:1440,height:1000});
-  await page.locator('#task-picker .dp-trigger').click();await popup.getByRole('button',{name:'清空全部',exact:true}).click();
+  await popup.getByRole('button',{name:'清空全部',exact:true}).click();
   await popup.locator('.dp-search').fill('no-match-before-reset');
   require(await popup.locator('.dp-result-row').count()===0,'Reset precondition must explicitly filter candidates');
   await popup.getByRole('button',{name:'重置条件',exact:true}).click();
@@ -18,19 +18,18 @@
   for(const [namespace,label] of [['auto','自动路由'],['group','路由组']]){await chooseProvider(JSON.stringify(['remote-A',namespace]));require((await popup.locator('.dp-models-title').innerText()).includes(label),'Remote routing namespace mislabeled');require(await popup.locator('.dp-quota-cards').count()===0,'Inferred group member accounts');}
   await chooseProvider('provider:ordinary-owner');require(await popup.locator('.dp-think[data-think="high"]').getAttribute('data-model')==='ordinary-owner/openai/not-a-remote','Ordinary slash model changed');await popup.locator('.dp-think[data-think="high"]').click();
   require(!await popup.locator('.dp-rail-name').evaluateAll(nodes=>nodes.some(node=>node.textContent==='ordinary-owner / openai')),'Ordinary slash model falsely expanded');
-  await page.screenshot({path:(ARTIFACTS + '/remote-picker.png'),fullPage:true});await popup.getByRole('button',{name:'完成',exact:true}).click();
+  await page.screenshot({path:(ARTIFACTS + '/remote-picker.png'),fullPage:true});
   await page.waitForFunction(()=>!document.querySelector('#start-run').disabled);
   plan={targets:await page.evaluate(()=>window.MiniBench.runState.getSelectedTargets())};
   require(JSON.stringify(plan.targets.map(({route_id,thinking})=>({route_id,thinking})))===JSON.stringify(['ordinary-slash-route','remote-A-openai','remote-B-openai'].map(route_id=>({route_id,thinking:'high'}))),'Remote task plan changed exact route IDs or Thinking');
   require(plan.targets.every(target=>Object.keys(target).sort().join(',')==='id,route_id,thinking'),'Picker invented model/account routing payload fields');
   require(posts.filter(post=>post.path==='/api/bench/tasks').length===2,'Remote browsing/planning submitted paid work');
-  await page.locator('#task-picker .dp-trigger').click();await chooseProvider(JSON.stringify(['remote-A','openai']));
+  await chooseProvider(JSON.stringify(['remote-A','openai']));
   const plannedTargets=await page.evaluate(()=>JSON.stringify(window.MiniBench.runState.getSelectedTargets()));
   await popup.locator('.dp-search').fill('exact model v1');await popup.locator('.dp-thinking-filter').selectOption('high');
   require(!await page.locator('#start-run').isDisabled(),'Filtering invalidated a valid plan');
   require(await page.evaluate(()=>JSON.stringify(window.MiniBench.runState.getSelectedTargets()))===plannedTargets,'Filtering changed submitted target identities');
   await popup.locator('.dp-reset-filters').click();await chooseProvider(JSON.stringify(['remote-A','openai']));
   require(!requests.includes('/api/bench/quota-cards'),'Target browsing must not fetch quotas');
-  await popup.getByRole('button',{name:'完成',exact:true}).click();
   observations.push(...remoteRoutes.slice(0,2).map(route=>({...baseline,id:'observation-'+route.id,source:'run',route_id:route.id,provider_id:route.provider_id,model:route.model,remote_route:route.remote_route})));
   observations.push({...baseline,id:'remote-history-unmarked',source:'run',route_id:'remote-A-openai',provider_id:'remote-A',model:remoteRoutes[0].model});

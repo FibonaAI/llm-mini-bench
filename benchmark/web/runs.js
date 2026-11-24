@@ -47,7 +47,7 @@ export function createTaskTargets(app) {
             return `<div class="selected-target"><div class="selected-target-info"><strong>${escapeHtml(leaf.modelDisplayName || leaf.model)}</strong><span title="${escapeHtml(fullMeta)}">${escapeHtml(provider)} / ${escapeHtml(account)} · ${escapeHtml(thinkingLabel(leaf.think))}</span></div><button class="selected-target-remove" type="button" data-remove-target-key="${escapeHtml(key)}" aria-label="移除 ${escapeHtml(leaf.modelDisplayName || leaf.model)} (${escapeHtml(account)})">×</button></div>`;
           })
           .join('')
-      : '<p class="empty">尚未选择目标。点击上方「选择目标」按渠道、账号与思考档位勾选，或跨渠道搜索。</p>';
+      : '<p class="empty">尚未选择目标。在上方目标选择器中按渠道、账号与思考档位勾选，或跨渠道搜索。</p>';
     const gatewayLeaves = leaves.filter(leaf => leaf.route?.account_evidence === 'gateway_binding');
     const gatewayTargets = gatewayLeaves.length > 0;
     const hasPinnedAlternative = gatewayLeaves.some(leaf => fixedProviders.has(leaf.providerId ?? leaf.provider));
@@ -102,6 +102,7 @@ export function createTaskTargets(app) {
       records: app.targets.leaves,
       selectedKeys: app.targets.selectedKeys,
       mode: 'tasks',
+      inline: true,
       onChange: keys => applyTaskSelection(keys, { syncPicker: false, resetEmptyFilters: false })
     });
     renderSelection();
