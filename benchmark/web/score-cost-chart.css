@@ -54,10 +54,36 @@
 }
 .score-cost-tooltip.is-pinned {
   pointer-events: auto;
+  cursor: grab;
   border-color: var(--accent);
   box-shadow:
     var(--shadow),
     0 0 0 1px var(--accent-soft, rgba(79, 70, 229, 0.2));
+}
+.score-cost-tooltip.is-pinned.is-dragging {
+  cursor: grabbing;
+  user-select: none;
+  -webkit-user-select: none;
+}
+.score-cost-tooltip-insight {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  margin-top: 7px;
+  padding: 5px 8px;
+  border-radius: 6px;
+  background: var(--green-soft, rgba(22, 163, 74, 0.1));
+  font-size: 11px;
+  line-height: 1.45;
+}
+.score-cost-tooltip-insight-tag {
+  flex: none;
+  font-weight: 600;
+  color: var(--green, #16a34a);
+}
+.score-cost-tooltip-insight-text {
+  color: var(--fg);
+  font-variant-numeric: tabular-nums;
 }
 .score-cost-tooltip[hidden] {
   display: none;

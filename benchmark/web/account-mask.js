@@ -84,7 +84,8 @@ const PURE_ACCOUNT_SELECTOR = [
   '.dp-acc-pill:not(.dp-acc-auto) > .dp-acc-id',
   '.dp-acc-cell > .dp-acc-id',
   '.task-thinking-lane .task-preview-chip-label',
-  '.af-facet[data-facet="account"] .af-option-primary'
+  '.af-facet[data-facet="account"] .af-option-primary',
+  '.insight-account'
 ].join(', ');
 
 const SUFFIXED_ACCOUNT_SELECTOR = '.score-cost-tooltip-account, .dp-search-row .dp-account-name';
