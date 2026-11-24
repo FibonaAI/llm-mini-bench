@@ -49,6 +49,12 @@ test('source and unified search directly constrain observations without rewritin
     state.query = 'LUNA';
     state.source = 'baseline';
     expect(matchIds(state)).toEqual(['baseline']);
+    state.source = new Set(['baseline']);
+    expect(matchIds(state)).toEqual(['baseline']);
+    expect(records.filter(record => matchesAnalysisFilters(record, state, 'source')).map(record => record.id)).toEqual([
+        'second-model',
+        'baseline'
+    ]);
     state.think.add('unknown');
     expect(matchIds(state)).toEqual(['baseline']);
     state.think = new Set(['low']);

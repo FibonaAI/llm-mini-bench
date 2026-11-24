@@ -25,6 +25,17 @@ const accountFacetValue = record =>
   isGenericAccount(record) ? accountIdentity(record) : JSON.stringify([providerIdentity(record), accountIdentity(record)]);
 const accountFacetRank = value => (String(value).startsWith('gateway-binding:') ? 1 : value === 'unknown-account' ? 2 : 0);
 
+const SOURCE_OPTIONS = [
+  ['run', '我的评测'],
+  ['baseline', '基线']
+];
+const sourceLabel = value => (value === 'baseline' ? '基线' : value === 'run' ? '我的评测' : String(value));
+const sourceRank = value => (value === 'run' ? 0 : value === 'baseline' ? 1 : 2);
+const facetMatches = (filterValue, recordValue) => {
+  if (filterValue instanceof Set) return !filterValue.size || filterValue.has(recordValue);
+  return !filterValue || filterValue === 'all' || filterValue === recordValue;
+};
+
 const facets = [
   { id: 'provider', label: '渠道', width: 320, value: providerIdentity, text: record => record.providerName ?? record.provider },
   {
@@ -46,20 +57,29 @@ const facets = [
       String(a[0]).localeCompare(String(b[0]))
   },
   { id: 'model', label: '模型', width: 340, value: modelFilterIdentity, text: modelFilterLabel },
-  { id: 'think', label: 'Thinking', width: 240, value: record => record.think, text: record => thinkingLabel(record.think) }
+  { id: 'think', label: 'Thinking', width: 240, value: record => record.think, text: record => thinkingLabel(record.think) },
+  {
+    id: 'source',
+    label: '来源',
+    heading: '数据来源',
+    width: 240,
+    fixedOptions: SOURCE_OPTIONS,
+    value: record => record.source,
+    text: record => sourceLabel(record.source),
+    sort: (a, b) => sourceRank(a[0]) - sourceRank(b[0]) || String(a[0]).localeCompare(String(b[0]))
+  }
 ];
 
 /** Analysis facets are OR within a dimension, AND across dimensions; empty means unrestricted. */
 export function createAnalysisFilterState() {
-  return { query: '', source: 'all', provider: new Set(), account: new Set(), model: new Set(), think: new Set() };
+  return { query: '', source: new Set(), provider: new Set(), account: new Set(), model: new Set(), think: new Set() };
 }
 
 /** Filter observations without deduplicating repeated runs or mutating identity. */
 export function matchesAnalysisFilters(record, filters, omittedFacet = null, compiledTokens = null) {
   return (
-    (filters.source === 'all' || record.source === filters.source) &&
     (compiledTokens ? recordMatchesTokens(record, compiledTokens) : recordMatchesSearch(record, filters.query)) &&
-    facets.every(facet => facet.id === omittedFacet || !filters[facet.id].size || filters[facet.id].has(facet.value(record)))
+    facets.every(facet => facet.id === omittedFacet || facetMatches(filters[facet.id], facet.value(record)))
   );
 }
 
@@ -84,6 +104,7 @@ export function createAnalysisFilters(container, { onChange = () => {} } = {}) {
     const byFacet = new Map();
     for (const facet of facets) {
       const values = new Map();
+      if (facet.fixedOptions) for (const [key, text] of facet.fixedOptions) values.set(key, { text, primary: text, secondary: '' });
       for (const record of records) {
         const key = facet.value(record);
         if (values.has(key)) continue;
@@ -248,7 +269,7 @@ export function createAnalysisFilters(container, { onChange = () => {} } = {}) {
   }
   function getBaseRecords() {
     const tokens = getQueryTokens();
-    return records.filter(record => (state.source === 'all' || record.source === state.source) && recordMatchesTokens(record, tokens));
+    return records.filter(record => recordMatchesTokens(record, tokens));
   }
   function renderFacetNow(facetId) {
     const control = controls.find(item => item.facet.id === facetId);
@@ -287,8 +308,15 @@ export function createAnalysisFilters(container, { onChange = () => {} } = {}) {
         if (!entry) return value;
         return (labels.get(entry.text) ?? 0) > 1 ? `${entry.text} · ${value}` : entry.text;
       };
-      summary.textContent = `${facet.label} · ${state[facet.id].size ? `${state[facet.id].size} 项` : '不限'}`;
-      summary.dataset.filtered = String(state[facet.id].size > 0);
+      const selectedCount = state[facet.id].size;
+      const summaryValue =
+        selectedCount === 0
+          ? '不限'
+          : facet.id === 'source' && selectedCount === 1
+            ? labelFor([...state[facet.id]][0])
+            : `${selectedCount} 项`;
+      summary.textContent = `${facet.label} · ${summaryValue}`;
+      summary.dataset.filtered = String(selectedCount > 0);
       for (const value of state[facet.id]) {
         const chip = button('af-condition', `${facet.label}：${labelFor(value)} ×`, () => {
           state[facet.id].delete(value);
@@ -340,7 +368,8 @@ export function createAnalysisFilters(container, { onChange = () => {} } = {}) {
       render();
     },
     setSource(source) {
-      state.source = source;
+      if (!source || source === 'all') state.source.clear();
+      else state.source = new Set([source]);
       update();
     },
     reset() {
