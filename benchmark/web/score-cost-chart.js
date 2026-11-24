@@ -230,6 +230,7 @@ export function createScoreCostChart(
       axis: 'cost',
       colorBy: 'series',
       selectedIds: [],
+      insightHighlight: null,
       promotingIds: null,
       maskAccounts: false
     };
@@ -238,6 +239,9 @@ export function createScoreCostChart(
     pinnedPointId = null,
     hoveredPointId = null,
     pan = null,
+    tooltipDrag = null,
+    tooltipDragPos = null,
+    tooltipBounds = null,
     suppressPlotClick = false,
     showPointTooltipById = new Map(),
     highlightSeriesFn = _key => {},
@@ -250,9 +254,16 @@ export function createScoreCostChart(
     1, 2, 5, 10, 15, 20, 30, 60, 120, 180, 300, 600, 900, 1200, 1800, 3600, 5400, 7200, 10800, 14400, 21600, 28800, 43200
   ];
 
+  function clearTooltipDrag() {
+    tooltipDrag = null;
+    tooltip.classList?.remove?.('is-dragging');
+  }
+
   function unpinTooltip({ notifySelect = false } = {}) {
     const hadSelection = Boolean(pinnedPointId || options.selectedIds.length);
     pinnedPointId = null;
+    tooltipDragPos = null;
+    clearTooltipDrag();
     tooltip.hidden = true;
     tooltip.classList?.remove?.('is-pinned');
     highlightSeriesFn(null);
@@ -455,6 +466,65 @@ export function createScoreCostChart(
     }
   }
 
+  function onTooltipPointerDown(event) {
+    if (disposed || !pinnedPointId || event.button !== 0) return;
+    if (event.target?.closest?.('button, a, input, select, textarea')) return;
+    event.stopPropagation();
+    const startLeft = parseFloat(tooltip.style.left);
+    const startTop = parseFloat(tooltip.style.top);
+    tooltipDrag = {
+      pointerId: event.pointerId,
+      pointId: pinnedPointId,
+      startX: event.clientX,
+      startY: event.clientY,
+      startLeft: Number.isFinite(startLeft) ? startLeft : 4,
+      startTop: Number.isFinite(startTop) ? startTop : 4,
+      active: false
+    };
+  }
+
+  function onTooltipPointerMove(event) {
+    if (disposed || !tooltipDrag) return;
+    if (tooltipDrag.pointerId !== undefined && event.pointerId !== undefined && tooltipDrag.pointerId !== event.pointerId) return;
+    const dx = event.clientX - tooltipDrag.startX;
+    const dy = event.clientY - tooltipDrag.startY;
+    if (!tooltipDrag.active && Math.hypot(dx, dy) >= 3) {
+      tooltipDrag.active = true;
+      tooltip.classList?.add?.('is-dragging');
+      try {
+        tooltip.setPointerCapture?.(event.pointerId);
+      } catch {
+        /* Synthetic events may not carry a capturable pointerId. */
+      }
+    }
+    if (!tooltipDrag.active) return;
+    event.preventDefault?.();
+    const bounds = tooltipBounds || {
+      minLeft: 4,
+      maxLeft: Math.max(4, (drawnWidth || 900) - (tooltip.offsetWidth || 348) - 4),
+      minTop: 4,
+      maxTop: 320
+    };
+    const nextLeft = Math.max(bounds.minLeft, Math.min(bounds.maxLeft, tooltipDrag.startLeft + dx));
+    const nextTop = Math.max(bounds.minTop, Math.min(bounds.maxTop, tooltipDrag.startTop + dy));
+    tooltip.style.left = `${nextLeft}px`;
+    tooltip.style.top = `${nextTop}px`;
+    tooltipDragPos = { pointId: tooltipDrag.pointId, left: nextLeft, top: nextTop };
+  }
+
+  function onTooltipPointerUp(event) {
+    if (!tooltipDrag) return;
+    if (tooltipDrag.pointerId !== undefined && event.pointerId !== undefined && tooltipDrag.pointerId !== event.pointerId) return;
+    if (tooltipDrag.active) {
+      try {
+        tooltip.releasePointerCapture?.(event.pointerId);
+      } catch {
+        /* Ignore release errors for synthetic pointer events. */
+      }
+    }
+    clearTooltipDrag();
+  }
+
   svg.addEventListener?.('wheel', onWheel, { passive: false });
   svg.addEventListener?.('pointerdown', onPointerDown);
   svg.addEventListener?.('pointermove', onPointerMove);
@@ -463,6 +533,10 @@ export function createScoreCostChart(
   svg.addEventListener?.('pointercancel', clearPan);
   svg.addEventListener?.('click', onSvgClick);
   svg.addEventListener?.('dblclick', onDoubleClick);
+  tooltip.addEventListener?.('pointerdown', onTooltipPointerDown);
+  tooltip.addEventListener?.('pointermove', onTooltipPointerMove);
+  tooltip.addEventListener?.('pointerup', onTooltipPointerUp);
+  tooltip.addEventListener?.('pointercancel', clearTooltipDrag);
   document.addEventListener?.('keydown', onDocumentKeyDown);
 
   function drawChart() {
@@ -490,7 +564,9 @@ export function createScoreCostChart(
       card: token('--card', '#fff'),
       accent: token('--accent', '#4f46e5'),
       accentFg: token('--accent-fg', '#fff'),
-      amber: token('--amber', '#b45309')
+      amber: token('--amber', '#b45309'),
+      green: token('--green', '#16a34a'),
+      red: token('--red', '#dc2626')
     };
     const explicitTheme = document.documentElement.dataset.theme;
     const dark = explicitTheme === 'dark' || (!explicitTheme && window.matchMedia('(prefers-color-scheme: dark)').matches);
@@ -749,6 +825,8 @@ export function createScoreCostChart(
     };
     const plotted = svgNode('g', { 'clip-path': `url(#${clipId})` });
     svg.append(plotted);
+    const insightCompareLayer = svgNode('g', { class: 'score-cost-insight-compare', 'pointer-events': 'none' });
+    svg.append(insightCompareLayer);
     const hoverLabels = svgNode('g', { class: 'thinking-hover-labels', 'pointer-events': 'none' });
     svg.append(hoverLabels);
     const visible = points.filter(
@@ -762,10 +840,18 @@ export function createScoreCostChart(
     const seriesNodes = [],
       pointNodes = [],
       labelNodes = [];
+    const insightAnomalySet = new Set(Array.isArray(options.insightHighlight?.anomalyIds) ? options.insightHighlight.anomalyIds : []);
+    const insightRefSet = new Set(Array.isArray(options.insightHighlight?.referenceIds) ? options.insightHighlight.referenceIds : []);
+    const hasInsightHighlight =
+      (insightAnomalySet.size > 0 || insightRefSet.size > 0) &&
+      visible.some(point => insightAnomalySet.has(point.id) || insightRefSet.has(point.id));
+    const insightAnomalyColor = options.insightHighlight?.metric === 'score' ? theme.red : theme.amber;
     let activeHoverLabelBoxes = [];
     const highlightSeries = hoveredKey => {
       const key = visibleSeries.has(hoveredKey) ? hoveredKey : null;
-      const selectedKey = [...visibleSeries].find(([, series]) => series.some(point => options.selectedIds.includes(point.id)))?.[0];
+      const selectedKey = hasInsightHighlight
+        ? null
+        : [...visibleSeries].find(([, series]) => series.some(point => options.selectedIds.includes(point.id)))?.[0];
       const activeKey = key ?? selectedKey;
       hoverLabels.replaceChildren();
       activeHoverLabelBoxes = [];
@@ -831,8 +917,11 @@ export function createScoreCostChart(
         node.setAttribute('data-hover-highlight', Boolean(key && active));
         node.setAttribute('data-legend-highlight', false);
       }
-      for (const [node, seriesKey] of pointNodes) {
-        node.setAttribute('opacity', key && seriesKey !== key ? 0.18 : 1);
+      for (const [node, seriesKey, point] of pointNodes) {
+        const insightActive =
+          !hasInsightHighlight || insightAnomalySet.has(point.id) || insightRefSet.has(point.id) || options.selectedIds.includes(point.id);
+        const dim = key ? seriesKey !== key && !(hasInsightHighlight && insightActive) : hasInsightHighlight && !insightActive;
+        node.setAttribute('opacity', dim ? 0.2 : 1);
         node.setAttribute('data-legend-highlight', false);
       }
       for (const [node] of labelNodes) node.setAttribute('opacity', activeKey ? 0 : 1);
@@ -918,14 +1007,138 @@ export function createScoreCostChart(
     };
     const drawCoords = [...visibleCoords].sort((a, b) => {
       const rank = item => {
-        if (selectedIdSet.has(item.point.id)) return 2;
+        if (selectedIdSet.has(item.point.id)) return 4;
+        if (hasInsightHighlight && insightAnomalySet.has(item.point.id)) return 3;
+        if (hasInsightHighlight && insightRefSet.has(item.point.id)) return 2;
         return item.point.source === 'baseline' ? 1 : 0;
       };
       return rank(a) - rank(b) || a.index - b.index;
     });
+    const insightKeepoutBoxes = [];
+    if (hasInsightHighlight) {
+      const anomalyCoords = visibleCoords.filter(item => insightAnomalySet.has(item.point.id));
+      const refCoords = visibleCoords.filter(item => !insightAnomalySet.has(item.point.id) && insightRefSet.has(item.point.id));
+      const primaryAnchor = visibleCoords.find(item => selectedIdSet.has(item.point.id)) || anomalyCoords[0] || null;
+      for (const item of anomalyCoords) {
+        insightKeepoutBoxes.push({ left: item.px - 16, right: item.px + 16, top: item.py - 16, bottom: item.py + 16 });
+      }
+      for (const item of refCoords) {
+        insightKeepoutBoxes.push({ left: item.px - 16, right: item.px + 16, top: item.py - 16, bottom: item.py + 16 });
+      }
+      if (primaryAnchor && refCoords.length) {
+        for (const refItem of refCoords) {
+          insightCompareLayer.append(
+            svgNode('line', {
+              class: 'score-cost-insight-link',
+              'data-from-record': primaryAnchor.point.id,
+              'data-to-record': refItem.point.id,
+              x1: primaryAnchor.px,
+              y1: primaryAnchor.py,
+              x2: refItem.px,
+              y2: refItem.py,
+              stroke: theme.green,
+              'stroke-width': 1.5,
+              'stroke-dasharray': '4 3',
+              opacity: 0.78
+            })
+          );
+          for (const t of [0.25, 0.5, 0.75]) {
+            const mx = primaryAnchor.px + (refItem.px - primaryAnchor.px) * t;
+            const my = primaryAnchor.py + (refItem.py - primaryAnchor.py) * t;
+            insightKeepoutBoxes.push({ left: mx - 12, right: mx + 12, top: my - 12, bottom: my + 12 });
+          }
+        }
+      }
+      if (refCoords.length) {
+        const allInsightCoords = [...anomalyCoords, ...refCoords];
+        const rawRefChannels = allInsightCoords.map(item =>
+          String(item.point.providerName ?? item.point.providerDisplayId ?? item.point.provider ?? '')
+        );
+        let sharedInsightPrefix = '';
+        if (rawRefChannels.length > 1 && rawRefChannels.every(ch => ch.includes(' / '))) {
+          const firstPrefix = rawRefChannels[0].slice(0, rawRefChannels[0].indexOf(' / ') + 3);
+          if (rawRefChannels.every(ch => ch.startsWith(firstPrefix))) sharedInsightPrefix = firstPrefix;
+        }
+        const sameProvider =
+          allInsightCoords.length > 1 &&
+          new Set(allInsightCoords.map(item => String(item.point.providerId ?? item.point.provider ?? ''))).size === 1;
+        const metricKind = options.insightHighlight?.metric || 'cost';
+        const metricValText = point => {
+          if (metricKind === 'score') return point.score.toFixed(1);
+          const { durationText, costText } = roundMetrics(point);
+          return metricKind === 'duration' ? durationText : costText;
+        };
+        const refLabelText = point => {
+          const val = metricValText(point);
+          if (point.source === 'baseline') return `基线 · ${val}`;
+          if (sameProvider && point.accountId && !String(point.accountId).startsWith('gateway-binding:')) {
+            const rawAcc = String(point.accountDisplayId ?? point.account ?? '');
+            const shownAcc = options.maskAccounts ? maskChartAccountBullets(rawAcc) : rawAcc;
+            const shortAcc = shownAcc.length > 14 ? `${shownAcc.slice(0, 13)}…` : shownAcc;
+            return `对照 · ${shortAcc} · ${val}`;
+          }
+          const rawCh = String(point.providerName ?? point.providerDisplayId ?? point.provider ?? '');
+          const stripped = sharedInsightPrefix && rawCh.startsWith(sharedInsightPrefix) ? rawCh.slice(sharedInsightPrefix.length) : rawCh;
+          const shortCh = stripped.length > 16 ? `${stripped.slice(0, 15)}…` : stripped;
+          return `对照 · ${shortCh} · ${val}`;
+        };
+        const placedRefBoxes = [];
+        const boxesOverlap = (a, b) => a.left < b.right && a.right > b.left && a.top < b.bottom && a.bottom > b.top;
+        for (const refItem of refCoords.slice(0, 6)) {
+          const textStr = refLabelText(refItem.point);
+          const labelNode = svgNode(
+            'text',
+            {
+              class: 'score-cost-insight-label',
+              'data-insight-label-record': refItem.point.id,
+              fill: theme.green,
+              'font-size': 11,
+              'font-weight': 600,
+              'paint-order': 'stroke',
+              stroke: theme.card,
+              'stroke-width': 4,
+              'stroke-linejoin': 'round'
+            },
+            textStr
+          );
+          insightCompareLayer.append(labelNode);
+          const textW = Math.max(40, labelNode.getComputedTextLength?.() || textStr.length * 7);
+          const textH = 14;
+          const preferLeft = primaryAnchor && refItem.px <= primaryAnchor.px;
+          const preferAbove = primaryAnchor && refItem.py <= primaryAnchor.py;
+          const positions = [
+            { x: refItem.px - textW / 2, y: preferAbove ? refItem.py - 15 : refItem.py + 22 },
+            { x: preferLeft ? refItem.px - textW - 12 : refItem.px + 12, y: refItem.py + 4 },
+            { x: refItem.px - textW / 2, y: preferAbove ? refItem.py + 22 : refItem.py - 15 },
+            { x: preferLeft ? refItem.px + 12 : refItem.px - textW - 12, y: refItem.py + 4 }
+          ].map(pos => ({
+            x: Math.max(margin.left + 2, Math.min(width - margin.right - textW - 2, pos.x)),
+            y: Math.max(margin.top + textH, Math.min(height - margin.bottom - 4, pos.y))
+          }));
+          let chosenPos = null;
+          for (const pos of positions) {
+            const box = { left: pos.x - 3, right: pos.x + textW + 3, top: pos.y - textH, bottom: pos.y + 3 };
+            if (!placedRefBoxes.some(existing => boxesOverlap(box, existing))) {
+              chosenPos = { ...pos, box };
+              break;
+            }
+          }
+          if (!chosenPos) {
+            labelNode.remove();
+            continue;
+          }
+          labelNode.setAttribute('x', chosenPos.x);
+          labelNode.setAttribute('y', chosenPos.y);
+          placedRefBoxes.push(chosenPos.box);
+          insightKeepoutBoxes.push(chosenPos.box);
+        }
+      }
+    }
     for (const item of drawCoords) {
       const { point, px, py, pointColor, colorKey } = item;
       const selected = selectedIdSet.has(point.id);
+      const isInsightAnomaly = hasInsightHighlight && insightAnomalySet.has(point.id);
+      const isInsightRef = hasInsightHighlight && !isInsightAnomaly && insightRefSet.has(point.id);
       const overlaps = findOverlaps(item);
       const overlapSummary = overlaps.length > 1 ? summarizeChartRecordTimes(overlaps) : '';
       const historyState = historyStates.get(point.id) ?? 'unknown';
@@ -957,6 +1170,24 @@ export function createScoreCostChart(
           'pointer-events': 'none'
         })
       );
+      if (isInsightAnomaly || isInsightRef) {
+        group.setAttribute('data-insight-role', isInsightAnomaly ? 'anomaly' : 'reference');
+        group.append(
+          svgNode('circle', {
+            cx: px,
+            cy: py,
+            r: isInsightAnomaly ? 10 : 9.5,
+            fill: 'none',
+            stroke: isInsightAnomaly ? insightAnomalyColor : theme.green,
+            'stroke-width': isInsightAnomaly ? 2 : 1.8,
+            class: `score-cost-insight-ring ${isInsightAnomaly ? 'is-anomaly' : 'is-reference'}`,
+            'pointer-events': 'none',
+            'aria-hidden': true
+          })
+        );
+      } else if (hasInsightHighlight) {
+        group.setAttribute('data-insight-role', 'dimmed');
+      }
       const bundled = point.source === 'baseline';
       group.setAttribute('data-channel-key', String(point.providerId ?? point.provider));
       group.setAttribute('data-model-color', pointColor);
@@ -1059,6 +1290,19 @@ export function createScoreCostChart(
           node('span', '', formatChartRecordTime(point))
         );
         tooltip.append(header, channel, metrics, meta);
+        if (isInsightAnomaly && options.insightHighlight?.refContext) {
+          const { valueText, refText, refContext, deltaText } = options.insightHighlight;
+          const insightBar = node('div', 'score-cost-tooltip-insight');
+          insightBar.append(
+            node('span', 'score-cost-tooltip-insight-tag', '异常对比'),
+            node(
+              'span',
+              'score-cost-tooltip-insight-text',
+              `${valueText ?? ''} vs ${refText ?? ''}（${deltaText ?? ''}）· 对照 ${refContext}`
+            )
+          );
+          tooltip.append(insightBar);
+        }
         const matchingBaselines = point.source !== 'baseline' ? findMatchingBaselines(point, baselinePool) : [];
         const baselineComparison = matchingBaselines.length ? compareRecordToBaseline(point, matchingBaselines[0]) : null;
         if (baselineComparison) {
@@ -1173,7 +1417,7 @@ export function createScoreCostChart(
           tooltip.append(inelig);
         }
         if (hasActionButtons) actions.append(actionButtons);
-        actions.append(node('span', 'score-cost-tooltip-hint', pinned ? '已固定 · 再次点击取消' : '点击固定卡片与参考线'));
+        actions.append(node('span', 'score-cost-tooltip-hint', pinned ? '可拖动卡片 · 再次点击取消' : '点击固定卡片与参考线'));
         tooltip.append(actions);
         tooltip.hidden = false;
         crosshairCtrl?.showPoint(point, px, py, Boolean(pinned));
@@ -1184,7 +1428,17 @@ export function createScoreCostChart(
         const maxLeft = Math.max(4, width - cardWidth - 4);
         const maxTop = Math.max(4, Math.min(height - cardHeight - 4, window.innerHeight - rect.top - cardHeight - 8));
         const minTop = Math.min(maxTop, rect.top < 0 ? -rect.top + 8 : 4);
+        tooltipBounds = { minLeft: 4, maxLeft, minTop: Math.min(4, minTop), maxTop: Math.max(4, height - cardHeight - 4, maxTop) };
+        if (pinned && tooltipDragPos && tooltipDragPos.pointId === point.id) {
+          const keptLeft = Math.max(tooltipBounds.minLeft, Math.min(tooltipBounds.maxLeft, tooltipDragPos.left));
+          const keptTop = Math.max(tooltipBounds.minTop, Math.min(tooltipBounds.maxTop, tooltipDragPos.top));
+          tooltip.style.left = keptLeft + 'px';
+          tooltip.style.top = keptTop + 'px';
+          return;
+        }
         const activeBox = { left: px - 14, right: px + 14, top: py - 14, bottom: py + 14 };
+        const plotBottom = height - margin.bottom;
+        const safeBottomTop = Math.max(minTop, Math.min(maxTop, plotBottom - cardHeight - 6));
         const overlapsBox = (candidate, box) =>
           candidate.left < box.right &&
           candidate.left + cardWidth > box.left &&
@@ -1195,41 +1449,101 @@ export function createScoreCostChart(
           top: Math.max(minTop, Math.min(maxTop, candidate.top)),
           priority: candidate.priority
         });
+        const activeSeries = visibleSeries.get(thinkingGroupKey(point)) || [];
+        const seriesCheckPoints = [];
+        let seriesMinX = px,
+          seriesMaxX = px,
+          seriesMinY = py,
+          seriesMaxY = py;
+        for (let i = 0; i < activeSeries.length; i++) {
+          const item = activeSeries[i];
+          const sx = x(item.cost),
+            sy = y(item.score);
+          seriesMinX = Math.min(seriesMinX, sx - 10);
+          seriesMaxX = Math.max(seriesMaxX, sx + 10);
+          seriesMinY = Math.min(seriesMinY, sy - 10);
+          seriesMaxY = Math.max(seriesMaxY, sy + 10);
+          if (item.id !== point.id) seriesCheckPoints.push({ x: sx, y: sy });
+          if (i + 1 < activeSeries.length) {
+            const next = activeSeries[i + 1];
+            const nx = x(next.cost),
+              ny = y(next.score);
+            for (const t of [0.15, 0.3, 0.45, 0.6, 0.75, 0.9]) {
+              seriesCheckPoints.push({ x: sx + (nx - sx) * t, y: sy + (ny - sy) * t });
+            }
+          }
+        }
+        for (const box of activeHoverLabelBoxes) {
+          seriesMinX = Math.min(seriesMinX, box.left);
+          seriesMaxX = Math.max(seriesMaxX, box.right);
+          seriesMinY = Math.min(seriesMinY, box.top);
+          seriesMaxY = Math.max(seriesMaxY, box.bottom);
+        }
         // Anchor close to the active point so the card stays immediately readable and reachable when pinned,
-        // picking the cleanest side that avoids the active point, its Thinking series/labels, and nearby dots.
-        const rawCandidates = [
+        // picking the cleanest side that avoids the active point, insight comparison targets, Thinking series/labels, x-axis, and nearby dots.
+        const candidateList = [
           { left: px + gap, top: py - cardHeight * 0.35, priority: 0 },
           { left: px - cardWidth - gap, top: py - cardHeight * 0.35, priority: 0 },
+          { left: px + gap, top: safeBottomTop, priority: 0 },
+          { left: px - cardWidth - gap, top: safeBottomTop, priority: 0 },
           { left: px + gap, top: py + gap, priority: 1 },
           { left: px - cardWidth - gap, top: py + gap, priority: 1 },
           { left: px - cardWidth / 2, top: py + gap, priority: 1 },
           { left: px + gap, top: py - cardHeight - gap, priority: 2 },
           { left: px - cardWidth - gap, top: py - cardHeight - gap, priority: 2 },
           { left: px - cardWidth / 2, top: py - cardHeight - gap, priority: 2 }
-        ].map(clampCandidate);
-        const activeSeries = visibleSeries.get(thinkingGroupKey(point)) || [];
-        const seriesCheckPoints = [];
-        for (let i = 0; i < activeSeries.length; i++) {
-          const item = activeSeries[i];
-          const sx = x(item.cost),
-            sy = y(item.score);
-          if (item.id !== point.id) seriesCheckPoints.push({ x: sx, y: sy });
-          if (i + 1 < activeSeries.length) {
-            const next = activeSeries[i + 1];
-            const nx = x(next.cost),
-              ny = y(next.score);
-            for (const t of [0.25, 0.5, 0.75]) {
-              seriesCheckPoints.push({ x: sx + (nx - sx) * t, y: sy + (ny - sy) * t });
-            }
+        ];
+        if (!hasInsightHighlight && activeSeries.length > 1) {
+          const seriesMidTop = Math.max(minTop, Math.min(safeBottomTop, (seriesMinY + seriesMaxY) / 2 - cardHeight / 2));
+          if (seriesMaxX - px <= 260) {
+            candidateList.push(
+              { left: seriesMaxX + gap, top: Math.min(safeBottomTop, Math.max(minTop, py - cardHeight * 0.35)), priority: 1 },
+              { left: seriesMaxX + gap, top: safeBottomTop, priority: 1 },
+              { left: seriesMaxX + gap, top: seriesMidTop, priority: 1 }
+            );
+          }
+          if (px - seriesMinX <= 260) {
+            candidateList.push(
+              { left: seriesMinX - cardWidth - gap, top: Math.min(safeBottomTop, Math.max(minTop, py - cardHeight * 0.35)), priority: 1 },
+              { left: seriesMinX - cardWidth - gap, top: safeBottomTop, priority: 1 },
+              { left: seriesMinX - cardWidth - gap, top: seriesMidTop, priority: 1 }
+            );
           }
         }
+        if (hasInsightHighlight) {
+          if (insightKeepoutBoxes.length) {
+            let insMinX = px,
+              insMaxX = px;
+            for (const box of insightKeepoutBoxes) {
+              insMinX = Math.min(insMinX, box.left);
+              insMaxX = Math.max(insMaxX, box.right);
+            }
+            candidateList.push(
+              { left: insMaxX + gap, top: Math.min(safeBottomTop, Math.max(minTop, py - cardHeight * 0.35)), priority: 2 },
+              { left: insMaxX + gap, top: safeBottomTop, priority: 2 },
+              { left: insMinX - cardWidth - gap, top: Math.min(safeBottomTop, Math.max(minTop, py - cardHeight * 0.35)), priority: 2 },
+              { left: insMinX - cardWidth - gap, top: safeBottomTop, priority: 2 }
+            );
+          }
+          candidateList.push(
+            { left: maxLeft, top: minTop, priority: 3 },
+            { left: maxLeft, top: safeBottomTop, priority: 3 },
+            { left: 4, top: minTop, priority: 3 },
+            { left: 4, top: safeBottomTop, priority: 3 }
+          );
+        }
+        const rawCandidates = candidateList.map(clampCandidate);
         const otherPoints = visibleCoords.filter(other => other.point.id !== point.id).map(other => ({ x: other.px, y: other.py }));
         const scoreCandidate = candidate => {
           const hitsActive = overlapsBox(candidate, activeBox) ? 1 : 0;
-          const hitsSeries = seriesCheckPoints.filter(pt =>
-            overlapsBox(candidate, { left: pt.x - 10, right: pt.x + 10, top: pt.y - 10, bottom: pt.y + 10 })
-          ).length;
+          const hitsInsight = insightKeepoutBoxes.filter(box => overlapsBox(candidate, box)).length;
+          const hitsSeries = hasInsightHighlight
+            ? 0
+            : seriesCheckPoints.filter(pt =>
+                overlapsBox(candidate, { left: pt.x - 10, right: pt.x + 10, top: pt.y - 10, bottom: pt.y + 10 })
+              ).length;
           const hitsHoverLabels = activeHoverLabelBoxes.filter(box => overlapsBox(candidate, box)).length;
+          const axisOverflow = Math.max(0, candidate.top + cardHeight - plotBottom);
           const hitsOthers = otherPoints.filter(pt =>
             overlapsBox(candidate, { left: pt.x - 6, right: pt.x + 6, top: pt.y - 6, bottom: pt.y + 6 })
           ).length;
@@ -1239,8 +1553,10 @@ export function createScoreCostChart(
           const centerDist = Math.hypot(candidate.left + cardWidth / 2 - px, candidate.top + cardHeight / 2 - py);
           return (
             hitsActive * 100000 +
-            hitsSeries * 400 +
-            hitsHoverLabels * 250 +
+            hitsInsight * 25000 +
+            hitsSeries * 500 +
+            hitsHoverLabels * 350 +
+            (axisOverflow > 0 ? 350 + axisOverflow * 4 : 0) +
             hitsOthers * 12 +
             edgeDist * 4 +
             centerDist * 0.05 +
@@ -1278,6 +1594,7 @@ export function createScoreCostChart(
           onSelect(null);
           return;
         }
+        tooltipDragPos = null;
         pinnedPointId = point.id;
         showTooltip(true);
         onSelect(point.id);
@@ -1500,6 +1817,7 @@ export function createScoreCostChart(
         const nextSelectedId = nextOptions.selectedIds[0] ?? null;
         if (nextSelectedId !== (options.selectedIds[0] ?? null)) {
           pinnedPointId = nextSelectedId;
+          tooltipDragPos = null;
         }
       }
       records = [...nextRecords];
@@ -1542,6 +1860,7 @@ export function createScoreCostChart(
     destroy() {
       disposed = true;
       clearPan();
+      clearTooltipDrag();
       observer.disconnect();
       svg.removeEventListener?.('wheel', onWheel);
       svg.removeEventListener?.('pointerdown', onPointerDown);
@@ -1551,6 +1870,10 @@ export function createScoreCostChart(
       svg.removeEventListener?.('pointercancel', clearPan);
       svg.removeEventListener?.('click', onSvgClick);
       svg.removeEventListener?.('dblclick', onDoubleClick);
+      tooltip.removeEventListener?.('pointerdown', onTooltipPointerDown);
+      tooltip.removeEventListener?.('pointermove', onTooltipPointerMove);
+      tooltip.removeEventListener?.('pointerup', onTooltipPointerUp);
+      tooltip.removeEventListener?.('pointercancel', clearTooltipDrag);
       document.removeEventListener?.('keydown', onDocumentKeyDown);
       if (resizeFrame !== null) cancelAnimationFrame(resizeFrame);
       resizeFrame = null;

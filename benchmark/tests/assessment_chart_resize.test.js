@@ -1119,3 +1119,233 @@ test('crosshair tracks pointer hover, snaps to points, pins on click, and clears
     expect(crosshair().attributes.display).toBe('none');
     f.chart.destroy();
 });
+
+test('insightHighlight renders anomaly and reference rings and dims unrelated points', () => {
+    const f = chartResizeFixture();
+    const rows = [
+        {
+            id: 'anom-1',
+            source: 'run',
+            run_id: 'r1',
+            model: 'gpt-6-luna',
+            modelDisplayName: 'GPT-6 Luna',
+            providerId: 'provider:codex',
+            providerName: 'codex',
+            provider: 'codex',
+            accountId: 'account:a@example.com',
+            account: 'a@example.com',
+            think: 'medium',
+            created_at: '2026-11-24T10:00:00Z',
+            cost: 0.96,
+            score: 85,
+            rounds: 1
+        },
+        {
+            id: 'ref-1',
+            source: 'run',
+            run_id: 'r2',
+            model: 'gpt-6-luna',
+            modelDisplayName: 'GPT-6 Luna',
+            providerId: 'provider:codex',
+            providerName: 'codex',
+            provider: 'codex',
+            accountId: 'account:b@example.com',
+            account: 'b@example.com',
+            think: 'medium',
+            created_at: '2026-11-24T10:00:00Z',
+            cost: 0.62,
+            score: 85,
+            rounds: 1
+        },
+        {
+            id: 'other-1',
+            source: 'run',
+            run_id: 'r3',
+            model: 'gpt-6-terra',
+            modelDisplayName: 'GPT-6 Terra',
+            providerId: 'provider:openai',
+            providerName: 'openai',
+            provider: 'openai',
+            accountId: 'gateway-binding:default',
+            account: '网关自动分配',
+            think: 'high',
+            created_at: '2026-11-24T10:00:00Z',
+            cost: 0.25,
+            score: 90,
+            rounds: 1
+        }
+    ];
+
+    f.chart.render(rows, {
+        axis: 'cost',
+        log: false,
+        selectedIds: ['anom-1'],
+        insightHighlight: {
+            anomalyIds: ['anom-1'],
+            referenceIds: ['ref-1'],
+            metric: 'cost',
+            valueText: '$0.960',
+            refText: '$0.620',
+            refContext: '同渠道 1 账号',
+            deltaText: '+55%'
+        }
+    });
+
+    const points = chartFixtureNodes(f, 'score-cost-point');
+    const anom = points.find(n => n.attributes['data-record-id'] === 'anom-1');
+    const ref = points.find(n => n.attributes['data-record-id'] === 'ref-1');
+    const other = points.find(n => n.attributes['data-record-id'] === 'other-1');
+
+    expect(anom.attributes['data-insight-role']).toBe('anomaly');
+    expect(anom.children.some(c => c.attributes.class?.includes('score-cost-insight-ring is-anomaly'))).toBe(true);
+    expect(anom.attributes.opacity).toBe('1');
+
+    expect(ref.attributes['data-insight-role']).toBe('reference');
+    expect(ref.children.some(c => c.attributes.class?.includes('score-cost-insight-ring is-reference'))).toBe(true);
+    expect(ref.attributes.opacity).toBe('1');
+
+    expect(other.attributes['data-insight-role']).toBe('dimmed');
+    expect(other.attributes.opacity).toBe('0.2');
+
+    // Comparison link line and green reference label are rendered
+    const links = chartFixtureNodes(f, 'score-cost-insight-link');
+    expect(links).toHaveLength(1);
+    expect(links[0].attributes['data-from-record']).toBe('anom-1');
+    expect(links[0].attributes['data-to-record']).toBe('ref-1');
+    const refLabels = chartFixtureNodes(f, 'score-cost-insight-label');
+    expect(refLabels).toHaveLength(1);
+    expect(refLabels[0].textContent).toContain('对照');
+
+    // Tooltip renders comparison summary bar and supports drag-to-move while pinned
+    const tooltip = f.container.children.find(node => node.className === 'score-cost-tooltip');
+    const textOf = node => (node?.textContent || '') + (node?.children || []).map(textOf).join(' ');
+    expect(textOf(tooltip)).toContain('异常对比');
+    expect(textOf(tooltip)).toContain('对照 同渠道 1 账号');
+
+    const startLeft = parseFloat(tooltip.style.left);
+    const startTop = parseFloat(tooltip.style.top);
+    const dragDx = startLeft > 100 ? -60 : 60;
+    const dragDy = startTop > 80 ? -30 : 30;
+    tooltip.emit('pointerdown', { button: 0, pointerId: 1, clientX: 200, clientY: 150, target: tooltip, stopPropagation() {} });
+    tooltip.emit('pointermove', { pointerId: 1, clientX: 200 + dragDx, clientY: 150 + dragDy, preventDefault() {} });
+    tooltip.emit('pointerup', { pointerId: 1 });
+    expect(parseFloat(tooltip.style.left)).toBe(startLeft + dragDx);
+    expect(parseFloat(tooltip.style.top)).toBe(startTop + dragDy);
+
+    f.chart.destroy();
+});
+
+test('tooltip clears compact Thinking series and x-axis without jumping to the far corner', () => {
+    const f = chartResizeFixture();
+    f.container.clientWidth = 1120;
+    const tooltip = f.container.children[1];
+    tooltip.offsetWidth = 348;
+    tooltip.offsetHeight = 220;
+    const rows = [
+        {
+            id: 'luna-low',
+            source: 'run',
+            task_id: 'task-luna',
+            run_id: 'r-low',
+            model: 'gpt-6-luna',
+            modelDisplayName: 'GPT-6-Luna',
+            providerId: 'provider:codex',
+            provider: 'codex',
+            providerName: 'homelab / codex',
+            accountId: 'gateway-binding:default',
+            account: '网关自动分配',
+            think: 'low',
+            created_at: '2026-11-19T19:06:26Z',
+            cost: 0.025,
+            score: 15.7,
+            rounds: 3
+        },
+        {
+            id: 'luna-med',
+            source: 'run',
+            task_id: 'task-luna',
+            run_id: 'r-med',
+            model: 'gpt-6-luna',
+            modelDisplayName: 'GPT-6-Luna',
+            providerId: 'provider:codex',
+            provider: 'codex',
+            providerName: 'homelab / codex',
+            accountId: 'gateway-binding:default',
+            account: '网关自动分配',
+            think: 'medium',
+            created_at: '2026-11-19T19:06:26Z',
+            cost: 0.026,
+            score: 19.1,
+            rounds: 3
+        },
+        {
+            id: 'luna-xhigh',
+            source: 'run',
+            task_id: 'task-luna',
+            run_id: 'r-xhigh',
+            model: 'gpt-6-luna',
+            modelDisplayName: 'GPT-6-Luna',
+            providerId: 'provider:codex',
+            provider: 'codex',
+            providerName: 'homelab / codex',
+            accountId: 'gateway-binding:default',
+            account: '网关自动分配',
+            think: 'xhigh',
+            created_at: '2026-11-19T19:06:26Z',
+            cost: 0.06,
+            score: 64.0,
+            rounds: 3
+        },
+        {
+            id: 'luna-max',
+            source: 'run',
+            task_id: 'task-luna',
+            run_id: 'r-max',
+            model: 'gpt-6-luna',
+            modelDisplayName: 'GPT-6-Luna',
+            providerId: 'provider:codex',
+            provider: 'codex',
+            providerName: 'homelab / codex',
+            accountId: 'gateway-binding:default',
+            account: '网关自动分配',
+            think: 'max',
+            created_at: '2026-11-19T19:06:26Z',
+            cost: 0.07,
+            score: 71.5,
+            rounds: 3
+        },
+        {
+            id: 'far-anchor',
+            source: 'run',
+            run_id: 'r-far',
+            model: 'other-model',
+            modelDisplayName: 'Other Model',
+            provider: 'openai',
+            providerName: 'homelab / openai',
+            account: 'acc',
+            think: 'high',
+            created_at: '2026-11-19T19:06:26Z',
+            cost: 1.5,
+            score: 95.0,
+            rounds: 3
+        }
+    ];
+    f.chart.render(rows, { axis: 'cost', log: true });
+    const points = chartFixtureNodes(f, 'score-cost-point');
+    const getPoint = id => points.find(n => n.attributes['data-record-id'] === id);
+    const maxMarker = getPoint('luna-max').children.find(n => n.attributes.class?.includes('record-marker'));
+    const maxX = Number(maxMarker.attributes.cx);
+
+    for (const id of ['luna-low', 'luna-med']) {
+        getPoint(id).emit('pointerenter');
+        const left = parseFloat(tooltip.style.left);
+        const top = parseFloat(tooltip.style.top);
+        // Clears the Thinking series to the right without covering the line or jumping to the far right edge
+        expect(left).toBeGreaterThanOrEqual(maxX + 10);
+        expect(left).toBeLessThan(maxX + 200);
+        // Stays above the x-axis (plotBottom = height - 58 = 342)
+        expect(top + tooltip.offsetHeight).toBeLessThanOrEqual(342);
+    }
+
+    f.chart.destroy();
+});

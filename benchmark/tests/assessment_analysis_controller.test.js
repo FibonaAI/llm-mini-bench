@@ -7,6 +7,7 @@ import { assessmentChartMetric, buildObservationAnomalies, observationQualitySum
 import { selectAnalysisHistoryRecords } from '../web/analysis-history.js';
 import { renderAnalysisRecordList } from '../web/analysis-record-list.js';
 import { compareRecordToBaseline, dedupePromotedRuns, findMatchingBaselines, findPromotedBaseline } from '../web/baseline-comparison.js';
+import { analyzeAnomalies } from '../web/anomaly-analysis.js';
 
 class ControllerNode {
     value = '';
@@ -129,6 +130,7 @@ test('analysis redraw events reuse derived metrics; source, bank and axes invali
         dedupePromotedRuns,
         findMatchingBaselines,
         findPromotedBaseline,
+        analyzeAnomalies,
         document: { documentElement: {}, addEventListener() {} },
         window: {
             matchMedia: () => ({

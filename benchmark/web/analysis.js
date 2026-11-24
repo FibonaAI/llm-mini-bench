@@ -8,6 +8,7 @@ import { renderAnalysisRecordList } from './analysis-record-list.js';
 import { createScoreCostChart } from './score-cost-chart.js';
 import { buildObservationAnomalies } from './assessment-chart-metric.js';
 import { dedupePromotedRuns } from './baseline-comparison.js';
+import { analyzeAnomalies } from './anomaly-analysis.js';
 
 const app = getAppContext();
 const { byId: element, escapeHtml, finite, request, notify, available, formatDate } = app.services;
@@ -20,6 +21,10 @@ const state = {
   historyPickerLimit: 100,
   disclosure: null,
   disclosureLimit: 80,
+  insightsExpanded: false,
+  expandedInsightGroups: new Set(),
+  activeInsightId: null,
+  activeInsightHighlight: null,
   selectedId: null,
   loading: false,
   promoting: new Set()
@@ -213,6 +218,7 @@ function renderObservations() {
   element('analysis-count-status').textContent =
     `${modeLabel}，${records.length} 条匹配记录，${plotted} 个数据点，${records.length - plotted} 个未入图`;
   renderResultDisclosure(records);
+  renderInsights(records);
   element('dataset-summary').textContent =
     `Mini Bench · ${state.observations.filter(record => record.source === 'baseline').length} 份基线 · ${state.observations.filter(record => record.source === 'run').length} 个运行目标`;
   const colorDescription = {
@@ -234,14 +240,128 @@ function renderObservations() {
     colorBy: element('chart-color-by').value,
     axis: element('chart-axis').value,
     selectedIds: state.selectedId ? [state.selectedId] : [],
+    insightHighlight: state.activeInsightHighlight,
     promotingIds: state.promoting,
     maskAccounts: Boolean(app.maskAccounts)
   });
   dataPopover.position();
 }
 
+let cachedInsightsKey = null,
+  cachedInsightsResult = null;
+function currentInsights(records) {
+  const key = `${records.map(r => r.id).join('\0')}\n${state.records.length}`;
+  if (cachedInsightsKey === key && cachedInsightsResult && cachedInsightsResult.pool === state.records) {
+    return cachedInsightsResult.result;
+  }
+  const result = analyzeAnomalies(records, { baselinePool: state.records });
+  cachedInsightsKey = key;
+  cachedInsightsResult = { pool: state.records, result };
+  return result;
+}
+
+function findInsightItem(records, itemId) {
+  if (!itemId) return null;
+  const { groups = [] } = currentInsights(records);
+  for (const group of groups) {
+    const found = group.items.find(item => item.id === itemId);
+    if (found) return found;
+  }
+  return null;
+}
+
+function renderInsights(records) {
+  const panel = element('analysis-insights');
+  if (!panel) return;
+  const { findings, groups = [], comparableGroups, baselinePairs } = currentInsights(records);
+  if (state.activeInsightId && !findInsightItem(records, state.activeInsightId)) {
+    state.activeInsightId = null;
+    state.activeInsightHighlight = null;
+  }
+  if (!groups.length && comparableGroups === 0 && baselinePairs === 0) {
+    panel.hidden = true;
+    return;
+  }
+  panel.hidden = false;
+  panel.classList?.toggle?.('is-clean', !groups.length);
+
+  const countEl = element('analysis-insights-count');
+  const metaEl = element('analysis-insights-meta');
+  const listEl = element('analysis-insights-list');
+  const moreEl = element('analysis-insights-more');
+
+  const metaParts = [];
+  if (baselinePairs > 0) metaParts.push(`基线配对 ${baselinePairs} 项`);
+  if (comparableGroups > 0) metaParts.push(`渠道/账号对照 ${comparableGroups} 组`);
+  metaEl.textContent = metaParts.join(' · ');
+
+  if (!groups.length) {
+    countEl.textContent = '未发现显著异常';
+    countEl.className = 'insight-count is-clean';
+    listEl.innerHTML = '';
+    moreEl.hidden = true;
+    moreEl.innerHTML = '';
+    return;
+  }
+
+  const hasHigh = findings.some(item => item.severity === 'high');
+  const channelGroupCount = groups.filter(group => group.kind === 'channel').length;
+  const accountGroupCount = groups.filter(group => group.kind === 'account').length;
+  const totalItems = groups.reduce((sum, group) => sum + group.items.length, 0);
+  const countParts = [];
+  if (channelGroupCount > 0) countParts.push(`${channelGroupCount} 渠道`);
+  if (accountGroupCount > 0) countParts.push(`${accountGroupCount} 账号`);
+  countParts.push(`${totalItems} 项异常`);
+  countEl.textContent = countParts.join(' · ');
+  countEl.className = `insight-count${hasHigh ? ' is-high' : ''}`;
+
+  const defaultGroupLimit = 4;
+  const defaultItemsPerGroup = 3;
+  const visibleGroups = state.insightsExpanded || groups.length <= defaultGroupLimit ? groups : groups.slice(0, defaultGroupLimit);
+  const metricLabel = metric => (metric === 'score' ? '能力偏低' : metric === 'cost' ? '成本偏高' : '耗时偏慢');
+
+  listEl.innerHTML = visibleGroups
+    .map(group => {
+      const groupExpanded = state.expandedInsightGroups.has(group.id);
+      const visibleItems =
+        groupExpanded || group.items.length <= defaultItemsPerGroup ? group.items : group.items.slice(0, defaultItemsPerGroup);
+      const identHtml =
+        group.kind === 'account'
+          ? `<span class="insight-scope is-account">账号</span><span class="insight-target insight-account">${escapeHtml(group.accountRaw)}</span><span class="insight-group-sub">· ${escapeHtml(group.providerLabel)}</span>`
+          : `<span class="insight-scope is-channel">渠道</span><span class="insight-target">${escapeHtml(group.providerLabel)}</span><span class="insight-group-sub">${group.accountCount > 1 ? `整渠道（${group.accountCount} 个账号）` : '整渠道'}</span>`;
+      const badges = [];
+      if (group.metrics.score > 0) badges.push(`<span class="insight-badge is-score">能力偏低 ${group.metrics.score}</span>`);
+      if (group.metrics.cost > 0) badges.push(`<span class="insight-badge is-cost">成本偏高 ${group.metrics.cost}</span>`);
+      if (group.metrics.duration > 0) badges.push(`<span class="insight-badge is-duration">耗时偏慢 ${group.metrics.duration}</span>`);
+      const rowsHtml = visibleItems
+        .map(item => {
+          const active = state.activeInsightId
+            ? state.activeInsightId === item.id
+            : Boolean(state.selectedId && item.primaryRecordId === state.selectedId);
+          return `<button class="insight-row${active ? ' is-active' : ''}" type="button" data-insight-record="${escapeHtml(item.primaryRecordId)}" data-insight-item="${escapeHtml(item.id)}" aria-pressed="${active ? 'true' : 'false'}"><span class="insight-badge is-${escapeHtml(item.metric)}">${metricLabel(item.metric)}</span><span class="insight-model"><span class="insight-model-name">${escapeHtml(item.modelName)}</span><span class="insight-model-think"> · ${escapeHtml(item.thinkLabel)}</span></span><span class="insight-compare"><strong class="insight-val">${escapeHtml(item.valueText)}</strong><span class="insight-vs"> vs </span><span class="insight-ref-val">${escapeHtml(item.refText)}</span><span class="insight-delta is-${escapeHtml(item.metric)}">${escapeHtml(item.deltaText)}</span></span><span class="insight-ref-ctx" title="对照 ${escapeHtml(item.refContext)}">对照 ${escapeHtml(item.refContext)}</span><span class="insight-locate">${active ? '已定位 ×' : '定位 →'}</span></button>`;
+        })
+        .join('');
+      const expandHtml =
+        group.items.length > defaultItemsPerGroup
+          ? `<button class="insight-group-expand" type="button" data-insight-group-toggle="${escapeHtml(group.id)}">${groupExpanded ? '收起明细' : `展开其余 ${group.items.length - defaultItemsPerGroup} 项`}</button>`
+          : '';
+      return `<div class="insight-group is-${group.kind}"><div class="insight-group-head"><div class="insight-group-ident">${identHtml}</div><div class="insight-group-badges">${badges.join('')}</div></div><div class="insight-group-rows">${rowsHtml}</div>${expandHtml}</div>`;
+    })
+    .join('');
+
+  if (groups.length > defaultGroupLimit) {
+    moreEl.hidden = false;
+    moreEl.innerHTML = `<button class="text-control" type="button" data-insight-toggle>${state.insightsExpanded ? '收起部分主体' : `展开其余 ${groups.length - defaultGroupLimit} 个主体`}</button>`;
+  } else {
+    moreEl.hidden = true;
+    moreEl.innerHTML = '';
+  }
+}
+
 function selectObservation(id) {
   state.selectedId = id || null;
+  state.activeInsightId = null;
+  state.activeInsightHighlight = null;
   renderObservations();
 }
 function copyToTasks(records) {
@@ -387,6 +507,51 @@ element('analysis-view').addEventListener('click', async event => {
     state.historyPickerLimit = step === 'all' ? Number.MAX_SAFE_INTEGER : state.historyPickerLimit + (Number(step) || 100);
     renderHistoryPicker();
     dataPopover.position();
+    return;
+  }
+  const insightToggle = event.target.closest('[data-insight-toggle]');
+  if (insightToggle) {
+    state.insightsExpanded = !state.insightsExpanded;
+    renderInsights(matchingRecords());
+    return;
+  }
+  const insightGroupToggle = event.target.closest('[data-insight-group-toggle]');
+  if (insightGroupToggle) {
+    const groupId = insightGroupToggle.dataset.insightGroupToggle;
+    if (groupId) {
+      if (state.expandedInsightGroups.has(groupId)) state.expandedInsightGroups.delete(groupId);
+      else state.expandedInsightGroups.add(groupId);
+      renderInsights(matchingRecords());
+    }
+    return;
+  }
+  const insightRow = event.target.closest('[data-insight-record]');
+  if (insightRow) {
+    const itemId = insightRow.dataset.insightItem || '';
+    const recordId = insightRow.dataset.insightRecord || '';
+    if (itemId && state.activeInsightId === itemId) {
+      selectObservation(null);
+      return;
+    }
+    const item = findInsightItem(matchingRecords(), itemId);
+    if (item) {
+      state.activeInsightId = item.id;
+      state.activeInsightHighlight = {
+        anomalyIds: item.recordIds,
+        referenceIds: item.referenceIds,
+        metric: item.metric,
+        valueText: item.valueText,
+        refText: item.refText,
+        refContext: item.refContext,
+        deltaText: item.deltaText
+      };
+      state.selectedId = item.primaryRecordId || recordId || null;
+      renderObservations();
+      element('chart-card')?.scrollIntoView?.({ block: 'nearest' });
+    } else if (recordId) {
+      selectObservation(recordId);
+      element('chart-card')?.scrollIntoView?.({ block: 'nearest' });
+    }
     return;
   }
   const inspect = event.target.closest('[data-inspect-observation]');

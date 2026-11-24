@@ -18,11 +18,19 @@
   await page.waitForFunction(()=>window.MiniBench.runState.routes.some(route=>route.id==='route-mask-email'));
   await page.locator('#chart-color-by').selectOption('account');
   require((await legend.innerText()).includes('alice.researcher@company.invalid'),'Unmasked account missing from legend before toggle');
+  const insights=page.locator('#analysis-insights');
+  await insights.waitFor({state:'visible'});
+  require((await insights.innerText()).includes('测试账号')&&(await insights.locator('.insight-row').count())>=1,'Anomaly insights did not detect within-channel account cost anomaly');
+  await insights.locator('.insight-row[data-insight-record="obs-mask-cjk"]').click();
+  await page.locator('.score-cost-tooltip.is-pinned[data-tooltip-record-id="obs-mask-cjk"]').waitFor({state:'visible'});
+  await page.locator('.score-cost-tooltip-close').click();
   const maskBtn=page.locator('#mask-accounts');
   require(await maskBtn.getAttribute('aria-pressed')==='false'&&(await maskBtn.innerText()).includes('账号打码'),'Mask toggle must start unpressed');
   await maskBtn.click();
   require(await maskBtn.getAttribute('aria-pressed')==='true'&&(await maskBtn.innerText()).includes('账号已打码'),'Mask toggle did not enter active state');
   require(await page.evaluate(()=>document.body.classList.contains('masked')&&localStorage.getItem('mini-bench-mask-accounts')==='1'),'Mask toggle did not persist or mark body.masked');
+  const maskedInsightsText=await insights.innerText();
+  require(!maskedInsightsText.includes('测试账号')&&!maskedInsightsText.includes('alice.researcher')&&await insights.locator('.pii').count()>=1,'Anomaly insights leaked account names while masked: '+maskedInsightsText);
   const maskedLegendText=await legend.innerText();
   require(!maskedLegendText.includes('alice.researcher')&&!maskedLegendText.includes('测试账号')&&!maskedLegendText.endsWith('/ a'),'Legend leaked account names while masked: '+maskedLegendText);
   require(await legend.locator('.pii').count()>=3,'Legend must render blurred .pii spans while masked');
@@ -48,6 +56,7 @@
   require(await page.locator('.pii').count()===0&&(await legend.innerText()).includes('alice.researcher@company.invalid'),'Unmasking failed to restore original account names');
 
   observations.splice(0,observations.length);await refresh();await page.waitForFunction(()=>document.querySelectorAll('.score-cost-point').length===0);
+  require(await insights.isHidden(),'Empty charts must hide anomaly insights panel');
   require(await legend.isHidden(),'Empty charts must not retain stale legend categories');
   require(await page.locator('.chart-legend-list').textContent()==='','Empty charts retained old account labels');
   const windowErrors=await page.evaluate(()=>window.browserWindowErrors);require(windowErrors.length===0,'Window errors: '+JSON.stringify(windowErrors));
