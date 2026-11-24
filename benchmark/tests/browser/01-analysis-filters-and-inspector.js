@@ -1,12 +1,13 @@
   await page.goto('http://assessment-ui.invalid/#token=offline-test-token');
   await point('baseline-fixture').waitFor();await point('peer').waitFor();
   const controlGeometry=await page.evaluate(()=>{
-    const selectors=['.af-search','.af-facet summary','#analysis-data-trigger','#analysis-source','#chart-color-by','#chart-axis','#export-chart'];
+    const selectors=['.af-search','.af-facet summary','.af-facet[data-facet="source"] summary','#analysis-data-trigger','#chart-color-by','#chart-axis','#export-chart'];
     return selectors.map(selector=>({selector,height:document.querySelector(selector).getBoundingClientRect().height}));
   });
   require(controlGeometry.every(({height})=>height===30),'Magpie toolbar control heights diverged: '+JSON.stringify(controlGeometry));
-  const dataAlignment=await page.locator('#analysis-data-trigger').evaluate(node=>{const data=node.getBoundingClientRect(),sibling=document.querySelector('#analysis-picker .af-facet summary').getBoundingClientRect();return {dataTop:data.top,siblingTop:sibling.top,dataHeight:data.height,siblingHeight:sibling.height};});
-  require(dataAlignment.dataTop===dataAlignment.siblingTop&&dataAlignment.dataHeight===dataAlignment.siblingHeight,'Data scope must align with the existing facet controls: '+JSON.stringify(dataAlignment));
+  require(await page.locator('#analysis-source').count()===0,'Legacy native source select must be replaced by unified source facet');
+  const dataAlignment=await page.locator('#analysis-data-trigger').evaluate(node=>{const data=node.getBoundingClientRect(),sibling=document.querySelector('#analysis-picker .af-facet summary').getBoundingClientRect(),source=document.querySelector('#analysis-picker .af-facet[data-facet="source"] summary').getBoundingClientRect();return {dataTop:data.top,siblingTop:sibling.top,sourceTop:source.top,dataHeight:data.height,siblingHeight:sibling.height,sourceHeight:source.height};});
+  require(dataAlignment.dataTop===dataAlignment.siblingTop&&dataAlignment.sourceTop===dataAlignment.siblingTop&&dataAlignment.dataHeight===dataAlignment.siblingHeight&&dataAlignment.sourceHeight===dataAlignment.siblingHeight,'Source and data controls must align with existing facet controls: '+JSON.stringify(dataAlignment));
   require(await page.locator('.filter-bar #analysis-data-filter').count()===1&&await page.locator('#analysis-data-panel').isHidden(),'Data range must live in the filter dropdown, not a separate visible form');
   console.log('Data filter alignment: '+JSON.stringify(dataAlignment));
   require(await page.locator('search.analysis-toolbar #analysis-reset').count()===1,'Reset must stay beside the filters it clears');
@@ -65,13 +66,15 @@
   await page.locator('#chart-color-by').selectOption('model');
   require(await color('baseline-fixture')===await color('peer'),'Same model on different channels must share model color');
   const modelColor=await color('baseline-fixture');
-  await page.locator('#analysis-source').selectOption('baseline');require(await color('baseline-fixture')===modelColor,'Model color changed after filtering');
-  await page.locator('#analysis-source').selectOption('all');
+  await openFacet('source');await facetChoice('source','baseline').check();
+  require((await facet('source').locator('summary').innerText()).includes('基线')&&await facet('source').locator('summary').getAttribute('data-filtered')==='true','Source facet summary did not update active state');
+  require(await color('baseline-fixture')===modelColor,'Model color changed after filtering');
+  await facet('source').locator('.af-unrestricted').click();
   await page.locator('#chart-color-by').selectOption('series');
   require(await color('baseline-fixture')===firstColor&&await color('peer')===secondColor,'Switching color modes lost original colors');
   require(await point('baseline-fixture').locator('rect.record-marker').count()===1&&await point('peer').locator('circle.record-marker').count()===1,'Runs must be circles and baselines squares');
-  await page.locator('#analysis-source').selectOption('baseline');require(await point('peer').count()===0,'Source filter broken');require(await color('baseline-fixture')===firstColor,'Color changed after source filtering');
-  await page.locator('#analysis-source').selectOption('all');require(await point('peer').count()===1,'Thinking/source selections coupled');
+  await openFacet('source');await facetChoice('source','baseline').check();require(await point('peer').count()===0,'Source filter broken');require(await color('baseline-fixture')===firstColor,'Color changed after source filtering');
+  await facet('source').locator('.af-unrestricted').click();await facet('source').locator('summary').click();require(await point('peer').count()===1,'Thinking/source selections coupled');
   require(await page.locator('#observation-select').count()===0,'Results dropdown must not return');
   await point('baseline-fixture').evaluate(node=>node.dispatchEvent(new MouseEvent('click',{bubbles:true})));
   require(await page.locator('#model-inspector').isVisible()&&await point('baseline-fixture').getAttribute('aria-pressed')==='true','Inspector missing');

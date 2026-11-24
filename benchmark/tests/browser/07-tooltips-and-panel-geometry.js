@@ -1,4 +1,4 @@
-  await page.locator('[data-view-link="analysis"]').click();await page.locator('#analysis-source').selectOption('all');await point('remote-history-unmarked').waitFor();
+  await page.locator('[data-view-link="analysis"]').click();await page.locator('#analysis-reset').click();await point('remote-history-unmarked').waitFor();
   const tooltipChecks=[];
   for(const [name,width,height,dark] of [['light',1200,900,false],['dark',1200,900,true],['mobile',390,740,false],['minimum',320,620,false]]){
     await page.setViewportSize({width,height});await page.evaluate(dark=>document.documentElement.dataset.theme=dark?'dark':'light',dark);

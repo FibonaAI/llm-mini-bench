@@ -453,7 +453,6 @@ async function loadRawEvidence(record) {
 element('chart-axis').addEventListener('change', rebuildAnalysisRecords);
 element('usage-lower-bound').addEventListener('change', rebuildAnalysisRecords);
 for (const id of ['chart-color-by', 'log-axis', 'point-labels', 'pareto-line']) element(id).addEventListener('change', renderObservations);
-element('analysis-source').addEventListener('change', () => filters.setSource(element('analysis-source').value));
 for (const kind of ['results', 'excluded']) {
   const trigger = element(kind === 'results' ? 'analysis-result-count' : 'analysis-excluded-count');
   trigger.addEventListener('click', () => {
@@ -513,7 +512,6 @@ element('analysis-reset').addEventListener('click', () => {
   element('analysis-data-latest').checked = true;
   element('analysis-date-from').value = '';
   element('analysis-date-to').value = '';
-  element('analysis-source').value = 'all';
   filters.reset();
   rebuildHistoryFilterScope();
   chart.resetZoom();
