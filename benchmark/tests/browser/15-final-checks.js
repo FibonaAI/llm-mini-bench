@@ -38,12 +38,11 @@
   require(!maskedInspector.includes('"account_ref": "a"')&&maskedInspector.includes('same-model')&&await rawDetails.locator('pre .pii').count()>=1,'Inspector or raw JSON leaked 1-char account_ref while masked');
   await page.locator('#close-inspector').click();
   await page.locator('[data-view-link="runs"]').click();
-  await page.locator('#task-picker .dp-trigger').click();
-  const maskPopup=page.locator('.dp-popup:not([hidden])');
+  const maskPopup=page.locator('#task-picker .dp-popup.dp-inline:not([hidden])');
+  await maskPopup.waitFor({state:'visible'});
   await maskPopup.locator('.dp-rail-item[data-provider-id="provider:chatgpt-main"]').click();
   const maskedPills=await maskPopup.locator('.dp-acc-pills').innerText();
   require(maskedPills.includes('自动分配')&&!maskedPills.includes('alice.researcher')&&!maskedPills.includes('测试账号'),'Task picker pills leaked accounts or hid auto-allocation: '+maskedPills);
-  await maskPopup.getByRole('button',{name:'完成',exact:true}).click();
   await page.locator('[data-view-link="analysis"]').click();
   await maskBtn.click();
   require(await maskBtn.getAttribute('aria-pressed')==='false'&&(await maskBtn.innerText()).includes('账号打码'),'Mask toggle did not return to unpressed state');

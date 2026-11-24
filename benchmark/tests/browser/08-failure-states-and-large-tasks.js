@@ -6,14 +6,11 @@
     if(view==='analysis') { await Promise.all([page.waitForResponse('**/api/bench/observations'),page.locator('[data-view-link="analysis"]').click()]);await page.evaluate(()=>new Promise(requestAnimationFrame)); }
     else await page.locator('[data-view-link="runs"]').click();
     await page.setViewportSize({width,height});await page.evaluate(dark=>document.documentElement.dataset.theme=dark?'dark':'light',dark);
-    const triggerSelector=view==='runs'?'#task-picker .dp-trigger':'#analysis-picker .dp-trigger';
-    await page.locator(triggerSelector).scrollIntoViewIfNeeded();await page.locator(triggerSelector).click();
+    await popup.scrollIntoViewIfNeeded();
     await chooseProvider('');
     if(name.startsWith('long-labels'))await chooseProvider('provider:self-hosted-provider-with-a-long-instance-name');
-    const geometry=await popup.evaluate((node,triggerSelector)=>{const box=node.getBoundingClientRect(),anchor=document.querySelector(triggerSelector).getBoundingClientRect();return {x:box.x,y:box.y,width:box.width,height:box.height,anchorTop:anchor.top,anchorBottom:anchor.bottom,placement:node.dataset.placement,viewportWidth:innerWidth,viewportHeight:innerHeight};},triggerSelector);
-    require(geometry.width<=860&&geometry.height<=640,'Picker exceeds compact bounds');require(geometry.x>=15&&geometry.y>=15&&geometry.x+geometry.width<=width-15&&geometry.y+geometry.height<=height-15,'Picker leaves viewport');
-    if(geometry.placement==='below')require(Math.abs(geometry.y-geometry.anchorBottom-8)<1,'Picker detached from trigger');
-    if(geometry.placement==='above')require(Math.abs(geometry.anchorTop-geometry.y-geometry.height-8)<1,'Picker above gap incorrect');
+    const geometry=await popup.evaluate(node=>{const box=node.getBoundingClientRect();return {x:box.x,y:box.y,width:box.width,height:box.height,viewportWidth:innerWidth,viewportHeight:innerHeight};});
+    require(geometry.height<=560,'Inline picker exceeds bounded height');require(geometry.x>=0&&geometry.x+geometry.width<=width+1,'Inline picker overflows viewport width');
     const before=await page.evaluate(()=>JSON.stringify(window.MiniBench.runState.selectedKeys));
     const hoverRow=popup.locator('.dp-result-row').first();
     await hoverRow.hover();
@@ -43,7 +40,7 @@
     }
     require(await popup.locator('input[type="search"]').count()===1,'Multiple search fields');
     pickerGeometry.push({name,...geometry,rowGeometry,hover:hover.actual});
-    await page.screenshot({path:ARTIFACTS+'/picker-polish-'+name+'.png',fullPage:false});await page.keyboard.press('Escape');
+    await page.screenshot({path:ARTIFACTS+'/picker-polish-'+name+'.png',fullPage:false});
   }
   // Verify multi-account (>8 keys) default-collapsed tier, expand/search/batch, and orthogonal selection in browser.
   await page.setViewportSize({width:1200,height:900});await page.evaluate(()=>document.documentElement.dataset.theme='light');
@@ -53,7 +50,6 @@
   );
   await page.locator('[data-view-link="runs"]').click();await page.evaluate(()=>window.dispatchEvent(new Event('mini-bench:refresh')));
   await page.waitForFunction(()=>window.MiniBench.runState.routes.some(route=>route.id==='acct-key-11'));
-  await page.locator('#task-picker .dp-trigger').click();
   require(await popup.locator('.dp-acc-toggle').getAttribute('aria-expanded')==='false','Channels with >8 accounts must start collapsed by default');
   require(await popup.locator('.dp-acc-grid').count()===0,'Collapsed multi-account grid must be hidden');
   await page.screenshot({path:ARTIFACTS+'/picker-multi-account-collapsed.png',fullPage:false});
@@ -70,13 +66,11 @@
   await popup.locator('.dp-acc-toggle').click();
   require(await popup.locator('.dp-acc-collapsed-chips .dp-acc-chip').count()===3,'Collapsed view must retain selected account summary chips');
   await popup.locator('.dp-action').click();
-  await popup.getByRole('button',{name:'完成',exact:true}).click();
 
   await page.setViewportSize({width:1200,height:900});await page.evaluate(()=>document.documentElement.dataset.theme='light');
   routes.splice(0,routes.length,...Array.from({length:23},(_,i)=>({id:'bulk-route-'+i,provider_id:'bulk-provider-'+i,model:'bulk-model-'+i,account_ref:'gateway-default',account_evidence:'gateway_binding',thinking_levels:i===22?[]:['high']})));
   await page.locator('[data-view-link="runs"]').click();await page.evaluate(()=>window.dispatchEvent(new Event('mini-bench:refresh')));
   await page.waitForFunction(()=>window.MiniBench.runState.routes.some(route=>route.id==='bulk-route-22'));
-  await page.locator('#task-picker .dp-trigger').click();
   await popup.locator('.dp-model-row .dp-check').first().click();
   await popup.locator('.dp-rail-item[data-provider-id="provider:bulk-provider-5"]').click();
   await popup.locator('.dp-model-row .dp-check').first().click();
@@ -87,7 +81,7 @@
   require(await defaultOption.count()===1&&await defaultOption.getAttribute('data-think')==='default'&&(await defaultOption.innerText())==='默认','Model without Thinking levels must offer exactly the default option');
   require(await popup.locator('.dp-think[data-think="default"]').count()===1,'Models with Thinking levels must not offer default');
   require(await defaultOption.getAttribute('aria-pressed')==='false','Default target must not be preselected');
-  await popup.locator('.dp-select-visible').click();await popup.getByRole('button',{name:'完成',exact:true}).click();
+  await popup.locator('.dp-select-visible').click();
   const selectedTargets=await page.evaluate(()=>window.MiniBench.runState.getSelectedTargets());
   require(selectedTargets.length===23&&selectedTargets.every(target=>target.thinking===(target.route_id==='bulk-route-22'?'default':'high')),'Bulk selection must submit default only for the model without levels');
   await page.locator('#run-rounds').fill('3');require((await page.locator('#run-request-estimate').innerText()).includes('828'),'Large task sample count incorrect');
