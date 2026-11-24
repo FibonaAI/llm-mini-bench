@@ -318,7 +318,7 @@ function renderInsights(records) {
   const defaultGroupLimit = 4;
   const defaultItemsPerGroup = 3;
   const visibleGroups = state.insightsExpanded || groups.length <= defaultGroupLimit ? groups : groups.slice(0, defaultGroupLimit);
-  const metricShortLabel = metric => (metric === 'score' ? '能力' : metric === 'cost' ? '成本' : '耗时');
+  const metricLabel = metric => (metric === 'score' ? '能力偏低' : metric === 'cost' ? '成本偏高' : '耗时偏慢');
 
   listEl.innerHTML = visibleGroups
     .map(group => {
@@ -338,7 +338,7 @@ function renderInsights(records) {
           const active = state.activeInsightId
             ? state.activeInsightId === item.id
             : Boolean(state.selectedId && item.primaryRecordId === state.selectedId);
-          return `<button class="insight-row${active ? ' is-active' : ''}" type="button" data-insight-record="${escapeHtml(item.primaryRecordId)}" data-insight-item="${escapeHtml(item.id)}" aria-pressed="${active ? 'true' : 'false'}"><span class="insight-badge is-${escapeHtml(item.metric)}">${metricShortLabel(item.metric)}</span><span class="insight-model"><span class="insight-model-name">${escapeHtml(item.modelName)}</span><span class="insight-model-think"> · ${escapeHtml(item.thinkLabel)}</span></span><span class="insight-compare"><strong class="insight-val">${escapeHtml(item.valueText)}</strong><span class="insight-vs"> vs </span><span class="insight-ref-val">${escapeHtml(item.refText)}</span><span class="insight-ref-ctx" title="对照 ${escapeHtml(item.refContext)}">对照 ${escapeHtml(item.refContext)}</span></span><span class="insight-delta is-${escapeHtml(item.metric)}">${escapeHtml(item.deltaText)}</span><span class="insight-locate">${active ? '已定位 ×' : '定位 →'}</span></button>`;
+          return `<button class="insight-row${active ? ' is-active' : ''}" type="button" data-insight-record="${escapeHtml(item.primaryRecordId)}" data-insight-item="${escapeHtml(item.id)}" aria-pressed="${active ? 'true' : 'false'}"><span class="insight-badge is-${escapeHtml(item.metric)}">${metricLabel(item.metric)}</span><span class="insight-model"><span class="insight-model-name">${escapeHtml(item.modelName)}</span><span class="insight-model-think"> · ${escapeHtml(item.thinkLabel)}</span></span><span class="insight-compare"><strong class="insight-val">${escapeHtml(item.valueText)}</strong><span class="insight-vs"> vs </span><span class="insight-ref-val">${escapeHtml(item.refText)}</span><span class="insight-delta is-${escapeHtml(item.metric)}">${escapeHtml(item.deltaText)}</span></span><span class="insight-ref-ctx" title="对照 ${escapeHtml(item.refContext)}">对照 ${escapeHtml(item.refContext)}</span><span class="insight-locate">${active ? '已定位 ×' : '定位 →'}</span></button>`;
         })
         .join('');
       const expandHtml =
