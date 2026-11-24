@@ -6,10 +6,11 @@ import { selectAnalysisHistoryRecords } from './analysis-history.js';
 import { createAnalysisPopover } from './analysis-popover.js';
 import { renderAnalysisRecordList } from './analysis-record-list.js';
 import { createScoreCostChart } from './score-cost-chart.js';
-import { buildObservationAnomalies, observationQualitySummary } from './assessment-chart-metric.js';
+import { buildObservationAnomalies } from './assessment-chart-metric.js';
+import { dedupePromotedRuns } from './baseline-comparison.js';
 
 const app = getAppContext();
-const { byId: element, escapeHtml, finite, request, notify, available, statusText, formatDate } = app.services;
+const { byId: element, escapeHtml, finite, request, notify, available, formatDate } = app.services;
 const state = {
   observations: [],
   observationsEtag: null,
@@ -21,23 +22,19 @@ const state = {
   disclosureLimit: 80,
   selectedId: null,
   loading: false,
-  evidence: new Map(),
-  evidenceLoading: new Set(),
   promoting: new Set()
 };
 const filters = createAnalysisFilters(element('analysis-picker'), { onChange: renderObservations });
 const model = createAnalysisModel();
 model.setBank(app.bank);
-let inspectorInputs = null;
-let inspectorLazySequence = 0;
-const inspectorLazyJson = new Map();
 let pendingAnalysisRender = false;
 const chart = createScoreCostChart(element('score-cost-chart'), {
   onSelect: selectObservation,
   onOpenRun: runId => {
     location.hash = 'runs';
     app.emit('mini-bench:select-run', runId);
-  }
+  },
+  onPromoteBaseline: promoteObservation
 });
 const dataPopover = createAnalysisPopover(element('analysis-data-trigger'), element('analysis-data-panel'));
 const settingsPopover = createAnalysisPopover(element('chart-settings-trigger'), element('chart-settings-panel'), { width: 280 });
@@ -56,63 +53,7 @@ const resultPopovers = Object.fromEntries(
     })
   ])
 );
-const scoreText = score => (finite(score) ? String(Number(score.toFixed(3))) : '未评分');
-const numberText = value => (finite(value) ? value.toLocaleString('zh-CN') : '未记录');
-const formatDuration = seconds => {
-  if (!finite(seconds) || seconds < 0) return '未记录';
-  if (seconds < 60) return `${Number(seconds.toFixed(seconds < 10 ? 1 : 0))}s`;
-  const total = Math.round(seconds);
-  const mins = Math.floor(total / 60),
-    secs = total % 60;
-  if (mins < 60) return secs ? `${mins}m ${secs}s` : `${mins}m`;
-  const hrs = Math.floor(mins / 60),
-    remMins = mins % 60;
-  return remMins ? `${hrs}h ${remMins}m` : `${hrs}h`;
-};
 const sourceText = record => (record.source === 'baseline' ? '基线' : '我的运行');
-const recordLabel = record => `${record.model || record.label || record.target_id} · ${record.thinking || 'unknown'}`;
-const sampleChip = sample => {
-  if (sample.status === 'timeout') {
-    return `<span class="sample-chip is-partial" title="第 ${escapeHtml(sample.round ?? '?')} 轮 · 超时（按 0 分计）">超时</span>`;
-  }
-  const scored = sample.status === 'completed' && finite(sample.content_score);
-  const tone = !scored
-    ? sample.status === 'completed'
-      ? 'unscored'
-      : 'failed'
-    : sample.content_score >= 1
-      ? 'full'
-      : sample.content_score > 0
-        ? 'partial'
-        : 'zero';
-  const endedAfter =
-    typeof sample.ended_after_submission === 'string' && sample.ended_after_submission.trim() ? sample.ended_after_submission : null;
-  const label = scored
-    ? sample.outcome === 'no_submission'
-      ? '未交'
-      : String(Number(sample.content_score.toFixed(2)))
-    : sample.status === 'completed'
-      ? sample.outcome === 'ambiguous'
-        ? '歧义'
-        : '无分'
-      : '失败';
-  const title = `第 ${sample.round ?? '?'} 轮 · ${statusText(sample.status)}${sample.outcome ? ' · ' + sample.outcome : ''}${endedAfter ? ` · 提交后异常中止（${endedAfter}）` : ''}`;
-  return `<span class="sample-chip is-${tone}${endedAfter ? ' is-anomaly' : ''}"${endedAfter ? ' data-ended-after-submission="true"' : ''} title="${escapeHtml(title)}">${escapeHtml(label)}</span>`;
-};
-const rawBlock = (title, data, eager = false) => {
-  if (eager)
-    return `<details class="raw-block"><summary>${escapeHtml(title)}</summary><pre>${escapeHtml(JSON.stringify(data, null, 2))}</pre></details>`;
-  const key = String(++inspectorLazySequence);
-  inspectorLazyJson.set(key, data);
-  return `<details class="raw-block" data-lazy-json="${key}"><summary>${escapeHtml(title)}</summary></details>`;
-};
-function hydrateInspectorJson(node) {
-  const key = node?.dataset?.lazyJson;
-  if (!key || !node.open || !inspectorLazyJson.has(key) || node.querySelector?.('pre')) return;
-  const pre = document.createElement('pre');
-  pre.textContent = JSON.stringify(inspectorLazyJson.get(key), null, 2);
-  node.append(pre);
-}
 
 function chartExclusionReason(record) {
   const axis = element('chart-axis').value;
@@ -158,7 +99,7 @@ function historyOptions(mode = state.dataMode) {
 }
 
 function matchingRecords() {
-  return selectAnalysisHistoryRecords(state.records, historyOptions()).filter(filters.matches);
+  return dedupePromotedRuns(selectAnalysisHistoryRecords(state.records, historyOptions()).filter(filters.matches));
 }
 
 let historyPickerInputs = null;
@@ -244,101 +185,6 @@ function renderResultDisclosure(records) {
   }
 }
 
-function renderObservationDetails() {
-  const mapped = matchingRecords().find(record => record.id === state.selectedId);
-  const record = mapped?.original;
-  element('model-inspector').hidden = !record;
-  if (!record) {
-    inspectorInputs = null;
-    return;
-  }
-  const inputs = [
-    record,
-    mapped.score,
-    mapped.cost,
-    chartExclusionReason(mapped),
-    mapped.anomalies?.summary ?? '',
-    element('chart-axis').value,
-    state.evidence.get(record.id),
-    state.evidenceLoading.has(record.id),
-    state.promoting.has(record.id)
-  ];
-  if (inspectorInputs && inputs.every((value, index) => value === inspectorInputs[index])) return;
-  inspectorInputs = inputs;
-  inspectorLazyJson.clear();
-  inspectorLazySequence = 0;
-  element('inspector-title').textContent = recordLabel(record);
-  element('inspector-identity').textContent = `${sourceText(record)} · ${record.id} · ${formatDate(record.created_at)}`;
-  const samples = (record.tasks || []).flatMap(task => task.samples || []);
-  const completed = samples.filter(sample => sample.status === 'completed' || sample.status === 'timeout').length;
-  const timedOut = samples.filter(sample => sample.status === 'timeout').length;
-  const quality = observationQualitySummary(record, { includeUsage: false });
-  const axis = element('chart-axis').value;
-  const tokens = axis === 'tokens';
-  const durationAxis = axis === 'duration';
-  const accounting = record.usage_accounting;
-  const elapsedTotal =
-    finite(record.elapsed_seconds) && record.elapsed_seconds >= 0
-      ? record.elapsed_seconds
-      : samples.length && samples.every(sample => finite(sample.elapsed_seconds) && sample.elapsed_seconds >= 0)
-        ? samples.reduce((sum, sample) => sum + sample.elapsed_seconds, 0)
-        : null;
-  const durationPerRound =
-    elapsedTotal !== null && Number.isInteger(record.rounds) && record.rounds > 0 ? elapsedTotal / record.rounds : null;
-  const durationText =
-    durationPerRound !== null
-      ? `${formatDuration(durationPerRound)}${record.rounds > 1 ? `<small>累计 ${escapeHtml(formatDuration(elapsedTotal))}</small>` : ''}`
-      : '未记录';
-  const usageText = finite(record.estimated_cost_usd)
-    ? '$' + record.estimated_cost_usd.toFixed(4)
-    : finite(accounting?.estimated_cost_usd_lower_bound)
-      ? `≥ $${accounting.estimated_cost_usd_lower_bound.toFixed(4)}（${accounting.unknown_cost_attempts} 次尝试未返回用量）`
-      : '未记录';
-  const tokenText = record.usage
-    ? `${numberText(record.usage.input_tokens)} / ${numberText(record.usage.output_tokens)}`
-    : accounting?.usage_lower_bound
-      ? `≥ ${numberText(accounting.usage_lower_bound.input_tokens)} / ≥ ${numberText(accounting.usage_lower_bound.output_tokens)}`
-      : '未记录';
-  const fact = (label, value) => `<div><dt>${escapeHtml(label)}</dt><dd>${value}</dd></div>`;
-  const headlineMetric = finite(mapped.cost)
-    ? durationAxis
-      ? `每轮耗时 ${formatDuration(mapped.cost)}`
-      : tokens
-        ? `每轮 ${mapped.usageIncomplete ? '≥ ' : ''}${numberText(Math.round(mapped.cost))} tokens`
-        : `每轮费用 ${mapped.usageIncomplete ? '≥ ' : ''}$${mapped.cost.toFixed(4)}`
-    : durationAxis
-      ? '耗时未记录'
-      : '用量不完整';
-  const headline = finite(mapped.score)
-    ? `<strong class="inspector-score">${mapped.score.toFixed(1)}</strong><span>/ 100 · ${headlineMetric}${!durationAxis && durationPerRound !== null ? ` · 耗时 ${formatDuration(durationPerRound)}` : ''}</span>`
-    : '<strong class="inspector-score">—</strong><span>无完整均分</span>';
-  element('inspector-content').innerHTML = `
-    <div class="inspector-headline">${headline}</div>
-    ${chartExclusionReason(mapped) ? `<p class="inspector-warning">未入图：${escapeHtml(chartExclusionReason(mapped))}</p>` : mapped.anomalies?.hasAny ? `<p class="inspector-warning">含异常项（不参与前沿）：${escapeHtml(mapped.anomalies.items.join('；'))}</p>` : ''}
-    ${quality.text && !chartExclusionReason(mapped) && !mapped.anomalies?.hasAny ? `<p class="field-hint">${escapeHtml(quality.text)}</p>` : ''}
-    <dl class="inspector-facts">${[
-      fact(
-        '状态',
-        `${escapeHtml(statusText(record.status))} · ${escapeHtml(record.rounds ?? '?')} 轮 · ${completed}/${escapeHtml((record.tasks || []).length * (record.rounds || 0))} 样本完成${timedOut ? `（含 ${timedOut} 超时）` : ''}`
-      ),
-      fact('渠道 / 账号', `${escapeHtml(mapped.providerName || mapped.provider)} / ${escapeHtml(mapped.account)}`),
-      fact('每轮耗时', durationText),
-      fact('累计估算费用', `${escapeHtml(usageText)}<small>估算，非账单</small>`),
-      fact('输入 / 输出 tokens', escapeHtml(tokenText)),
-      fact(
-        '路由',
-        `${escapeHtml(record.route_id || '未记录')}<small>${escapeHtml(record.provider_id || '渠道未记录')} · ${escapeHtml(record.account_ref || '账号引用未记录')} · ${escapeHtml(record.account_evidence || '无绑定证据')}</small>`
-      ),
-      fact('基线资格', record.baseline_eligible ? '合格' : `不合格<small>${escapeHtml(record.ineligibility_reason || '')}</small>`)
-    ].join('')}</dl>
-    <div class="inspector-actions"><button class="btn" type="button" data-copy-observation="${escapeHtml(record.id)}">带入任务配置</button>${record.source === 'run' ? `<button class="btn" type="button" data-open-run="${escapeHtml(record.run_id)}">查看任务</button><button class="btn" type="button" data-promote-id="${escapeHtml(record.id)}" ${record.baseline_eligible && !state.promoting.has(record.id) ? '' : 'disabled'} title="${escapeHtml(record.ineligibility_reason || '保存该目标为基线')}">${state.promoting.has(record.id) ? '保存中…' : '设为基线'}</button>` : '<span class="field-hint">已保存基线</span>'}</div>
-    <p class="field-hint">以下内容分保持每题原始 0–1 刻度；指令检查、工具检查与执行状态独立展示，缺失或失败不计为零。</p>
-    ${(record.tasks || []).map(task => `<details class="run-item"><summary><span>${escapeHtml(task.task_id)} · ${escapeHtml(task.title)}</span><span class="sample-chips">${(task.samples || []).map(sampleChip).join('')}</span></summary><div class="run-item-body"><p class="field-hint">${escapeHtml(task.domain || '未标注领域')}</p>${(task.samples || []).length ? (task.samples || []).map(sample => `<section class="sample-detail"><h4>第 ${escapeHtml(sample.round ?? '未知')} 轮 · ${escapeHtml(statusText(sample.status))}</h4><p>内容分：${scoreText(sample.content_score)}${sample.outcome === 'no_submission' ? '（未调用 submit_answer 提交）' : ''}</p>${sample.ended_after_submission ? `<p class="field-hint">异常标注：提交答案后异常中止（${escapeHtml(sample.ended_after_submission)}），按最后一次提交评分。</p>` : ''}${rawBlock('指令检查（独立报告）', sample.instruction_checks ?? null)}${rawBlock('工具检查 / Outcome（独立报告）', { tool_checks: sample.tool_checks ?? null, outcome: sample.outcome ?? null })}${rawBlock('该轮观察记录', sample)}</section>`).join('') : '<p class="field-hint">尚无样本；未评分。</p>'}</div></details>`).join('')}
-    ${rawBlock('题库与执行协议校验信息', { bank_version: record.bank_version, task_sha256: record.task_sha256, source_sha256: record.source_sha256, assessment_protocol_sha256: record.assessment_protocol_sha256, implementation: record.implementation })}
-    ${rawBlock('完整观察记录', record)}
-    <div class="raw-evidence"><button class="btn" type="button" data-load-evidence="${escapeHtml(record.id)}" ${state.evidenceLoading.has(record.id) ? 'disabled' : ''}>${state.evidenceLoading.has(record.id) ? '读取证据中…' : '读取原始样本与调用证据'}</button><p class="field-hint">只读取已有记录，不发送模型请求。展示存储中保留的原始回答、失败尝试与工具轨迹；未保存的字段不补造。</p>${state.evidence.has(record.id) ? rawBlock('原始目标证据（含所有已保存样本）', state.evidence.get(record.id), true) : ''}</div>`;
-}
-
 function renderObservations() {
   if (element('analysis-view')?.hidden) {
     pendingAnalysisRender = true;
@@ -388,21 +234,42 @@ function renderObservations() {
     colorBy: element('chart-color-by').value,
     axis: element('chart-axis').value,
     selectedIds: state.selectedId ? [state.selectedId] : [],
+    promotingIds: state.promoting,
     maskAccounts: Boolean(app.maskAccounts)
   });
-  renderObservationDetails();
   dataPopover.position();
 }
 
 function selectObservation(id) {
   state.selectedId = id || null;
   renderObservations();
-  if (state.selectedId) element('close-inspector').focus({ preventScroll: true });
 }
 function copyToTasks(records) {
   const keys = [...new Set(records.map(selectionKey))];
   app.emit('mini-bench:select-targets', { keys });
   location.hash = 'runs';
+}
+
+async function promoteObservation(id) {
+  const record = state.observations.find(entry => entry.id === id);
+  if (!record?.baseline_eligible || record.source !== 'run' || state.promoting.has(record.id)) return;
+  state.promoting.add(record.id);
+  renderObservations();
+  try {
+    const result = await request(`./api/bench/runs/${encodeURIComponent(record.run_id)}/baseline`, {
+      method: 'POST',
+      body: JSON.stringify({ target_id: record.target_id })
+    });
+    const promotedId = typeof result?.baseline?.id === 'string' ? result.baseline.id : null;
+    if (promotedId && state.selectedId === record.id) state.selectedId = promotedId;
+    await loadObservations();
+    notify('已将该运行目标保存为 Mini Bench 基线。');
+  } catch (error) {
+    notify(`保存基线失败：${error.message}`, true);
+  } finally {
+    state.promoting.delete(record.id);
+    renderObservations();
+  }
 }
 
 async function loadObservations() {
@@ -416,7 +283,6 @@ async function loadObservations() {
       if (!Array.isArray(data.observations)) throw new Error('Mini Bench 观察列表格式无效');
       state.observations = data.observations;
       state.observationsEtag = typeof data.etag === 'string' ? data.etag : null;
-      state.evidence.clear();
       rebuildAnalysisRecords();
     }
     element('connection-status').textContent = '本地数据已同步';
@@ -425,28 +291,6 @@ async function loadObservations() {
     notify(`无法加载 Mini Bench 分析：${error.message}`, true);
   } finally {
     state.loading = false;
-  }
-}
-
-async function loadRawEvidence(record) {
-  if (state.evidenceLoading.has(record.id)) return;
-  state.evidenceLoading.add(record.id);
-  renderObservationDetails();
-  try {
-    if (record.source === 'baseline') {
-      const data = await request('./api/bench/baselines');
-      const baseline = data.baselines?.find(entry => entry.id === record.id);
-      if (!baseline) throw new Error('未找到该基线的原始快照');
-      state.evidence.set(record.id, baseline);
-    } else {
-      const run = await request(`./api/bench/runs/${encodeURIComponent(record.run_id)}`);
-      state.evidence.set(record.id, { ...run, samples: (run.samples || []).filter(sample => sample.target_id === record.target_id) });
-    }
-  } catch (error) {
-    notify(`读取原始证据失败：${error.message}`, true);
-  } finally {
-    state.evidenceLoading.delete(record.id);
-    renderObservationDetails();
   }
 }
 
@@ -547,53 +391,29 @@ element('analysis-view').addEventListener('click', async event => {
   }
   const inspect = event.target.closest('[data-inspect-observation]');
   if (inspect) {
+    const id = inspect.dataset.inspectObservation;
     state.disclosure = null;
-    selectObservation(inspect.dataset.inspectObservation);
-    element('model-inspector').scrollIntoView({ block: 'start' });
+    const record = matchingRecords().find(entry => entry.id === id);
+    if (record && !chartExclusionReason(record)) {
+      selectObservation(id);
+      element('chart-card')?.scrollIntoView?.({ block: 'nearest' });
+    } else if (record?.run_id) {
+      renderResultDisclosure(matchingRecords());
+      location.hash = 'runs';
+      app.emit('mini-bench:select-run', record.run_id);
+    } else {
+      renderResultDisclosure(matchingRecords());
+    }
+    return;
   }
   const run = event.target.closest('[data-open-run]');
   if (run) {
     location.hash = 'runs';
     app.emit('mini-bench:select-run', run.dataset.openRun);
-  }
-  const copy = event.target.closest('[data-copy-observation]');
-  if (copy) copyToTasks(state.records.filter(record => record.id === copy.dataset.copyObservation));
-  const evidence = event.target.closest('[data-load-evidence]');
-  if (evidence) {
-    const record = state.observations.find(record => record.id === evidence.dataset.loadEvidence);
-    if (record) await loadRawEvidence(record);
+    return;
   }
   const promote = event.target.closest('[data-promote-id]');
-  if (!promote) return;
-  const record = state.observations.find(record => record.id === promote.dataset.promoteId);
-  if (!record?.baseline_eligible || record.source !== 'run' || state.promoting.has(record.id)) return;
-  state.promoting.add(record.id);
-  renderObservationDetails();
-  try {
-    await request(`./api/bench/runs/${encodeURIComponent(record.run_id)}/baseline`, {
-      method: 'POST',
-      body: JSON.stringify({ target_id: record.target_id })
-    });
-    await loadObservations();
-    notify('已将该运行目标保存为 Mini Bench 基线。');
-  } catch (error) {
-    notify(`保存基线失败：${error.message}`, true);
-  } finally {
-    state.promoting.delete(record.id);
-    renderObservationDetails();
-  }
-});
-element('inspector-content').addEventListener(
-  'toggle',
-  event => {
-    if (event.target?.dataset?.lazyJson && event.target.open) hydrateInspectorJson(event.target);
-  },
-  true
-);
-element('close-inspector').addEventListener('click', () => {
-  state.selectedId = null;
-  renderObservations();
-  filters.focus();
+  if (promote) await promoteObservation(promote.dataset.promoteId);
 });
 document.addEventListener('keydown', event => {
   if (!event.defaultPrevented && event.key === 'Escape' && state.selectedId) {

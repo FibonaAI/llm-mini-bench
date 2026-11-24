@@ -178,12 +178,19 @@
 }
 .score-cost-tooltip-actions {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
   justify-content: space-between;
-  gap: 8px;
+  gap: 6px 8px;
   margin-top: 7px;
   padding-top: 7px;
   border-top: 1px solid var(--line-2);
+}
+.score-cost-tooltip-action-buttons {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
 }
 .score-cost-tooltip-link {
   display: inline-flex;
@@ -202,6 +209,34 @@
 .score-cost-tooltip-link:hover {
   border-color: var(--accent);
   color: var(--accent);
+}
+.score-cost-tooltip-link:disabled {
+  opacity: 0.6;
+  cursor: default;
+  pointer-events: none;
+}
+.score-cost-tooltip-status {
+  display: inline-flex;
+  align-items: center;
+  padding: 2px 8px;
+  border-radius: 6px;
+  font-size: 11px;
+  font-weight: 500;
+  line-height: 1.5;
+  background: var(--pill);
+  color: var(--muted);
+}
+.score-cost-tooltip-status.is-promoted {
+  background: var(--green-soft, rgba(16, 185, 129, 0.14));
+  color: var(--green, #10b981);
+}
+.score-cost-tooltip-ineligible {
+  margin-top: 8px;
+  padding-top: 7px;
+  border-top: 1px solid var(--line-2);
+  color: var(--muted);
+  font-size: 11px;
+  line-height: 1.5;
 }
 .score-cost-tooltip-hint {
   color: var(--muted);
@@ -242,6 +277,56 @@
   color: var(--readable-muted);
   font-size: 11px;
   line-height: 1.6;
+}
+.score-cost-tooltip-baseline {
+  margin-top: 10px;
+  padding-top: 10px;
+  border-top: 1px solid var(--line-2);
+  display: grid;
+  gap: 6px;
+}
+.score-cost-tooltip-baseline-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+  font-size: 11px;
+  color: var(--fg-2);
+}
+.score-cost-tooltip-baseline-head strong {
+  color: var(--fg);
+  font-weight: 600;
+}
+.score-cost-tooltip-baseline-ref {
+  color: var(--muted);
+  font-size: 10.5px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.score-cost-tooltip-baseline-deltas {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 6px;
+}
+.score-cost-tooltip-delta {
+  display: inline-flex;
+  align-items: center;
+  padding: 1px 6px;
+  border-radius: 4px;
+  background: var(--pill);
+  color: var(--fg-2);
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+.score-cost-tooltip-delta.is-better {
+  background: color-mix(in srgb, var(--ok, #15803d) 12%, transparent);
+  color: var(--ok, #15803d);
+}
+.score-cost-tooltip-delta.is-worse {
+  background: color-mix(in srgb, var(--bad, #b91c1c) 12%, transparent);
+  color: var(--bad, #b91c1c);
 }
 .score-cost-tooltip p {
   grid-column: 1/-1;

@@ -3,6 +3,7 @@ import { readFileSync } from 'node:fs';
 import vm from 'node:vm';
 import { placeChartLabels, placeThinkingLabels } from '../web/chart-layout.js';
 import { buildAnalysisHistoryStates } from '../web/analysis-history.js';
+import { compareRecordToBaseline, findMatchingBaselines, findPromotedBaseline } from '../web/baseline-comparison.js';
 import { chartCategory, createChartColorRegistry } from '../web/chart-colors.js';
 import { buildChartLegendGroups } from '../web/chart-legend.js';
 import { formatChartRecordTime, summarizeChartRecordTimes, overlappingChartRecords } from '../web/chart-point-time.js';
@@ -112,6 +113,9 @@ function chartResizeFixture() {
         placeChartLabels,
         placeThinkingLabels,
         buildAnalysisHistoryStates,
+        compareRecordToBaseline,
+        findMatchingBaselines,
+        findPromotedBaseline,
         createChartColorRegistry,
         buildChartLegendGroups,
         createChartLegend: () => ({
@@ -333,11 +337,13 @@ test('zoomed frontier shares the rendered point set and ignores offscreen domina
             f.chart.render(rows, { labels: false, selectedIds: ['selected'], axis, log });
             f.chart.zoom(16);
             const points = nodes().filter(node => node.attributes?.class === 'score-cost-point');
-            expect(points.map(node => node.attributes['data-record-id'])).toEqual(['selected', 'visible-best']);
-            const expected = points.map(point => {
-                const marker = point.children.find(node => node.attributes?.class === 'record-marker');
-                return [Number(marker.attributes.cx), Number(marker.attributes.cy)];
-            });
+            expect(points.map(node => node.attributes['data-record-id'])).toEqual(['visible-best', 'selected']);
+            const expected = points
+                .map(point => {
+                    const marker = point.children.find(node => node.attributes?.class === 'record-marker');
+                    return [Number(marker.attributes.cx), Number(marker.attributes.cy)];
+                })
+                .sort((a, b) => a[0] - b[0]);
             const frontierPoints = frontier()
                 .attributes.points.split(' ')
                 .slice(0, -1)
@@ -479,14 +485,14 @@ test('marker states, source shape and time colors stay independent of displayed 
     f.chart.render(rows, { labels: false, colorBy: 'time', historyRecords: rows });
     const points = () => chartFixtureNodes(f, 'score-cost-point');
     const markers = () => chartFixtureNodes(f, 'record-marker');
-    expect(points().map(point => point.attributes['data-history-state'])).toEqual(['historical', 'latest', 'unknown']);
+    expect(points().map(point => point.attributes['data-history-state'])).toEqual(['historical', 'unknown', 'latest']);
     expect(markers()[0].attributes.fill).toBe('#fff');
-    expect(markers()[1].attributes.width).toBe('8.5');
-    expect(markers()[1].attributes.fill).toBe(points()[1].attributes['data-model-color']);
-    expect(markers()[1].attributes.stroke).toBe(points()[1].attributes['data-model-color']);
+    expect(markers()[2].attributes.width).toBe('8.5');
+    expect(markers()[2].attributes.fill).toBe(points()[2].attributes['data-model-color']);
+    expect(markers()[2].attributes.stroke).toBe(points()[2].attributes['data-model-color']);
     expect(chartFixtureNodes(f, 'record-marker-halo').every(node => node.attributes.stroke === '#fff')).toBe(true);
     expect(markers()[0].attributes.stroke).toBe(points()[0].attributes['data-model-color']);
-    expect(markers()[2].attributes['stroke-dasharray']).toBe('2 2');
+    expect(markers()[1].attributes['stroke-dasharray']).toBe('2 2');
     const color = points()[0].attributes['data-model-color'];
     f.chart.render([rows[0]], { axis: 'tokens', log: false });
     expect(points()[0].attributes['data-history-state']).toBe('historical');

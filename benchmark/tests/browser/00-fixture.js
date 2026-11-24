@@ -60,7 +60,7 @@
     if(path==='/api/bench/runs')return json({runs:runs.map(({samples,...run})=>run)});
     const runPath=path.match(/^\/api\/bench\/runs\/([^/]+)(\/cancel)?$/);
     if(runPath){const run=runs.find(run=>run.id===runPath[1]);require(run,'Unknown run '+path);if(!runPath[2]&&runResponseGate?.id===run.id){runResponseGate.started();await runResponseGate.wait;}return json(runPath[2]?cancelChildRun(run.id):run);}
-    if(path==='/api/bench/runs/eligible-run/baseline'){observations.push({...baseline,id:'promoted',target_id:'eligible-target'});return json({baseline:observations.at(-1)});}
+    if(path==='/api/bench/runs/eligible-run/baseline'){const src=observations.find(row=>row.id==='eligible')||baseline;observations.push({...src,id:'promoted',source:'baseline',run_id:'eligible-run',target_id:'eligible-target'});return json({baseline:observations.at(-1)});}
     throw Error('Unexpected API '+path);
   });
   const point=id=>page.locator('.score-cost-point[data-record-id="'+id+'"]');

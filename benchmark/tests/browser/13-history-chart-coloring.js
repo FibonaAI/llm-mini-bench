@@ -11,14 +11,14 @@
   await point('A2-low').hover();require(await noThinkingCurves()&&await page.locator('.thinking-level-label').count()===0,'Singleton batch received a fake progression');
   await point('A1-medium').evaluate(node=>node.dispatchEvent(new MouseEvent('click',{bubbles:true})));
   require(await page.locator('.thinking-series[data-series-selected="true"][opacity="0.95"]').count()===1&&await page.locator('.thinking-level-label').count()===3,'Selection must reveal mixed latest/history from the same batch');
-  await page.locator('#close-inspector').click();
+  await page.locator('.score-cost-tooltip-close').click();
   const stableTimeColor=await color('A1-medium');
   await openFacet('model');await facetChoice('model','atlas').check();await page.locator('#analysis-picker .af-search').focus();
   require(await page.locator('#chart-color-by').inputValue()==='time'&&await color('A1-medium')===stableTimeColor,'Model filtering changed independent time coloring');
   await chooseData('latest');await point('A1-medium').focus();
   require(await noThinkingCurves()&&await page.locator('.thinking-level-label').count()===0,'Latest points from A2/A1/A3 were falsely joined');
-  await point('A1-medium').press('Space');require(await page.locator('#model-inspector').isVisible(),'Space release did not preserve exact record inspection');
-  await page.locator('#close-inspector').click();await chooseData('all');
+  await point('A1-medium').press('Space');require(await page.locator('.score-cost-tooltip.is-pinned[data-tooltip-record-id="A1-medium"]').isVisible(),'Space release did not preserve exact record inspection');
+  await page.locator('.score-cost-tooltip-close').click();await chooseData('all');
   for(const [width,dark] of [[1200,false],[390,false],[320,true]]){
     await page.setViewportSize({width,height:900});await page.evaluate(dark=>document.documentElement.dataset.theme=dark?'dark':'light',dark);
     require(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth),'Historical multicolor chart overflows');

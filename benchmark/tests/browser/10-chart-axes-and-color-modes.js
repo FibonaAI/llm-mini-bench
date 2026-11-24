@@ -4,10 +4,10 @@
     await page.locator('#chart-reset').click();await page.locator('#chart-axis').selectOption(axis);
     await page.locator('#chart-zoom-in').evaluate(node=>{for(let i=0;i<10;i++)node.click();});
     require(await point('zoom-0').count()===0&&await page.locator('.score-cost-point').count()===2,'Zoom fixture must exclude the dominating point');
-    const frontierMatches=await page.evaluate(()=>{const line=document.querySelector('.pareto-frontier');const actual=line.getAttribute('points').split(' ').slice(0,-1).map(pair=>pair.split(',').map(Number));const expected=[...document.querySelectorAll('.record-marker')].map(marker=>[Number(marker.getAttribute('cx')),Number(marker.getAttribute('cy'))]);return JSON.stringify(actual)===JSON.stringify(expected);});
+    const frontierMatches=await page.evaluate(()=>{const line=document.querySelector('.pareto-frontier');const actual=line.getAttribute('points').split(' ').slice(0,-1).map(pair=>pair.split(',').map(Number));const expected=[...document.querySelectorAll('.record-marker')].map(marker=>[Number(marker.getAttribute('cx')),Number(marker.getAttribute('cy'))]).sort((a,b)=>a[0]-b[0]);return JSON.stringify(actual)===JSON.stringify(expected);});
     require(frontierMatches,'Pareto frontier includes an offscreen dominator on '+axis+' axis');
   }
-  await page.locator('#chart-reset').click();await page.locator('#chart-axis').selectOption('cost');await page.locator('#close-inspector').click();
+  await page.locator('#chart-reset').click();await page.locator('#chart-axis').selectOption('cost');await page.locator('.score-cost-tooltip-close').click();
   observations.splice(0,observations.length,...['gpt-6-luna','GPT-6 Luna','gpt-6.1-sol','DeepSeek-V4','DeepSeek-V3.2'].map((model,i)=>({...peer,id:'color-'+i,provider_id:'color-channel-'+i,model,model_display_name:model,estimated_cost_usd:.03+i*.01})));
   await page.setViewportSize({width:1440,height:1000});await page.locator('[data-view-link="analysis"]').click();await page.locator('#analysis-reset').click();await refresh();
   await page.waitForFunction(()=>document.querySelectorAll('.score-cost-point').length===5);
