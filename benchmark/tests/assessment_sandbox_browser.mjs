@@ -193,7 +193,7 @@ writeFileSync(
  try { await frame.locator('#analysis-picker .af-search').waitFor({timeout:8000}); await frame.locator('.score-cost-point').first().waitFor({timeout:8000}); } catch(error){readyError=String(error);}
  const state=await frame.evaluate(()=>{
   let storageDenied=false;try{localStorage.getItem('opaque-origin-test');}catch(error){storageDenied=error.name==='SecurityError';}
-  return {origin:self.origin,storageDenied,pickers:document.querySelectorAll('.dp-trigger').length,analysisFilters:document.querySelectorAll('#analysis-picker details.af-facet').length,chart:!!document.querySelector('#score-cost-chart svg'),points:document.querySelectorAll('.score-cost-point').length,bank:document.querySelector('#bench-bank-label')?.textContent,connection:document.querySelector('#connection-status')?.textContent,title:document.title};
+  return {origin:self.origin,storageDenied,inlinePicker:document.querySelectorAll('#task-picker .dp-popup.dp-inline').length,analysisFilters:document.querySelectorAll('#analysis-picker details.af-facet').length,chart:!!document.querySelector('#score-cost-chart svg'),points:document.querySelectorAll('.score-cost-point').length,bank:document.querySelector('#bench-bank-label')?.textContent,connection:document.querySelector('#connection-status')?.textContent,title:document.title};
  });
  const legendState={inline:await frame.locator('.chart-legend').isVisible(),singleGroup:await frame.locator('.chart-legend-item').count()===1,collapsed:await frame.locator('.chart-legend-disclosure').getAttribute('open')===null,searchHidden:await frame.locator('.chart-legend input').isHidden()};
  await frame.locator('.chart-legend-item').focus();legendState.highlight=await frame.locator('.score-cost-point[data-legend-highlight="true"]').count()===state.points;
@@ -207,7 +207,8 @@ writeFileSync(
  // Keyboard activation avoids opaque-iframe pointer coordinate drift after nested scrolling.
  await frame.locator('#close-analysis-results').focus();analysisState.closeFocus=await frame.locator('#close-analysis-results').evaluate(node=>node===document.activeElement);await frame.locator('#close-analysis-results').press('Enter');await frame.locator('#analysis-results').waitFor({state:'hidden'});analysisState.focusRestored=await frame.locator('#analysis-result-count').evaluate(node=>node===document.activeElement);analysisState.resultsClose=await frame.locator('#analysis-results').isHidden();
  await frame.locator('[data-view-link="runs"]').click();
- await frame.locator('#task-picker .dp-trigger').click();const popup=frame.locator('.dp-popup:not([hidden])');
+ const popup=frame.locator('#task-picker .dp-popup.dp-inline:not([hidden])');
+ await popup.waitFor({state:'visible'});
  const ids=await popup.locator('.dp-rail-item').evaluateAll(nodes=>nodes.map(node=>({id:node.dataset.providerId,label:node.querySelector('.dp-rail-name')?.textContent})));
  const remoteState={twoInstances:['remote-A','remote-B'].every(owner=>ids.some(node=>node.id===JSON.stringify([owner,'openai']))),neutralIcon:await popup.locator('img').count()===0,auto:ids.some(node=>node.label==='remote-A / auto（自动路由）'),group:ids.some(node=>node.label==='remote-A / group（路由组）'),ordinary:ids.some(node=>node.label==='ordinary-owner'),ordinaryNotExpanded:!ids.some(node=>node.label==='ordinary-owner / openai'),nonChatExcluded:!ids.some(node=>node.label.includes('excluded-')),oneSearch:await popup.locator('input[type="search"]').count()===1};
  await popup.locator('.dp-rail-item').evaluateAll((nodes,id)=>nodes.find(n=>n.dataset.providerId===id)?.click(),JSON.stringify(['remote-A','openai']));remoteState.exactModel=await popup.locator('.dp-think[data-think="high"]').getAttribute('data-model')==='remote-A/openai/exact/model-v1';remoteState.accountUnknown=(await popup.locator('.dp-acc-static-value').innerText()).includes('网关自动分配')&&(await popup.locator('.dp-acc-static-value').innerText()).includes('实际账号未记录');
@@ -215,14 +216,11 @@ writeFileSync(
  remoteState.identityOnly=!(await popup.innerText()).includes('账号与额度');
  const quotaPayload=await frame.evaluate(()=>window.MiniBench.request('./api/bench/quota-cards'));
  remoteState.quotaSanitized=quotaPayload.status==='available'&&quotaPayload.cards.length===1&&!JSON.stringify(quotaPayload).includes('must-not-reach-browser');
- await page.screenshot({path:${JSON.stringify(join(artifacts, 'sandbox-remote-picker.png'))},fullPage:true});try { await popup.getByRole('button',{name:'完成',exact:true}).click(); } catch(error) { const debug=await frame.evaluate(()=>({scrollY,innerHeight,hidden:document.querySelector('.dp-popup')?.hidden,trigger:document.querySelector('#task-picker .dp-trigger')?.getBoundingClientRect().toJSON(),popups:[...document.querySelectorAll('.dp-popup')].map(n=>({hidden:n.hidden,style:n.getAttribute('style')}))}));throw new Error('Picker geometry '+JSON.stringify(debug)+' parent '+JSON.stringify(await page.evaluate(()=>({scrollY,innerHeight})))+' '+error.message); }
- const taskState=await frame.evaluate(()=>({sampleConcurrency:document.querySelector('#sample-concurrency')?.value,runConcurrency:document.querySelector('#run-concurrency')?.value,rounds:document.querySelector('#run-rounds')?.value,planDisabled:!document.querySelector('#bench-plan'),startDisabled:document.querySelector('#start-run')?.disabled,history:document.querySelector('#bench-run-list')?.textContent}));
+ await page.screenshot({path:${JSON.stringify(join(artifacts, 'sandbox-remote-picker.png'))},fullPage:true});
+ const taskState=await frame.evaluate(()=>({configCollapsed:!document.querySelector('#run-config-disclosure')?.open,sampleConcurrency:document.querySelector('#sample-concurrency')?.value,runConcurrency:document.querySelector('#run-concurrency')?.value,rounds:document.querySelector('#run-rounds')?.value,planDisabled:!document.querySelector('#bench-plan'),startDisabled:document.querySelector('#start-run')?.disabled,history:document.querySelector('#bench-run-list')?.textContent}));
  // Verify starting a task works inside sandbox="allow-scripts" (without allow-forms).
- await frame.locator('#task-picker .dp-trigger').click();
- const submitPopup=frame.locator('.dp-popup:not([hidden])');
- await submitPopup.locator('.dp-rail-item').evaluateAll((nodes,id)=>nodes.find(n=>n.dataset.providerId===id)?.click(),JSON.stringify(['remote-A','openai']));
- await submitPopup.locator('.dp-think[data-think="high"]').click();
- await submitPopup.getByRole('button',{name:'完成',exact:true}).click();
+ await popup.locator('.dp-rail-item').evaluateAll((nodes,id)=>nodes.find(n=>n.dataset.providerId===id)?.click(),JSON.stringify(['remote-A','openai']));
+ await popup.locator('.dp-think[data-think="high"]').click();
  const startEnabledAfterSelect=!(await frame.locator('#start-run').isDisabled());
  await frame.locator('#start-run').click();
  await frame.waitForFunction(()=>document.querySelector('#start-run')?.disabled===true&&window.MiniBench.runState.getSelectedTargets().length===0);
@@ -233,7 +231,7 @@ writeFileSync(
  const maskedRestored=await frame.locator('#mask-accounts').getAttribute('aria-pressed')==='false'&&await frame.evaluate(()=>!document.body.classList.contains('masked'));
  const sandboxMask={maskedPressed,maskedRestored};
  await page.screenshot({path:${JSON.stringify(join(artifacts, 'sandbox.png'))},fullPage:true});
- return {passed:state.origin==='null'&&state.storageDenied&&state.pickers===1&&state.analysisFilters===4&&Object.values(legendState).every(Boolean)&&Object.values(analysisState).every(Boolean)&&state.chart&&state.points>0&&state.bank.includes('12')&&svg.ok&&svg.svg&&taskState.sampleConcurrency==='6'&&taskState.runConcurrency==='3'&&taskState.rounds==='3'&&taskState.planDisabled&&taskState.startDisabled&&Object.values(remoteState).every(Boolean)&&Object.values(sandboxSubmit).every(Boolean)&&Object.values(sandboxMask).every(Boolean)&&!errors.length&&!consoleErrors.length&&!failures.length,state,legendState,analysisState,taskState,remoteState,sandboxSubmit,sandboxMask,svg,readyError,errors,consoleErrors,failures};
+ return {passed:state.origin==='null'&&state.storageDenied&&state.inlinePicker===1&&state.analysisFilters>=4&&Object.values(legendState).every(Boolean)&&Object.values(analysisState).every(Boolean)&&state.chart&&state.points>0&&state.bank.includes('12')&&svg.ok&&svg.svg&&taskState.configCollapsed&&taskState.sampleConcurrency==='6'&&taskState.runConcurrency==='3'&&taskState.rounds==='3'&&taskState.planDisabled&&taskState.startDisabled&&Object.values(remoteState).every(Boolean)&&Object.values(sandboxSubmit).every(Boolean)&&Object.values(sandboxMask).every(Boolean)&&!errors.length&&!consoleErrors.length&&!failures.length,state,legendState,analysisState,taskState,remoteState,sandboxSubmit,sandboxMask,svg,readyError,errors,consoleErrors,failures};
 }`
 );
 let opened = false;

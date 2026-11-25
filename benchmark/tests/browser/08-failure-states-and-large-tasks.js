@@ -10,7 +10,7 @@
     await chooseProvider('');
     if(name.startsWith('long-labels'))await chooseProvider('provider:self-hosted-provider-with-a-long-instance-name');
     const geometry=await popup.evaluate(node=>{const box=node.getBoundingClientRect();return {x:box.x,y:box.y,width:box.width,height:box.height,viewportWidth:innerWidth,viewportHeight:innerHeight};});
-    require(geometry.height<=560,'Inline picker exceeds bounded height');require(geometry.x>=0&&geometry.x+geometry.width<=width+1,'Inline picker overflows viewport width');
+    require(geometry.height<=Math.min(720,Math.ceil(height*0.76)),'Inline picker exceeds bounded height');require(geometry.x>=0&&geometry.x+geometry.width<=width+1,'Inline picker overflows viewport width');
     const before=await page.evaluate(()=>JSON.stringify(window.MiniBench.runState.selectedKeys));
     const hoverRow=popup.locator('.dp-result-row').first();
     await hoverRow.hover();
@@ -84,7 +84,10 @@
   await popup.locator('.dp-select-visible').click();
   const selectedTargets=await page.evaluate(()=>window.MiniBench.runState.getSelectedTargets());
   require(selectedTargets.length===23&&selectedTargets.every(target=>target.thinking===(target.route_id==='bulk-route-22'?'default':'high')),'Bulk selection must submit default only for the model without levels');
+  const largeConfig=page.locator('#run-config-disclosure');
+  if(!(await largeConfig.evaluate(node=>node.open)))await largeConfig.locator('> summary').click();
   await page.locator('#run-rounds').fill('3');require((await page.locator('#run-request-estimate').innerText()).includes('828'),'Large task sample count incorrect');
+  await largeConfig.locator('> summary').click();
   require(!await page.locator('#start-run').isDisabled(),'Aggregate sample cap still blocks large tasks');
   const startsBeforeLargePlan=posts.filter(call=>call.path==='/api/bench/tasks').length;
   await page.waitForFunction(()=>!document.querySelector('#start-run').disabled);

@@ -53,14 +53,34 @@ export function createTaskSubmission({
       config.run_concurrency <= 10
     );
   }
+  function updateConfigOverview(config) {
+    const overview = element('run-config-overview');
+    if (!overview) return;
+    const bankText = app.taskCount > 0 ? `${app.taskCount} 题` : '题库加载中';
+    const rounds = Number.isInteger(config.rounds) && config.rounds >= 1 && config.rounds <= 3 ? `${config.rounds} 轮` : '轮数无效';
+    const sampleConcurrency =
+      Number.isInteger(config.sample_concurrency) && config.sample_concurrency >= 1 && config.sample_concurrency <= 64
+        ? `样本并发 ${config.sample_concurrency}`
+        : '样本并发无效';
+    const runConcurrency =
+      Number.isInteger(config.run_concurrency) && config.run_concurrency >= 1 && config.run_concurrency <= 10
+        ? `运行并发 ${config.run_concurrency}`
+        : '运行并发无效';
+    const timeout =
+      Number.isInteger(config.limits.timeout) && config.limits.timeout >= 10 && config.limits.timeout <= 3600
+        ? `超时 ${config.limits.timeout} 秒`
+        : '超时无效';
+    overview.textContent = `${bankText} · ${rounds} · ${sampleConcurrency} · ${runConcurrency} · ${timeout}`;
+  }
   function updateTaskPreview() {
+    const config = taskRequestConfig();
+    updateConfigOverview(config);
     const valid = validConfig();
     element('start-run').disabled = !valid || state.busy || state.submissionUncertain || !state.timeoutPolicyReady;
     element('start-run').textContent = state.busy ? '正在启动…' : '开始评测';
     element('bench-retry-review').hidden = !state.submissionUncertain || state.busy;
     element('bench-plan-preview').hidden = !valid;
     if (!valid) return;
-    const config = taskRequestConfig();
     renderTaskSummary({
       ...config,
       run_count: config.targets.length,
@@ -145,10 +165,18 @@ export function createTaskSubmission({
       );
       if (leaf) keys.push(JSON.stringify([leaf.providerId, leaf.accountId, leaf.model, leaf.think]));
     }
-    element('run-rounds').value = String(plan.rounds ?? 3);
-    element('sample-concurrency').value = String(plan.sample_concurrency ?? plan.concurrency ?? 6);
-    element('run-concurrency').value = String(plan.run_concurrency ?? 3);
-    element('bench-timeout').value = String(plan.limits?.timeout_scope === 'sample' ? plan.limits.timeout : 600);
+    const rounds = plan.rounds ?? 3;
+    const sampleConcurrency = plan.sample_concurrency ?? plan.concurrency ?? 6;
+    const runConcurrency = plan.run_concurrency ?? 3;
+    const timeout = plan.limits?.timeout_scope === 'sample' ? plan.limits.timeout : 600;
+    element('run-rounds').value = String(rounds);
+    element('sample-concurrency').value = String(sampleConcurrency);
+    element('run-concurrency').value = String(runConcurrency);
+    element('bench-timeout').value = String(timeout);
+    const configDisclosure = element('run-config-disclosure');
+    if (configDisclosure && (rounds !== 3 || sampleConcurrency !== 6 || runConcurrency !== 3 || timeout !== 600)) {
+      configDisclosure.open = true;
+    }
     app.setTaskSelection(keys);
     updateTaskPreview();
     element('run-form').scrollIntoView?.({ block: 'start' });

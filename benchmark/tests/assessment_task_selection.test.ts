@@ -566,6 +566,9 @@ test('copy a task selects exact current leaves and restores all limits without r
     expect(f.mini.runState.getSelectedTargets().map(t => [t.route_id, t.thinking])).toEqual([['route-a', 'low']]);
     expect(f.element('run-rounds').value).toBe('2');
     expect(f.element('bench-timeout').value).toBe('600');
+    expect(f.element('run-config-disclosure').open).toBe(true);
+    expect(f.element('run-config-overview').textContent).toContain('2 轮');
+    expect(f.element('run-config-overview').textContent).toContain('样本并发 4');
     expect(f.calls.filter(c => c.options?.method === 'POST')).toHaveLength(0);
     expect(f.messages.at(-1)[0]).toContain('未替换为其他目标');
 });

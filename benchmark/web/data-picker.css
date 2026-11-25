@@ -40,7 +40,8 @@
   position: static;
   z-index: auto;
   width: 100%;
-  max-height: min(520px, 64vh);
+  min-height: min(440px, 56vh);
+  max-height: min(680px, 72vh);
   border-radius: var(--radius-panel, 10px);
   box-shadow: none;
 }
@@ -870,6 +871,7 @@
 /* Responsive layout for narrow viewports */
 @media (max-width: 680px) {
   .dp-popup.dp-inline {
+    min-height: 0;
     max-height: min(560px, 72vh);
   }
   .dp-header {
