@@ -1410,7 +1410,10 @@ export function createScoreCostChart(
           actionButtons.append(promoteBtn);
           hasActionButtons = true;
         } else if (promotedBaseline) {
-          const promotedBadge = node('span', 'score-cost-tooltip-status is-promoted', '已设为基线');
+          const promotedBadge = node('span', 'score-cost-tooltip-status is-promoted');
+          const promotedSq = node('i', 'task-baseline-sq');
+          promotedSq.setAttribute('aria-hidden', 'true');
+          promotedBadge.append(promotedSq, document.createTextNode('已设为基线'));
           promotedBadge.title = '该运行目标已保存为基线';
           actionButtons.append(promotedBadge);
           if (typeof promotedBaseline.id === 'string' && promotedBaseline.id) {

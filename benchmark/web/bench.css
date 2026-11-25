@@ -6,6 +6,70 @@
   --analysis-panel-radius: 11px;
   --analysis-option-height: 36px;
   --readable-muted: var(--ctl-fg);
+
+  /* Unified semantic status tokens (C1: Magpie native restraint) */
+  --status-running: #0369a1;
+  --status-running-soft: color-mix(in srgb, var(--status-running) 8%, var(--card));
+  --status-running-border: color-mix(in srgb, var(--status-running) 26%, transparent);
+
+  --status-cancelling: var(--amber, #b45309);
+  --status-cancelling-soft: color-mix(in srgb, var(--status-cancelling) 7%, var(--card));
+  --status-cancelling-border: color-mix(in srgb, var(--status-cancelling) 32%, transparent);
+
+  --status-queued: var(--ctl-fg, #63636b);
+  --status-queued-soft: transparent;
+  --status-queued-border: var(--line);
+
+  --status-completed: var(--green, #189a58);
+  --status-completed-soft: color-mix(in srgb, var(--status-completed) 8%, var(--card));
+  --status-completed-border: color-mix(in srgb, var(--status-completed) 22%, transparent);
+
+  --status-timeout: var(--amber, #b45309);
+  --status-timeout-soft: color-mix(in srgb, var(--status-timeout) 8%, var(--card));
+  --status-timeout-border: color-mix(in srgb, var(--status-timeout) 24%, transparent);
+
+  --status-interrupted: #4e607a;
+  --status-interrupted-bar: #6d7f9a;
+  --status-interrupted-soft: color-mix(in srgb, var(--status-interrupted) 8%, var(--card));
+  --status-interrupted-border: color-mix(in srgb, var(--status-interrupted) 22%, transparent);
+
+  --status-failed: var(--red, #d64545);
+  --status-failed-soft: color-mix(in srgb, var(--status-failed) 8%, var(--card));
+  --status-failed-border: color-mix(in srgb, var(--status-failed) 24%, transparent);
+
+  --status-cancelled: var(--ctl-fg, #63636b);
+  --status-cancelled-bar: var(--faint);
+  --status-cancelled-soft: var(--pill);
+  --status-cancelled-border: var(--line-2);
+
+  --status-baseline: var(--accent, #4f46e5);
+  --status-baseline-soft: color-mix(in srgb, var(--status-baseline) 8%, var(--card));
+  --status-baseline-border: color-mix(in srgb, var(--status-baseline) 22%, transparent);
+
+  /* Shape-coded status masks (parallel to host --x-mark for color-blind clarity) */
+  --pause-mark: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 10 10'%3E%3Cpath d='M3.2 1.8v6.4M6.8 1.8v6.4' stroke='%23000' stroke-width='1.8' stroke-linecap='round'/%3E%3C/svg%3E");
+  --clock-mark: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 10 10'%3E%3Ccircle cx='5' cy='5' r='3.9' fill='none' stroke='%23000' stroke-width='1.35'/%3E%3Cpath d='M5 2.7v2.4l1.7 1.1' fill='none' stroke='%23000' stroke-width='1.35' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");
+
+  /* Sample matrix score tones (neutral scale so bordered fault cells stand out) */
+  --sample-full-bg: color-mix(in srgb, var(--status-completed) 11%, var(--card));
+  --sample-full-fg: var(--status-completed);
+  --sample-partial-bg: var(--pill);
+  --sample-partial-fg: var(--fg);
+  --sample-zero-bg: var(--card-2);
+  --sample-zero-fg: var(--muted);
+  --sample-zero-border: var(--line-2);
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme='light']) {
+    --status-running: #56b4f5;
+    --status-interrupted: #96a8c4;
+    --status-interrupted-bar: #798ca8;
+  }
+}
+:root[data-theme='dark'] {
+  --status-running: #56b4f5;
+  --status-interrupted: #96a8c4;
+  --status-interrupted-bar: #798ca8;
 }
 * {
   box-sizing: border-box;
@@ -1501,22 +1565,11 @@ input::placeholder {
   max-width: 100%;
   padding: 2px 8px;
   border-radius: 6px;
-  border: 1px solid var(--line);
-  background: var(--pill);
+  border: 1px solid var(--line-2);
+  background: var(--card-2);
   color: var(--fg);
   font-size: 11.5px;
   line-height: 1.4;
-}
-.task-channel-badge.is-failed {
-  border-color: color-mix(in srgb, var(--red) 35%, transparent);
-  background: color-mix(in srgb, var(--red-soft) 55%, var(--pill));
-}
-.task-channel-badge.is-timeout {
-  border-color: color-mix(in srgb, var(--amber) 35%, transparent);
-  background: color-mix(in srgb, var(--amber-soft) 55%, var(--pill));
-}
-.task-channel-badge.is-running {
-  border-color: color-mix(in srgb, var(--accent) 32%, transparent);
 }
 .task-channel-badge.is-more {
   color: var(--readable-muted);
@@ -1531,7 +1584,7 @@ input::placeholder {
   padding: 0 5px;
   border-radius: 4px;
   background: var(--card);
-  border: 1px solid var(--line-2);
+  border: 1px solid var(--line);
   color: var(--readable-muted);
   font-family: var(--code);
   font-size: 10.5px;
@@ -1549,8 +1602,8 @@ input::placeholder {
   max-width: 100%;
   padding: 2px 8px;
   border-radius: 6px;
-  border: 1px solid color-mix(in srgb, var(--accent) 26%, var(--line));
-  background: color-mix(in srgb, var(--accent) 5%, var(--card));
+  border: 1px solid var(--line-2);
+  background: var(--card-2);
   color: var(--fg);
   font-size: 11.5px;
   line-height: 1.4;
@@ -1592,11 +1645,11 @@ input::placeholder {
   background: var(--muted);
 }
 .task-dot.is-completed {
-  background: var(--green, #189a58);
+  background: var(--status-completed);
 }
 .task-dot.is-running {
-  background: var(--accent);
-  box-shadow: 0 0 0 2.5px color-mix(in srgb, var(--accent) 22%, transparent);
+  background: var(--status-running);
+  box-shadow: 0 0 0 2.5px color-mix(in srgb, var(--status-running) 22%, transparent);
 }
 .task-dot.is-running.is-pulse {
   animation: task-dot-pulse 1.8s ease-in-out infinite;
@@ -1604,30 +1657,56 @@ input::placeholder {
 @keyframes task-dot-pulse {
   0%,
   100% {
-    box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent) 20%, transparent);
+    box-shadow: 0 0 0 2px color-mix(in srgb, var(--status-running) 20%, transparent);
   }
   50% {
-    box-shadow: 0 0 0 4px color-mix(in srgb, var(--accent) 32%, transparent);
+    box-shadow: 0 0 0 4px color-mix(in srgb, var(--status-running) 34%, transparent);
   }
 }
+.task-dot.is-cancelling {
+  background: var(--status-cancelling);
+}
 .task-dot.is-queued {
-  background: var(--muted);
+  background: transparent;
+  border: 1.5px solid var(--status-queued);
 }
 .task-dot.is-timeout,
 .task-dot.is-incomplete {
-  background: var(--amber, #b45309);
+  width: 10px;
+  height: 10px;
+  border-radius: 0;
+  background: var(--status-timeout);
+  -webkit-mask-image: var(--clock-mark);
+  mask-image: var(--clock-mark);
+  -webkit-mask-size: contain;
+  mask-size: contain;
+  -webkit-mask-repeat: no-repeat;
+  mask-repeat: no-repeat;
+  -webkit-mask-position: center;
+  mask-position: center;
 }
 .task-dot.is-interrupted {
-  background: var(--c6, #7c3aed);
+  width: 9px;
+  height: 9px;
+  border-radius: 0;
+  background: var(--status-interrupted);
+  -webkit-mask-image: var(--pause-mark);
+  mask-image: var(--pause-mark);
+  -webkit-mask-size: contain;
+  mask-size: contain;
+  -webkit-mask-repeat: no-repeat;
+  mask-repeat: no-repeat;
+  -webkit-mask-position: center;
+  mask-position: center;
 }
 .task-dot.is-cancelled {
-  background: var(--fg-2);
+  background: var(--status-cancelled);
 }
 .task-dot.is-failed {
   width: 8px;
   height: 8px;
   border-radius: 0;
-  background: var(--red, #d64545);
+  background: var(--status-failed);
   -webkit-mask-image: var(--x-mark);
   mask-image: var(--x-mark);
   -webkit-mask-size: contain;
@@ -1652,36 +1731,50 @@ input::placeholder {
   line-height: 1.4;
 }
 .run-list-status.is-completed {
-  background: var(--green-soft, rgba(24, 154, 88, 0.14));
-  border-color: color-mix(in srgb, var(--green) 32%, transparent);
-  color: var(--green, #189a58);
+  background: var(--status-completed-soft);
+  border-color: var(--status-completed-border);
+  color: var(--status-completed);
 }
 .run-list-status.is-running {
-  background: var(--accent-soft, rgba(79, 70, 229, 0.12));
-  border-color: color-mix(in srgb, var(--accent) 34%, transparent);
-  color: var(--accent);
+  background: var(--status-running-soft);
+  border-color: var(--status-running-border);
+  color: var(--status-running);
+}
+.run-list-status.is-cancelling {
+  background: var(--status-cancelling-soft);
+  border-style: dashed;
+  border-color: var(--status-cancelling-border);
+  color: var(--status-cancelling);
+}
+.run-list-status.is-queued {
+  background: var(--status-queued-soft);
+  border-style: dashed;
+  border-color: var(--status-queued-border);
+  color: var(--status-queued);
+  font-weight: 500;
 }
 .run-list-status.is-timeout,
 .run-list-status.is-incomplete {
-  background: var(--amber-soft, rgba(180, 83, 9, 0.12));
-  border-color: color-mix(in srgb, var(--amber) 34%, transparent);
-  color: var(--amber, #b45309);
+  background: var(--status-timeout-soft);
+  border-color: var(--status-timeout-border);
+  color: var(--status-timeout);
 }
 .run-list-status.is-interrupted {
-  background: color-mix(in srgb, var(--c6, #7c3aed) 14%, transparent);
-  border-color: color-mix(in srgb, var(--c6, #7c3aed) 34%, transparent);
-  color: var(--c6, #7c3aed);
+  background: var(--status-interrupted-soft);
+  border-color: var(--status-interrupted-border);
+  color: var(--status-interrupted);
 }
 .run-list-status.is-failed {
-  background: var(--red-soft, rgba(214, 69, 69, 0.12));
-  border-color: color-mix(in srgb, var(--red) 36%, transparent);
-  color: var(--red);
+  background: var(--status-failed-soft);
+  border-color: var(--status-failed-border);
+  color: var(--status-failed);
   font-weight: 600;
 }
 .run-list-status.is-cancelled {
-  background: var(--pill);
-  border-color: var(--line);
-  color: var(--fg-2);
+  background: var(--status-cancelled-soft);
+  border-color: var(--status-cancelled-border);
+  color: var(--status-cancelled);
+  font-weight: 500;
 }
 #bench-run-detail {
   padding: 0 18px 16px;
@@ -1715,8 +1808,8 @@ input::placeholder {
   gap: 4px;
   padding: 2px 8px;
   border-radius: 5px;
-  border: 1px solid color-mix(in srgb, var(--accent) 30%, var(--line));
-  background: color-mix(in srgb, var(--accent) 7%, var(--pill));
+  border: 1px solid var(--line);
+  background: var(--pill);
   color: var(--fg);
   font-size: 11.5px;
   line-height: 1.4;
@@ -2047,61 +2140,61 @@ th {
 .task-count-pill {
   display: inline-flex;
   align-items: center;
-  gap: 5px;
-  padding: 2px 8px;
-  border-radius: 6px;
+  gap: 4px;
+  padding: 1.5px 7px;
+  border-radius: 5px;
   border: 1px solid var(--line-2);
-  background: var(--pill);
-  color: var(--readable-muted);
+  background: var(--card-2);
+  color: var(--fg-2);
   font-size: 11px;
   font-weight: 500;
+  line-height: 1.45;
   white-space: nowrap;
 }
 .task-count-pill.is-total {
-  background: transparent;
-  border-color: var(--line);
+  background: var(--card-2);
+  border-color: var(--line-2);
   color: var(--fg-2);
 }
 .task-count-pill.is-running {
-  background: var(--accent-soft, rgba(79, 70, 229, 0.12));
-  border-color: color-mix(in srgb, var(--accent) 32%, transparent);
-  color: var(--accent);
+  background: var(--status-running-soft);
+  border-color: transparent;
+  color: var(--status-running);
   font-weight: 600;
+}
+.task-count-pill.is-cancelling {
+  background: var(--status-cancelling-soft);
+  border-style: dashed;
+  border-color: var(--status-cancelling-border);
+  color: var(--status-cancelling);
+  font-weight: 600;
+}
+.task-count-pill.is-queued {
+  background: var(--status-queued-soft);
+  border-style: dashed;
+  border-color: var(--status-queued-border);
+  color: var(--status-queued);
 }
 .task-count-pill.is-completed {
-  background: var(--green-soft, rgba(24, 154, 88, 0.14));
-  border-color: color-mix(in srgb, var(--green) 32%, transparent);
-  color: var(--green, #189a58);
-  font-weight: 600;
+  color: var(--fg-2);
 }
 .task-count-pill.is-timeout {
-  background: var(--amber-soft, rgba(180, 83, 9, 0.12));
-  border-color: color-mix(in srgb, var(--amber) 34%, transparent);
-  color: var(--amber, #b45309);
-  font-weight: 600;
+  color: var(--status-timeout);
 }
 .task-count-pill.is-failed {
-  background: var(--red-soft, rgba(214, 69, 69, 0.12));
-  border-color: color-mix(in srgb, var(--red) 36%, transparent);
-  color: var(--red);
+  background: var(--status-failed-soft);
+  border-color: transparent;
+  color: var(--status-failed);
   font-weight: 600;
 }
 .task-count-pill.is-interrupted {
-  background: color-mix(in srgb, var(--c6, #7c3aed) 14%, transparent);
-  border-color: color-mix(in srgb, var(--c6, #7c3aed) 34%, transparent);
-  color: var(--c6, #7c3aed);
-  font-weight: 600;
+  color: var(--fg-2);
 }
 .task-count-pill.is-cancelled {
-  background: var(--pill);
-  border-color: var(--line);
   color: var(--fg-2);
 }
 .task-count-pill.is-baseline {
-  background: color-mix(in srgb, var(--accent) 12%, var(--card));
-  border-color: color-mix(in srgb, var(--accent) 36%, transparent);
-  color: var(--accent);
-  font-weight: 600;
+  color: var(--status-baseline);
 }
 .task-baseline-sq {
   display: inline-block;
@@ -2112,7 +2205,7 @@ th {
   flex-shrink: 0;
 }
 .task-baseline-sq.is-legend {
-  color: var(--accent);
+  color: var(--status-baseline);
 }
 .task-count-progress {
   display: inline-flex;
@@ -2123,16 +2216,16 @@ th {
 }
 .task-progress-bar {
   display: flex;
-  width: 112px;
-  height: 6px;
+  width: 108px;
+  height: 4px;
   border-radius: 999px;
   overflow: hidden;
   background: var(--pill);
-  border: 1px solid var(--line-2);
+  border: 0;
 }
 .task-progress-bar.is-compact {
-  width: 68px;
-  height: 5px;
+  width: 64px;
+  height: 4px;
 }
 .task-progress-seg {
   display: block;
@@ -2140,22 +2233,25 @@ th {
   min-width: 2px;
 }
 .task-progress-seg.is-completed {
-  background: var(--green, #189a58);
+  background: var(--status-completed);
 }
 .task-progress-seg.is-running {
-  background: var(--accent);
+  background: var(--status-running);
+}
+.task-progress-seg.is-cancelling {
+  background: var(--status-cancelling);
 }
 .task-progress-seg.is-timeout {
-  background: var(--amber, #b45309);
+  background: var(--status-timeout);
 }
 .task-progress-seg.is-failed {
-  background: var(--red, #d64545);
+  background: var(--status-failed);
 }
 .task-progress-seg.is-interrupted {
-  background: var(--c6, #7c3aed);
+  background: var(--status-interrupted-bar, var(--status-interrupted));
 }
 .task-progress-seg.is-cancelled {
-  background: var(--fg-2);
+  background: var(--status-cancelled-bar, var(--faint));
 }
 .task-progress-readout {
   color: var(--readable-muted);
@@ -2184,21 +2280,31 @@ th {
 }
 #bench-cancel-task:not(:disabled),
 #bench-cancel-run:not(:disabled) {
-  color: var(--red);
-  border-color: color-mix(in srgb, var(--red) 38%, transparent);
-  background: color-mix(in srgb, var(--red-soft) 70%, transparent);
+  color: var(--status-failed);
+  border-color: color-mix(in srgb, var(--status-failed) 28%, var(--line));
+  background: var(--card);
+  font-weight: 500;
+}
+#bench-cancel-task:hover:not(:disabled),
+#bench-cancel-run:hover:not(:disabled) {
+  background: var(--status-failed-soft);
 }
 #bench-retry-task:not(:disabled),
 #bench-retry-run:not(:disabled) {
-  color: var(--amber);
-  border-color: color-mix(in srgb, var(--amber) 40%, transparent);
-  background: color-mix(in srgb, var(--amber-soft) 70%, transparent);
+  color: var(--status-timeout);
+  border-color: color-mix(in srgb, var(--status-timeout) 28%, var(--line));
+  background: var(--card);
+  font-weight: 500;
+}
+#bench-retry-task:hover:not(:disabled),
+#bench-retry-run:hover:not(:disabled) {
+  background: var(--status-timeout-soft);
 }
 #bench-baseline-task:not(:disabled):not(.is-baseline-ineligible),
 #bench-baseline-run:not(:disabled):not(.is-baseline-ineligible) {
-  color: var(--accent);
-  border-color: color-mix(in srgb, var(--accent) 40%, transparent);
-  background: color-mix(in srgb, var(--accent-soft, rgba(79, 70, 229, 0.12)) 75%, transparent);
+  color: var(--status-baseline);
+  border-color: var(--status-baseline-border);
+  background: var(--status-baseline-soft);
 }
 #bench-baseline-task.is-baseline-ineligible,
 #bench-baseline-run.is-baseline-ineligible {
@@ -2250,21 +2356,6 @@ th {
   padding: 9px 13px;
   background: var(--card-2);
   border-bottom: 1px solid var(--line-2);
-}
-.channel-pod.is-running > .channel-pod-head {
-  background: color-mix(in srgb, var(--accent) 8%, var(--card-2));
-}
-.channel-pod.is-completed > .channel-pod-head {
-  background: color-mix(in srgb, var(--green) 8%, var(--card-2));
-}
-.channel-pod.is-timeout > .channel-pod-head {
-  background: color-mix(in srgb, var(--amber) 9%, var(--card-2));
-}
-.channel-pod.is-failed > .channel-pod-head {
-  background: color-mix(in srgb, var(--red) 9%, var(--card-2));
-}
-.channel-pod.is-interrupted > .channel-pod-head {
-  background: color-mix(in srgb, var(--c6) 9%, var(--card-2));
 }
 .channel-pod-identity {
   display: flex;
@@ -2324,14 +2415,24 @@ th {
   display: inline-flex;
   align-items: center;
   gap: 5px;
-  padding: 2px 8px;
-  border-radius: 999px;
-  background: var(--card);
-  border: 1px solid var(--line);
+  padding: 0;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
   color: var(--fg-2);
   font-size: 11px;
   font-weight: 500;
   white-space: nowrap;
+}
+.channel-pod-status.is-running,
+.channel-pod-status.is-cancelling,
+.channel-pod-status.is-completed,
+.channel-pod-status.is-timeout,
+.channel-pod-status.is-failed,
+.channel-pod-status.is-interrupted,
+.channel-pod-status.is-queued,
+.channel-pod-status.is-cancelled {
+  color: var(--fg-2);
 }
 .channel-pod-action {
   display: inline-flex;
@@ -2350,13 +2451,13 @@ th {
   cursor: pointer;
 }
 .channel-pod-action.is-baseline:not(:disabled) {
-  color: var(--accent);
-  border-color: color-mix(in srgb, var(--accent) 36%, transparent);
-  background: color-mix(in srgb, var(--accent) 9%, var(--card));
+  color: var(--status-baseline);
+  border-color: var(--status-baseline-border);
+  background: var(--status-baseline-soft);
 }
 .channel-pod-action.is-baseline:hover:not(:disabled) {
-  border-color: var(--accent);
-  background: color-mix(in srgb, var(--accent) 15%, var(--card));
+  border-color: var(--status-baseline);
+  background: color-mix(in srgb, var(--status-baseline) 16%, var(--card));
 }
 .channel-pod-action.is-unbaseline:hover:not(:disabled) {
   color: var(--red);
@@ -2493,13 +2594,13 @@ th {
   overflow: hidden;
   display: inline-flex;
   align-items: center;
-  gap: 6px;
+  gap: 5px;
   max-width: 100%;
-  min-height: 28px;
-  padding: 4px 10px;
-  border: 1px solid var(--line);
+  min-height: 27px;
+  padding: 3px 9px;
+  border: 1px solid var(--line-2);
   border-radius: 7px;
-  background: var(--pill);
+  background: var(--card);
   color: var(--fg-2);
   font: inherit;
   font-size: 11.5px;
@@ -2512,7 +2613,7 @@ th {
   position: absolute;
   inset: 0 auto 0 0;
   width: var(--pct, 0%);
-  background: color-mix(in srgb, var(--accent) 18%, transparent);
+  background: color-mix(in srgb, var(--status-running) 12%, transparent);
   pointer-events: none;
 }
 .task-preview-chip-track {
@@ -2521,7 +2622,7 @@ th {
   bottom: 0;
   height: 2px;
   width: var(--pct, 0%);
-  background: var(--accent);
+  background: var(--status-running);
   pointer-events: none;
 }
 .task-preview-chip > .task-dot,
@@ -2535,7 +2636,7 @@ th {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  color: var(--accent);
+  color: var(--status-baseline);
   flex-shrink: 0;
 }
 .task-preview-chip-baseline .task-baseline-sq {
@@ -2543,7 +2644,7 @@ th {
   height: 7px;
 }
 .task-preview-chip-label {
-  font-weight: 500;
+  font-weight: 600;
   color: var(--fg);
   overflow-wrap: anywhere;
 }
@@ -2560,9 +2661,9 @@ th {
   flex-shrink: 0;
 }
 .task-preview-chip.is-completed {
-  background: var(--green-soft, rgba(24, 154, 88, 0.14));
-  border-color: color-mix(in srgb, var(--green) 36%, transparent);
-  color: var(--green, #189a58);
+  background: color-mix(in srgb, var(--status-completed) 6%, var(--card));
+  border-color: var(--line-2);
+  color: var(--status-completed);
 }
 .task-preview-chip.is-completed.is-baseline {
   padding-left: 8px;
@@ -2574,9 +2675,9 @@ th {
   margin-left: 6px;
   padding: 1px 6px;
   border-radius: 5px;
-  background: color-mix(in srgb, var(--accent) 12%, var(--card));
-  border: 1px solid color-mix(in srgb, var(--accent) 34%, transparent);
-  color: var(--accent);
+  background: var(--status-baseline-soft);
+  border: 1px solid var(--status-baseline-border);
+  color: var(--status-baseline);
   font-size: 10.5px;
   font-weight: 600;
   vertical-align: middle;
@@ -2593,51 +2694,57 @@ th {
   gap: 5px;
   padding: 2px 8px;
   border-radius: 999px;
-  background: color-mix(in srgb, var(--accent) 12%, var(--card));
-  border: 1px solid color-mix(in srgb, var(--accent) 36%, transparent);
-  color: var(--accent);
+  background: var(--status-baseline-soft);
+  border: 1px solid var(--status-baseline-border);
+  color: var(--status-baseline);
   font-size: 11px;
   font-weight: 600;
   white-space: nowrap;
 }
 .task-preview-chip.is-running {
-  background: color-mix(in srgb, var(--accent) 8%, var(--card));
-  border-color: color-mix(in srgb, var(--accent) 44%, transparent);
-  color: var(--accent);
+  background: color-mix(in srgb, var(--status-running) 7%, var(--card));
+  border-color: var(--status-running-border);
+  color: var(--status-running);
+}
+.task-preview-chip.is-cancelling {
+  background: color-mix(in srgb, var(--status-cancelling) 7%, var(--card));
+  border-style: dashed;
+  border-color: var(--status-cancelling-border);
+  color: var(--status-cancelling);
 }
 .task-preview-chip.is-queued {
-  background: transparent;
+  background: var(--status-queued-soft);
   border-style: dashed;
-  border-color: var(--line);
-  color: var(--readable-muted);
+  border-color: var(--status-queued-border);
+  color: var(--muted);
 }
 .task-preview-chip.is-queued .task-preview-chip-label {
-  color: var(--readable-muted);
-  font-weight: 400;
+  color: var(--muted);
+  font-weight: 500;
 }
 .task-preview-chip.is-queued .task-preview-chip-state {
   font-weight: 400;
-  opacity: 0.85;
+  opacity: 0.9;
 }
 .task-preview-chip.is-timeout {
-  background: var(--amber-soft, rgba(180, 83, 9, 0.12));
-  border-color: color-mix(in srgb, var(--amber) 40%, transparent);
-  color: var(--amber, #b45309);
+  background: color-mix(in srgb, var(--status-timeout) 7%, var(--card));
+  border-color: var(--line-2);
+  color: var(--status-timeout);
 }
 .task-preview-chip.is-failed {
-  background: var(--red-soft, rgba(214, 69, 69, 0.12));
-  border-color: color-mix(in srgb, var(--red) 40%, transparent);
-  color: var(--red);
+  background: color-mix(in srgb, var(--status-failed) 7%, var(--card));
+  border-color: var(--status-failed-border);
+  color: var(--status-failed);
 }
 .task-preview-chip.is-interrupted {
-  background: color-mix(in srgb, var(--c6, #7c3aed) 14%, transparent);
-  border-color: color-mix(in srgb, var(--c6, #7c3aed) 38%, transparent);
-  color: var(--c6, #7c3aed);
+  background: color-mix(in srgb, var(--status-interrupted) 6%, var(--card));
+  border-color: var(--line-2);
+  color: var(--status-interrupted);
 }
 .task-preview-chip.is-cancelled {
-  background: var(--pill);
-  border-color: var(--line);
-  color: var(--readable-muted);
+  background: var(--status-cancelled-soft);
+  border-color: var(--status-cancelled-border);
+  color: var(--status-cancelled);
 }
 .task-preview-chip.is-cancelled .task-preview-chip-label {
   color: var(--readable-muted);
@@ -2967,7 +3074,7 @@ th {
   width: 100%;
   min-height: 22px;
   padding: 0 6px;
-  border: 0;
+  border: 1px solid transparent;
   border-radius: 6px;
   font: inherit;
   font-size: 11px;
@@ -2977,47 +3084,57 @@ th {
   color: var(--fg-2);
 }
 .sample-cell.is-full {
-  background: var(--green-soft, rgba(22, 163, 74, 0.12));
-  color: var(--green, #15803d);
+  background: var(--sample-full-bg);
+  color: var(--sample-full-fg);
+  font-weight: 600;
 }
 .sample-cell.is-partial {
-  background: var(--amber-soft, rgba(180, 83, 9, 0.1));
-  color: var(--amber, #b45309);
+  background: var(--sample-partial-bg);
+  color: var(--sample-partial-fg);
 }
 .sample-cell.is-zero {
-  background: var(--red-soft, rgba(220, 38, 38, 0.1));
-  color: var(--red, #b91c1c);
+  background: var(--sample-zero-bg);
+  border-color: var(--sample-zero-border);
+  color: var(--sample-zero-fg);
 }
 .sample-cell.is-timeout {
-  background: var(--amber-soft, rgba(180, 83, 9, 0.12));
-  color: var(--amber, #b45309);
+  background: var(--status-timeout-soft);
+  border-color: var(--status-timeout-border);
+  color: var(--status-timeout);
   font-weight: 600;
 }
 .sample-cell.is-interrupted {
-  background: rgba(139, 92, 246, 0.12);
-  color: var(--c6, #7c3aed);
+  background: var(--status-interrupted-soft);
+  border-color: var(--status-interrupted-border);
+  color: var(--status-interrupted);
   font-weight: 600;
 }
 .sample-cell.is-cancelled {
-  background: var(--pill);
-  color: var(--fg-2);
+  background: var(--status-cancelled-soft);
+  border-color: var(--status-cancelled-border);
+  color: var(--status-cancelled);
 }
 .sample-cell.is-running {
-  background: var(--accent-soft, rgba(79, 70, 229, 0.12));
-  color: var(--accent);
+  background: var(--status-running-soft);
+  border-color: var(--status-running-border);
+  color: var(--status-running);
   font-weight: 600;
 }
 .sample-cell.is-failed {
-  background: var(--red-soft, rgba(220, 38, 38, 0.12));
-  color: var(--red, #b91c1c);
+  background: var(--status-failed-soft);
+  border-color: var(--status-failed-border);
+  color: var(--status-failed);
   font-weight: 600;
 }
 .sample-cell.is-unscored {
-  outline: 1px dashed var(--line);
+  background: transparent;
+  border: 1px dashed var(--line);
   color: var(--readable-muted);
 }
 .sample-cell.is-pending,
 .sample-cell.is-missing {
+  background: transparent;
+  border: 1px dashed var(--line-2);
   color: var(--readable-muted);
   cursor: default;
 }
