@@ -302,3 +302,221 @@ test('selecting a child run under an active task skips task detail refetch, dedu
     await reopenInvalidated;
     expect(f.requests.slice(beforeInvalidated)).toEqual(['./api/bench/runs/child?omit_provenance=1']);
 });
+
+test('terminal child run cache matches scalar child summary against run detail baseline_targets and invalidates on baseline change', async () => {
+    const f = fixture();
+    await f.refresh();
+    const ts = '2026-11-25T06:00:00.000Z';
+    f.state.tasks[0].updated_at = ts;
+    f.state.tasks[0].children[0] = {
+        run_id: 'child',
+        target: { id: 'target-a', model: 'model' },
+        status: 'completed',
+        updated_at: ts,
+        baseline_eligible: true,
+        ineligibility_reason: null,
+        baseline_id: null
+    };
+    f.state.tasks[0].children[1] = {
+        run_id: 'other',
+        target: { id: 'target-b', model: 'model' },
+        status: 'completed',
+        updated_at: ts,
+        baseline_eligible: true,
+        ineligibility_reason: null,
+        baseline_id: null
+    };
+
+    const resolveChild = f.defer('./api/bench/runs/child?omit_provenance=1');
+    const openChild = f.click('bench-task-detail', { childRunId: 'child' });
+    resolveChild({
+        id: 'child',
+        task_id: 'task',
+        status: 'completed',
+        updated_at: ts,
+        baseline_eligible: true,
+        ineligibility_reason: null,
+        baseline_id: null,
+        baseline_targets: [{ target_id: 'target-a', baseline_eligible: true, ineligibility_reason: null, baseline_id: null }],
+        samples: []
+    });
+    await openChild;
+
+    // Background polling must not refetch the unchanged terminal child detail.
+    const beforePoll = f.requests.length;
+    await f.refreshHistory(false);
+    expect(f.requests.slice(beforePoll)).toEqual(['./api/bench/tasks', './api/bench/runs']);
+
+    // Switching away and reopening must hit the terminal run cache.
+    const resolveOther = f.defer('./api/bench/runs/other?omit_provenance=1');
+    const openOther = f.click('bench-task-detail', { childRunId: 'other' });
+    resolveOther({
+        id: 'other',
+        task_id: 'task',
+        status: 'completed',
+        updated_at: ts,
+        baseline_targets: [{ target_id: 'target-b', baseline_eligible: true, ineligibility_reason: null, baseline_id: null }],
+        samples: []
+    });
+    await openOther;
+    const beforeReopen = f.requests.length;
+    await f.click('bench-task-detail', { childRunId: 'child' });
+    expect(f.requests.slice(beforeReopen)).toEqual([]);
+
+    // Changing baseline_id on the child summary invalidates the cache on next open.
+    const baselineId = 'a'.repeat(64);
+    f.state.tasks[0].children[0].baseline_id = baselineId;
+    await f.click('bench-task-detail', { childRunId: 'other' });
+    const beforeInvalidated = f.requests.length;
+    const resolvePromoted = f.defer('./api/bench/runs/child?omit_provenance=1');
+    const reopenPromoted = f.click('bench-task-detail', { childRunId: 'child' });
+    resolvePromoted({
+        id: 'child',
+        task_id: 'task',
+        status: 'completed',
+        updated_at: ts,
+        baseline_eligible: true,
+        ineligibility_reason: null,
+        baseline_id: baselineId,
+        baseline_targets: [{ target_id: 'target-a', baseline_eligible: true, ineligibility_reason: null, baseline_id: baselineId }],
+        samples: []
+    });
+    await reopenPromoted;
+    expect(f.requests.slice(beforeInvalidated)).toEqual(['./api/bench/runs/child?omit_provenance=1']);
+    expect(f.state.runDetail.baseline_id).toBe(baselineId);
+});
+
+test('bulk baseline promote and demote split requests into 256-item batches and refresh after partial failure', async () => {
+    const nodes = new Map(),
+        events = new Map(),
+        emitted = [],
+        notices = [],
+        batchBodies = [];
+    const element = id => {
+        if (!nodes.has(id))
+            nodes.set(id, {
+                handlers: new Map(),
+                dataset: {},
+                addEventListener(name, handler) {
+                    this.handlers.set(name, handler);
+                },
+                getAttribute: () => null,
+                contains: () => false
+            });
+        return nodes.get(id);
+    };
+    const total = 300;
+    const tasks = [
+        {
+            id: 'big-task',
+            status: 'completed',
+            children: Array.from({ length: total }, (_, index) => ({
+                run_id: index.toString(16).padStart(32, '0'),
+                target: { id: `target-${index}`, model: 'model' },
+                status: 'completed',
+                baseline_eligible: true,
+                ineligibility_reason: null,
+                baseline_id: null
+            }))
+        }
+    ];
+    let failOnSecondDeleteBatch = false;
+    let deleteBatchCalls = 0;
+    const app = {
+        services: {
+            available: true,
+            notify: (message, isError = false) => notices.push({ message, isError }),
+            request: async (path, options) => {
+                const basePath = path.split('?')[0];
+                if (basePath.endsWith('/banks')) return { banks: [], execution_policy: 'sample-timeout-v1' };
+                if (basePath.endsWith('/routes')) return { routes: [] };
+                if (basePath.endsWith('/tasks')) return { tasks };
+                if (basePath.endsWith('/runs')) return { runs: [] };
+                if (basePath.endsWith('/baselines/batch') && options?.method === 'POST') {
+                    const body = JSON.parse(options.body);
+                    batchBodies.push(body);
+                    if (body.action === 'promote') {
+                        expect(body.items.length).toBeLessThanOrEqual(256);
+                        const created = body.items.map((item, idx) => {
+                            const id = (batchBodies.length * 1000 + idx).toString(16).padStart(64, '0');
+                            const child = tasks[0].children.find(c => c.run_id === item.run_id);
+                            if (child) child.baseline_id = id;
+                            return { id, run_id: item.run_id, target_id: item.target_id };
+                        });
+                        return { created, rejected: [] };
+                    }
+                    if (body.action === 'delete') {
+                        deleteBatchCalls++;
+                        expect(body.ids.length).toBeLessThanOrEqual(256);
+                        if (failOnSecondDeleteBatch && deleteBatchCalls === 2) throw new Error('disk busy');
+                        const deletedSet = new Set(body.ids);
+                        for (const child of tasks[0].children) {
+                            if (deletedSet.has(child.baseline_id)) child.baseline_id = null;
+                        }
+                        return { deleted: body.ids };
+                    }
+                }
+                return {};
+            }
+        },
+        on: (name, handler) => events.set(name, handler),
+        emit: name => emitted.push(name),
+        setHistory() {},
+        setTaskRoutes() {}
+    };
+    const context = vm.createContext({
+        getAppContext: () => app,
+        createTaskTargets() {},
+        createTaskHistoryView: () => ({
+            element,
+            historyEntries: () => tasks.map(record => ({ kind: 'task', record })),
+            renderDetails() {},
+            inProgress: () => false,
+            canCancel: () => false,
+            fixedTargets: () => [],
+            taskSection: element('task-section'),
+            runSection: element('run-section')
+        }),
+        createTaskSubmission: () => ({ updateTaskPreview() {}, renderBanks() {} }),
+        clearTimeout() {},
+        setTimeout() {}
+    });
+    vm.runInContext(
+        readFileSync(new URL('../web/bench.js', import.meta.url), 'utf8')
+            .replace(/^import .*;\n/gm, '')
+            .replace('if (available) load();', ''),
+        context
+    );
+    await events.get('mini-bench:refresh')();
+
+    // Promote 300 eligible children -> split into [256, 44]
+    await element('bench-baseline-task').handlers.get('click')({ currentTarget: element('bench-baseline-task') });
+    expect(batchBodies.map(body => ({ action: body.action, size: body.items.length }))).toEqual([
+        { action: 'promote', size: 256 },
+        { action: 'promote', size: 44 }
+    ]);
+    expect(tasks[0].children.every(child => Boolean(child.baseline_id))).toBe(true);
+    expect(emitted.filter(name => name === 'mini-bench:observations-changed')).toHaveLength(1);
+    expect(notices.at(-1)).toEqual({ message: '已将 300 个运行目标保存为 Mini Bench 基线。', isError: false });
+
+    // Demote 300 saved baselines -> split into [256, 44], with second batch failing
+    batchBodies.length = 0;
+    failOnSecondDeleteBatch = true;
+    await element('bench-unbaseline-task').handlers.get('click')({});
+    expect(batchBodies.map(body => ({ action: body.action, size: body.ids.length }))).toEqual([
+        { action: 'delete', size: 256 },
+        { action: 'delete', size: 44 }
+    ]);
+    expect(tasks[0].children.filter(child => Boolean(child.baseline_id))).toHaveLength(44);
+    expect(emitted.filter(name => name === 'mini-bench:observations-changed')).toHaveLength(2);
+    expect(notices.at(-1)).toEqual({ message: '部分取消基线失败（已取消 256 份）：disk busy', isError: true });
+
+    // Demote remaining 44 -> single batch succeeds
+    batchBodies.length = 0;
+    failOnSecondDeleteBatch = false;
+    deleteBatchCalls = 0;
+    await element('bench-unbaseline-task').handlers.get('click')({});
+    expect(batchBodies.map(body => ({ action: body.action, size: body.ids.length }))).toEqual([{ action: 'delete', size: 44 }]);
+    expect(tasks[0].children.every(child => !child.baseline_id)).toBe(true);
+    expect(notices.at(-1)).toEqual({ message: '已取消 44 份基线标记，原始运行记录已保留。', isError: false });
+});
