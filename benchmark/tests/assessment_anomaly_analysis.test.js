@@ -372,4 +372,51 @@ describe('analyzeAnomalies', () => {
         expect(accountItem.recordIds).toHaveLength(1);
         expect(accountItem.referenceIds).toEqual(expect.arrayContaining(['codex-ok-1', 'codex-ok-2', 'codex-ok-3', 'codex-ok-4']));
     });
+
+    test('merges duplicate baseline and peer anomalies for the same entity, model, and metric into one item with combined references', () => {
+        const baseline = makeRecord({
+            id: 'base-1',
+            source: 'baseline',
+            provider: 'official',
+            model: 'gpt-6.2-astra',
+            modelDisplayName: 'GPT-6.2-Astra',
+            think: 'medium',
+            score: 96.9,
+            costPerRound: 0.1
+        });
+        const peers = [1, 2, 3, 4].map(i =>
+            makeRecord({
+                id: `peer-${i}`,
+                provider: 'codex',
+                account: `ok-${i}@example.com`,
+                accountEvidence: 'gateway_account_binding',
+                model: 'gpt-6.2-astra',
+                modelDisplayName: 'GPT-6.2-Astra',
+                think: 'medium',
+                score: 95.4,
+                costPerRound: 0.11
+            })
+        );
+        const bad = makeRecord({
+            id: 'bad-acc',
+            provider: 'codex',
+            account: 'bad@example.com',
+            accountEvidence: 'gateway_account_binding',
+            model: 'gpt-6.2-astra',
+            modelDisplayName: 'GPT-6.2-Astra',
+            think: 'medium',
+            score: 54.2,
+            costPerRound: 0.11
+        });
+
+        const res = analyzeAnomalies([...peers, bad], { baselinePool: [baseline, ...peers, bad] });
+        const accGroup = res.groups.find(g => g.kind === 'account' && g.accountRaw === 'bad@example.com');
+        expect(accGroup).toBeDefined();
+        expect(accGroup.items).toHaveLength(1);
+        expect(accGroup.metrics.score).toBe(1);
+        expect(accGroup.items[0].refContext).toBe('基线');
+        expect(accGroup.items[0].comparisons).toHaveLength(2);
+        expect(accGroup.items[0].comparisons.map(c => c.refContext)).toEqual(['基线', '同渠道 4 账号']);
+        expect(accGroup.items[0].referenceIds).toEqual(expect.arrayContaining(['base-1', 'peer-1', 'peer-2', 'peer-3', 'peer-4']));
+    });
 });

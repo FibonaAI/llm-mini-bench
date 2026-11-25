@@ -12,10 +12,11 @@ import { analyzeAnomalies } from './anomaly-analysis.js';
 
 const app = getAppContext();
 const { byId: element, escapeHtml, finite, request, notify, available, formatDate } = app.services;
-const DEFAULT_INSIGHT_GROUP_LIMIT = 4;
+const DEFAULT_INSIGHT_GROUP_LIMIT = 8;
 const INSIGHT_GROUP_STEP = 12;
-const DEFAULT_ITEMS_PER_GROUP = 3;
+const DEFAULT_ITEMS_PER_GROUP = 5;
 const ITEMS_PER_GROUP_STEP = 15;
+const AUTO_EXPAND_GROUP_MAX = 3;
 let insightsCollapsible = false;
 const state = {
   observations: [],
@@ -27,7 +28,10 @@ const state = {
   disclosure: null,
   disclosureLimit: 80,
   insightsCollapsed: false,
+  insightMetricFilter: 'all',
+  insightSearch: '',
   insightGroupLimit: DEFAULT_INSIGHT_GROUP_LIMIT,
+  insightGroupOpen: new Map(),
   insightGroupItemLimits: new Map(),
   activeInsightId: null,
   activeInsightHighlight: null,
@@ -279,6 +283,37 @@ function findInsightItem(records, itemId) {
   return null;
 }
 
+function filterInsightGroups(groups) {
+  const metricFilter = state.insightMetricFilter || 'all';
+  const query = (state.insightSearch || '').trim().toLocaleLowerCase();
+  const filtered = [];
+  for (const group of groups) {
+    const groupText =
+      `${group.accountRaw || ''} ${group.providerLabel || ''} ${group.kind === 'account' ? '账号' : '渠道'}`.toLocaleLowerCase();
+    const groupMatchesQuery = !query || groupText.includes(query);
+    const items = group.items.filter(item => {
+      if (metricFilter !== 'all' && item.metric !== metricFilter) return false;
+      if (!query || groupMatchesQuery) return true;
+      const itemText = `${item.modelName || ''} ${item.thinkLabel || ''} ${item.refContext || ''}`.toLocaleLowerCase();
+      return itemText.includes(query);
+    });
+    if (!items.length) continue;
+    const metrics = { score: 0, cost: 0, duration: 0 };
+    for (const item of items) {
+      if (item.metric in metrics) metrics[item.metric]++;
+    }
+    filtered.push({ ...group, items, metrics });
+  }
+  return filtered;
+}
+
+function isInsightGroupOpen(group, totalVisibleGroups) {
+  if (state.insightGroupOpen.has(group.id)) return Boolean(state.insightGroupOpen.get(group.id));
+  if (state.activeInsightId && group.items.some(item => item.id === state.activeInsightId)) return true;
+  if ((state.insightSearch || '').trim()) return true;
+  return totalVisibleGroups <= AUTO_EXPAND_GROUP_MAX;
+}
+
 function renderInsights(records) {
   const panel = element('analysis-insights');
   if (!panel) return;
@@ -300,6 +335,10 @@ function renderInsights(records) {
   const activeEl = element('analysis-insights-active');
   const toggleHintEl = element('analysis-insights-toggle-hint');
   const bodyEl = element('analysis-insights-body');
+  const toolbarEl = element('analysis-insights-toolbar');
+  const filtersEl = element('analysis-insights-filters');
+  const searchEl = /** @type {HTMLInputElement | null} */ (element('analysis-insights-search'));
+  const toggleAllEl = element('analysis-insights-toggle-all');
   const countEl = element('analysis-insights-count');
   const metaEl = element('analysis-insights-meta');
   const listEl = element('analysis-insights-list');
@@ -319,6 +358,7 @@ function renderInsights(records) {
     activeEl.textContent = '';
     toggleHintEl.hidden = true;
     bodyEl.hidden = true;
+    if (toolbarEl) toolbarEl.hidden = true;
     countEl.textContent = '未发现显著异常';
     countEl.className = 'insight-count is-clean';
     listEl.innerHTML = '';
@@ -342,25 +382,73 @@ function renderInsights(records) {
   for (const key of state.insightGroupItemLimits.keys()) {
     if (!validGroupIds.has(key)) state.insightGroupItemLimits.delete(key);
   }
+  for (const key of state.insightGroupOpen.keys()) {
+    if (!validGroupIds.has(key)) state.insightGroupOpen.delete(key);
+  }
+
+  const metricTotals = { all: 0, score: 0, cost: 0, duration: 0 };
+  for (const group of groups) {
+    metricTotals.all += group.items.length;
+    metricTotals.score += group.metrics.score || 0;
+    metricTotals.cost += group.metrics.cost || 0;
+    metricTotals.duration += group.metrics.duration || 0;
+  }
+  if (state.insightMetricFilter !== 'all' && !metricTotals[state.insightMetricFilter]) {
+    state.insightMetricFilter = 'all';
+  }
 
   const hasHigh = findings.some(item => item.severity === 'high');
   const channelGroupCount = groups.filter(group => group.kind === 'channel').length;
   const accountGroupCount = groups.filter(group => group.kind === 'account').length;
-  const totalItems = groups.reduce((sum, group) => sum + group.items.length, 0);
   const countParts = [];
   if (channelGroupCount > 0) countParts.push(`${channelGroupCount} 渠道`);
   if (accountGroupCount > 0) countParts.push(`${accountGroupCount} 账号`);
-  countParts.push(`${totalItems} 项异常`);
+  countParts.push(`${metricTotals.all} 项异常`);
   countEl.textContent = countParts.join(' · ');
   countEl.className = `insight-count${hasHigh ? ' is-high' : ''}`;
 
+  const filteredGroups = filterInsightGroups(groups);
   const groupLimit = Math.max(DEFAULT_INSIGHT_GROUP_LIMIT, state.insightGroupLimit);
-  const visibleGroups = groups.length <= groupLimit ? groups : groups.slice(0, groupLimit);
+  const visibleGroups = filteredGroups.length <= groupLimit ? filteredGroups : filteredGroups.slice(0, groupLimit);
   const metricLabel = metric => (metric === 'score' ? '能力偏低' : metric === 'cost' ? '成本偏高' : '耗时偏慢');
+
+  const showToolbar = groups.length > 1 || metricTotals.all > 3 || Boolean((state.insightSearch || '').trim());
+  if (toolbarEl) {
+    toolbarEl.hidden = !showToolbar;
+    if (showToolbar && filtersEl) {
+      const pills = [
+        { key: 'all', label: `全部 ${metricTotals.all}` },
+        metricTotals.score > 0 ? { key: 'score', label: `能力偏低 ${metricTotals.score}` } : null,
+        metricTotals.cost > 0 ? { key: 'cost', label: `成本偏高 ${metricTotals.cost}` } : null,
+        metricTotals.duration > 0 ? { key: 'duration', label: `耗时偏慢 ${metricTotals.duration}` } : null
+      ].filter(Boolean);
+      filtersEl.innerHTML = pills
+        .map(pill => {
+          const pressed = state.insightMetricFilter === pill.key;
+          return `<button class="insight-filter-pill is-${pill.key}${pressed ? ' is-active' : ''}" type="button" data-insight-metric="${pill.key}" aria-pressed="${pressed ? 'true' : 'false'}">${pill.label}</button>`;
+        })
+        .join('');
+    }
+    if (searchEl && searchEl.value !== state.insightSearch) searchEl.value = state.insightSearch;
+    if (toggleAllEl) {
+      const allOpen = visibleGroups.length > 0 && visibleGroups.every(group => isInsightGroupOpen(group, visibleGroups.length));
+      toggleAllEl.hidden = visibleGroups.length <= 1;
+      toggleAllEl.setAttribute('aria-expanded', allOpen ? 'true' : 'false');
+      toggleAllEl.textContent = allOpen ? '全部收起' : '全部展开';
+    }
+  }
+
   const prevScrollTop = listEl.scrollTop || 0;
+  if (!visibleGroups.length) {
+    listEl.innerHTML = '<div class="insight-empty muted">当前筛选条件下无匹配异常</div>';
+    moreEl.hidden = true;
+    moreEl.innerHTML = '';
+    return;
+  }
 
   listEl.innerHTML = visibleGroups
     .map(group => {
+      const open = isInsightGroupOpen(group, visibleGroups.length);
       const itemLimit = state.insightGroupItemLimits.get(group.id) ?? DEFAULT_ITEMS_PER_GROUP;
       const visibleItems = group.items.length <= itemLimit ? group.items : group.items.slice(0, itemLimit);
       const remainingItems = group.items.length - visibleItems.length;
@@ -368,6 +456,10 @@ function renderInsights(records) {
         group.kind === 'account'
           ? `<span class="insight-scope is-account">账号</span><span class="insight-target insight-account">${escapeHtml(group.accountRaw)}</span><span class="insight-group-sub">· ${escapeHtml(group.providerLabel)}</span>`
           : `<span class="insight-scope is-channel">渠道</span><span class="insight-target">${escapeHtml(group.providerLabel)}</span><span class="insight-group-sub">${group.accountCount > 1 ? `整渠道（${group.accountCount} 个账号）` : '整渠道'}</span>`;
+      const lead = group.items[0];
+      const leadHtml = lead
+        ? `<span class="insight-group-lead" title="${escapeHtml(`${lead.modelName} · ${lead.thinkLabel} ${lead.deltaText}`)}">${escapeHtml(lead.modelName)} <strong class="insight-delta is-${escapeHtml(lead.metric)}">${escapeHtml(lead.deltaText)}</strong></span>`
+        : '';
       const badges = [];
       if (group.metrics.score > 0) badges.push(`<span class="insight-badge is-score">能力偏低 ${group.metrics.score}</span>`);
       if (group.metrics.cost > 0) badges.push(`<span class="insight-badge is-cost">成本偏高 ${group.metrics.cost}</span>`);
@@ -377,7 +469,13 @@ function renderInsights(records) {
           const active = state.activeInsightId
             ? state.activeInsightId === item.id
             : Boolean(state.selectedId && item.primaryRecordId === state.selectedId);
-          return `<button class="insight-row${active ? ' is-active' : ''}" type="button" data-insight-record="${escapeHtml(item.primaryRecordId)}" data-insight-item="${escapeHtml(item.id)}" aria-pressed="${active ? 'true' : 'false'}"><span class="insight-badge is-${escapeHtml(item.metric)}">${metricLabel(item.metric)}</span><span class="insight-model"><span class="insight-model-name">${escapeHtml(item.modelName)}</span><span class="insight-model-think"> · ${escapeHtml(item.thinkLabel)}</span></span><span class="insight-compare"><strong class="insight-val">${escapeHtml(item.valueText)}</strong><span class="insight-vs"> vs </span><span class="insight-ref-val">${escapeHtml(item.refText)}</span><span class="insight-delta is-${escapeHtml(item.metric)}">${escapeHtml(item.deltaText)}</span></span><span class="insight-ref-ctx" title="对照 ${escapeHtml(item.refContext)}">对照 ${escapeHtml(item.refContext)}</span><span class="insight-locate">${active ? '已定位 ×' : '定位 →'}</span></button>`;
+          const extraRefs = Array.isArray(item.comparisons) && item.comparisons.length > 1 ? item.comparisons.slice(1) : [];
+          const refLabel = extraRefs.length ? `${item.refContext} +${extraRefs.length}` : item.refContext;
+          const refTitle =
+            Array.isArray(item.comparisons) && item.comparisons.length > 1
+              ? item.comparisons.map(c => `对照 ${c.refContext}：${c.valueText} vs ${c.refText}（${c.deltaText}）`).join('；')
+              : `对照 ${item.refContext}`;
+          return `<button class="insight-row${active ? ' is-active' : ''}" type="button" data-insight-record="${escapeHtml(item.primaryRecordId)}" data-insight-item="${escapeHtml(item.id)}" aria-pressed="${active ? 'true' : 'false'}"><span class="insight-badge is-${escapeHtml(item.metric)}">${metricLabel(item.metric)}</span><span class="insight-model"><span class="insight-model-name">${escapeHtml(item.modelName)}</span><span class="insight-model-think"> · ${escapeHtml(item.thinkLabel)}</span></span><span class="insight-compare"><strong class="insight-val">${escapeHtml(item.valueText)}</strong><span class="insight-vs"> vs </span><span class="insight-ref-val">${escapeHtml(item.refText)}</span><span class="insight-delta is-${escapeHtml(item.metric)}">${escapeHtml(item.deltaText)}</span></span><span class="insight-ref-ctx" title="${escapeHtml(refTitle)}">对照 ${escapeHtml(refLabel)}</span><span class="insight-locate">${active ? '已定位 ×' : '定位 →'}</span></button>`;
         })
         .join('');
       let expandHtml = '';
@@ -404,22 +502,24 @@ function renderInsights(records) {
         }
         expandHtml = `<div class="insight-group-actions">${actions.join('')}</div>`;
       }
-      return `<div class="insight-group is-${group.kind}"><div class="insight-group-head"><div class="insight-group-ident">${identHtml}</div><div class="insight-group-badges">${badges.join('')}</div></div><div class="insight-group-rows">${rowsHtml}</div>${expandHtml}</div>`;
+      return `<details class="insight-group is-${group.kind}" data-insight-group="${escapeHtml(group.id)}"${open ? ' open' : ''}><summary class="insight-group-head"><div class="insight-group-ident">${identHtml}</div><div class="insight-group-summary-side">${leadHtml}<div class="insight-group-badges">${badges.join('')}</div></div></summary><div class="insight-group-content"><div class="insight-group-rows">${rowsHtml}</div>${expandHtml}</div></details>`;
     })
     .join('');
   if (prevScrollTop > 0) listEl.scrollTop = prevScrollTop;
 
-  if (groups.length > DEFAULT_INSIGHT_GROUP_LIMIT) {
-    const remainingGroups = groups.length - visibleGroups.length;
+  if (filteredGroups.length > DEFAULT_INSIGHT_GROUP_LIMIT) {
+    const remainingGroups = filteredGroups.length - visibleGroups.length;
     const buttons = [];
     if (remainingGroups > 0) {
       const moreLabel =
         remainingGroups <= INSIGHT_GROUP_STEP
           ? `展开其余 ${remainingGroups} 个主体`
-          : `展开更多主体（已显示 ${visibleGroups.length} / ${groups.length}）`;
+          : `展开更多主体（已显示 ${visibleGroups.length} / ${filteredGroups.length}）`;
       buttons.push(`<button class="text-control" type="button" data-insight-toggle="more">${moreLabel}</button>`);
       if (remainingGroups > INSIGHT_GROUP_STEP) {
-        buttons.push(`<button class="text-control" type="button" data-insight-toggle="all">展开全部 ${groups.length} 个主体</button>`);
+        buttons.push(
+          `<button class="text-control" type="button" data-insight-toggle="all">展开全部 ${filteredGroups.length} 个主体</button>`
+        );
       }
     }
     if (visibleGroups.length > DEFAULT_INSIGHT_GROUP_LIMIT) {
@@ -609,6 +709,15 @@ element('analysis-view').addEventListener('click', async event => {
     dataPopover.position();
     return;
   }
+  const insightMetric = event.target.closest('[data-insight-metric]');
+  if (insightMetric) {
+    const nextMetric = insightMetric.dataset.insightMetric || 'all';
+    state.insightMetricFilter = state.insightMetricFilter === nextMetric && nextMetric !== 'all' ? 'all' : nextMetric;
+    state.insightGroupLimit = DEFAULT_INSIGHT_GROUP_LIMIT;
+    element('analysis-insights-list').scrollTop = 0;
+    renderInsights(matchingRecords());
+    return;
+  }
   const insightToggle = event.target.closest('[data-insight-toggle]');
   if (insightToggle) {
     const action = insightToggle.dataset.insightToggle;
@@ -696,6 +805,42 @@ element('analysis-view').addEventListener('click', async event => {
   const demote = event.target.closest('[data-demote-baseline-id]');
   if (demote) await demoteObservationBaseline(demote.dataset.demoteBaselineId);
 });
+element('analysis-insights-search')?.addEventListener('input', event => {
+  state.insightSearch = String(/** @type {HTMLInputElement} */ (event.target).value || '');
+  state.insightGroupLimit = DEFAULT_INSIGHT_GROUP_LIMIT;
+  element('analysis-insights-list').scrollTop = 0;
+  renderInsights(matchingRecords());
+});
+element('analysis-insights-toggle-all')?.addEventListener('click', () => {
+  const records = matchingRecords();
+  const filteredGroups = filterInsightGroups(currentInsights(records).groups || []);
+  const groupLimit = Math.max(DEFAULT_INSIGHT_GROUP_LIMIT, state.insightGroupLimit);
+  const visibleGroups = filteredGroups.length <= groupLimit ? filteredGroups : filteredGroups.slice(0, groupLimit);
+  if (!visibleGroups.length) return;
+  const allOpen = visibleGroups.every(group => isInsightGroupOpen(group, visibleGroups.length));
+  const nextOpen = !allOpen;
+  for (const group of visibleGroups) state.insightGroupOpen.set(group.id, nextOpen);
+  renderInsights(records);
+});
+element('analysis-insights-list')?.addEventListener(
+  'toggle',
+  event => {
+    const target = event.target;
+    const groupId = target?.dataset?.insightGroup;
+    if (!groupId) return;
+    state.insightGroupOpen.set(groupId, Boolean(target.open));
+    const toggleAllEl = element('analysis-insights-toggle-all');
+    if (toggleAllEl) {
+      const filteredGroups = filterInsightGroups(currentInsights(matchingRecords()).groups || []);
+      const groupLimit = Math.max(DEFAULT_INSIGHT_GROUP_LIMIT, state.insightGroupLimit);
+      const visibleGroups = filteredGroups.length <= groupLimit ? filteredGroups : filteredGroups.slice(0, groupLimit);
+      const allOpen = visibleGroups.length > 0 && visibleGroups.every(group => isInsightGroupOpen(group, visibleGroups.length));
+      toggleAllEl.setAttribute('aria-expanded', allOpen ? 'true' : 'false');
+      toggleAllEl.textContent = allOpen ? '全部收起' : '全部展开';
+    }
+  },
+  true
+);
 element('analysis-insights-summary').addEventListener('click', event => {
   if (!insightsCollapsible) {
     event.preventDefault();

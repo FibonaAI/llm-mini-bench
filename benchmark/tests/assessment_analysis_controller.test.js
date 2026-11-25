@@ -431,18 +431,24 @@ test('anomaly insights support collapsing, clean-state guard, progressive pagina
     await app.emit('mini-bench:refresh');
 
     const countGroups = html => (html.match(/class="insight-group /g) || []).length;
+    const countOpenGroups = html => (html.match(/<details class="insight-group [^>]* open>/g) || []).length;
     expect(element('analysis-insights-disclosure').open).toBe(true);
     expect(element('analysis-insights-summary').getAttribute('aria-disabled')).toBeNull();
     expect(element('analysis-insights-toggle-hint').textContent).toBe('收起');
-    expect(countGroups(element('analysis-insights-list').innerHTML)).toBe(4);
-    expect(element('analysis-insights-more').innerHTML).toContain('展开更多主体（已显示 4 / 21）');
+    expect(countGroups(element('analysis-insights-list').innerHTML)).toBe(8);
+    // High-volume lists start collapsed per subject so users scan compact headers first
+    expect(countOpenGroups(element('analysis-insights-list').innerHTML)).toBe(0);
+    expect(element('analysis-insights-toolbar').hidden).toBe(false);
+    expect(element('analysis-insights-toggle-all').textContent).toBe('全部展开');
+    expect(element('analysis-insights-more').innerHTML).toContain('展开更多主体（已显示 8 / 21）');
     expect(element('analysis-insights-more').innerHTML).toContain('展开全部 21 个主体');
 
-    // Stepwise group pagination: 4 -> 16 -> 21 -> reset(4)
+    // Metric pill filtering and search filtering
     const clickView = attrs =>
         element('analysis-view').handlers.get('click')({
             target: {
                 closest: selector => {
+                    if (selector === '[data-insight-metric]' && attrs.insightMetric !== undefined) return { dataset: attrs };
                     if (selector === '[data-insight-toggle]' && attrs.insightToggle !== undefined) return { dataset: attrs };
                     if (selector === '[data-insight-group-toggle]' && attrs.insightGroupToggle !== undefined) return { dataset: attrs };
                     if (selector === '[data-insight-record]' && attrs.insightRecord !== undefined) return { dataset: attrs };
@@ -451,9 +457,29 @@ test('anomaly insights support collapsing, clean-state guard, progressive pagina
             }
         });
 
+    await clickView({ insightMetric: 'cost' });
+    expect(element('analysis-insights-list').innerHTML).not.toContain('degraded-channel');
+    await clickView({ insightMetric: 'all' });
+
+    element('analysis-insights-search').value = 'degraded-channel';
+    element('analysis-insights-search').emit('input');
+    expect(countGroups(element('analysis-insights-list').innerHTML)).toBe(1);
+    expect(countOpenGroups(element('analysis-insights-list').innerHTML)).toBe(1);
+    element('analysis-insights-search').value = '';
+    element('analysis-insights-search').emit('input');
+
+    // Expand all / collapse all visible subjects
+    element('analysis-insights-toggle-all').emit('click');
+    expect(countOpenGroups(element('analysis-insights-list').innerHTML)).toBe(8);
+    expect(element('analysis-insights-toggle-all').textContent).toBe('全部收起');
+    element('analysis-insights-toggle-all').emit('click');
+    expect(countOpenGroups(element('analysis-insights-list').innerHTML)).toBe(0);
+    expect(element('analysis-insights-toggle-all').textContent).toBe('全部展开');
+
+    // Stepwise group pagination: 8 -> 20 -> 21 -> reset(8)
     await clickView({ insightToggle: 'more' });
-    expect(countGroups(element('analysis-insights-list').innerHTML)).toBe(16);
-    expect(element('analysis-insights-more').innerHTML).toContain('展开其余 5 个主体');
+    expect(countGroups(element('analysis-insights-list').innerHTML)).toBe(20);
+    expect(element('analysis-insights-more').innerHTML).toContain('展开其余 1 个主体');
     expect(element('analysis-insights-more').innerHTML).toContain('收起部分主体');
 
     element('analysis-insights-list').scrollTop = 180;
@@ -461,17 +487,17 @@ test('anomaly insights support collapsing, clean-state guard, progressive pagina
     expect(countGroups(element('analysis-insights-list').innerHTML)).toBe(21);
     expect(element('analysis-insights-list').scrollTop).toBe(180);
 
-    // Per-group item pagination on the 44-item channel group: 3 -> 18 -> 44 -> reset(3)
+    // Per-group item pagination on the deduplicated 22-item channel group: 5 -> 20 -> 22 -> reset(5)
     const channelGroupId = 'channel:provider:degraded-channel';
-    expect(element('analysis-insights-list').innerHTML).toContain('继续展开（已显示 3 / 44 项）');
-    expect(element('analysis-insights-list').innerHTML).toContain('展开全部 44 项');
+    expect(element('analysis-insights-list').innerHTML).toContain('继续展开（已显示 5 / 22 项）');
+    expect(element('analysis-insights-list').innerHTML).toContain('展开全部 22 项');
     await clickView({ insightGroupToggle: channelGroupId, insightGroupStep: 'more' });
-    expect(element('analysis-insights-list').innerHTML).toContain('继续展开（已显示 18 / 44 项）');
+    expect(element('analysis-insights-list').innerHTML).toContain('展开其余 2 项');
     expect(element('analysis-insights-list').innerHTML).toContain('收起明细');
     await clickView({ insightGroupToggle: channelGroupId, insightGroupStep: 'all' });
-    expect((element('analysis-insights-list').innerHTML.match(/ChModel-/g) || []).length).toBe(44);
+    expect((element('analysis-insights-list').innerHTML.match(/data-insight-item="[^"]*degraded-channel/g) || []).length).toBe(22);
     await clickView({ insightGroupToggle: channelGroupId, insightGroupStep: 'reset' });
-    expect((element('analysis-insights-list').innerHTML.match(/ChModel-/g) || []).length).toBe(3);
+    expect((element('analysis-insights-list').innerHTML.match(/data-insight-item="[^"]*degraded-channel/g) || []).length).toBe(5);
 
     // Select an insight item, collapse panel, verify state persists across redraws, and Escape clears highlight
     const itemMatch = /data-insight-record="([^"]+)" data-insight-item="([^"]+)"/.exec(element('analysis-insights-list').innerHTML);
@@ -496,7 +522,7 @@ test('anomaly insights support collapsing, clean-state guard, progressive pagina
     expect(element('analysis-insights-active').hidden).toBe(true);
 
     await clickView({ insightToggle: 'reset' });
-    expect(countGroups(element('analysis-insights-list').innerHTML)).toBe(4);
+    expect(countGroups(element('analysis-insights-list').innerHTML)).toBe(8);
     expect(element('analysis-insights-list').scrollTop).toBe(0);
 });
 

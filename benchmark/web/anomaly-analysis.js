@@ -982,6 +982,64 @@ export function analyzeAnomalies(records, { baselinePool = null } = {}) {
   }
 
   const groups = [...groupMap.values()].map(group => {
+    // Merge items that refer to the exact same (metric, modelKey, primaryRecordId) from different
+    // comparison methods (e.g. baseline + within-channel account peers) so one model config is not
+    // duplicated across multiple rows inside the same subject card.
+    const mergedByKey = new Map();
+    for (const item of group.items) {
+      const mergeKey = `${item.metric}::${item.modelKey}::${item.primaryRecordId}`;
+      const existing = mergedByKey.get(mergeKey);
+      if (!existing) {
+        mergedByKey.set(mergeKey, {
+          ...item,
+          recordIds: [...item.recordIds],
+          referenceIds: [...item.referenceIds],
+          comparisons: [
+            {
+              method: item.method,
+              valueText: item.valueText,
+              refText: item.refText,
+              refContext: item.refContext,
+              deltaText: item.deltaText,
+              magnitude: item.magnitude
+            }
+          ]
+        });
+        continue;
+      }
+      const better =
+        (item.severity === 'high' && existing.severity !== 'high') ||
+        (item.severity === existing.severity && item.magnitude > existing.magnitude);
+      const nextComparisons = [...existing.comparisons];
+      if (!nextComparisons.some(c => c.refContext === item.refContext && c.refText === item.refText)) {
+        nextComparisons.push({
+          method: item.method,
+          valueText: item.valueText,
+          refText: item.refText,
+          refContext: item.refContext,
+          deltaText: item.deltaText,
+          magnitude: item.magnitude
+        });
+      }
+      nextComparisons.sort((a, b) => b.magnitude - a.magnitude || a.refContext.localeCompare(b.refContext));
+      const mergedRecordIds = [...new Set([...existing.recordIds, ...item.recordIds])];
+      const mergedRefIds = [...new Set([...existing.referenceIds, ...item.referenceIds])];
+      const primary = better ? item : existing;
+      mergedByKey.set(mergeKey, {
+        ...primary,
+        severity: existing.severity === 'high' || item.severity === 'high' ? 'high' : primary.severity,
+        magnitude: Math.max(existing.magnitude, item.magnitude),
+        recordIds: mergedRecordIds,
+        referenceIds: mergedRefIds,
+        primaryRecordId: primary.primaryRecordId,
+        comparisons: nextComparisons
+      });
+    }
+    group.items = [...mergedByKey.values()];
+    group.metrics = { score: 0, cost: 0, duration: 0 };
+    for (const item of group.items) {
+      if (item.metric in group.metrics) group.metrics[item.metric]++;
+    }
     group.items.sort((a, b) => {
       if (a.severity !== b.severity) return a.severity === 'high' ? -1 : 1;
       if (metricRank[a.metric] !== metricRank[b.metric]) return metricRank[a.metric] - metricRank[b.metric];
