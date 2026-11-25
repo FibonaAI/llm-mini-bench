@@ -68,3 +68,50 @@ test('unknown host properties stay namespaced and malformed theme data uses fall
     expect(properties.has('--accent')).toBe(false);
     expect(() => applyHostTheme(null)).not.toThrow();
 });
+
+test('status palette CSS uses C1 semantic tokens and shape-coded markers consistently across bench and chart styles', () => {
+    const benchCss = readFileSync(new URL('../web/bench.css', import.meta.url), 'utf8');
+    const chartCss = readFileSync(new URL('../web/score-cost-chart.css', import.meta.url), 'utf8');
+    const chartJs = readFileSync(new URL('../web/score-cost-chart.js', import.meta.url), 'utf8');
+
+    for (const token of [
+        '--status-running:',
+        '--status-cancelling:',
+        '--status-queued:',
+        '--status-completed:',
+        '--status-timeout:',
+        '--status-interrupted:',
+        '--status-interrupted-bar:',
+        '--status-failed:',
+        '--status-cancelled:',
+        '--status-cancelled-bar:',
+        '--status-baseline:',
+        '--pause-mark:',
+        '--clock-mark:',
+        '--sample-full-bg:',
+        '--sample-partial-bg:',
+        '--sample-zero-bg:',
+        '--sample-zero-border:'
+    ]) {
+        expect(benchCss).toContain(token);
+    }
+    expect(benchCss).not.toContain('var(--c6');
+    expect(benchCss).toContain(":root[data-theme='dark']");
+    expect(benchCss).toContain('.task-dot.is-timeout');
+    expect(benchCss).toContain('mask-image: var(--clock-mark)');
+    expect(benchCss).toContain('.task-dot.is-interrupted');
+    expect(benchCss).toContain('mask-image: var(--pause-mark)');
+    expect(benchCss).toContain('.task-dot.is-failed');
+    expect(benchCss).toContain('mask-image: var(--x-mark)');
+    expect(benchCss).toContain('.task-preview-chip-track');
+    expect(benchCss).toContain('.channel-pod-status.is-running');
+    expect(benchCss).toContain('.channel-pod-status.is-cancelling');
+    expect(benchCss).not.toContain('.task-channel-badge.is-completed');
+    expect(benchCss).not.toContain('.task-channel-badge.is-interrupted');
+    expect(benchCss).not.toContain('.channel-pod.is-running > .channel-pod-head');
+
+    expect(chartCss).not.toContain('--ok');
+    expect(chartCss).not.toContain('--bad');
+    expect(chartCss).toContain('var(--status-baseline');
+    expect(chartJs).toContain("node('i', 'task-baseline-sq')");
+});

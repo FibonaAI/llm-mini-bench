@@ -72,14 +72,14 @@
   margin-top: 7px;
   padding: 5px 8px;
   border-radius: 6px;
-  background: var(--green-soft, rgba(22, 163, 74, 0.1));
+  background: var(--green-soft, rgba(24, 154, 88, 0.14));
   font-size: 11px;
   line-height: 1.45;
 }
 .score-cost-tooltip-insight-tag {
   flex: none;
   font-weight: 600;
-  color: var(--green, #16a34a);
+  color: var(--green, #189a58);
 }
 .score-cost-tooltip-insight-text {
   color: var(--fg);
@@ -253,7 +253,9 @@
 .score-cost-tooltip-status {
   display: inline-flex;
   align-items: center;
+  gap: 5px;
   padding: 2px 8px;
+  border: 1px solid transparent;
   border-radius: 6px;
   font-size: 11px;
   font-weight: 500;
@@ -262,8 +264,18 @@
   color: var(--muted);
 }
 .score-cost-tooltip-status.is-promoted {
-  background: var(--green-soft, rgba(16, 185, 129, 0.14));
-  color: var(--green, #10b981);
+  background: var(--status-baseline-soft, var(--accent-soft, rgba(79, 70, 229, 0.12)));
+  border-color: var(--status-baseline-border, color-mix(in srgb, var(--accent, #4f46e5) 38%, transparent));
+  color: var(--status-baseline, var(--accent, #4f46e5));
+  font-weight: 600;
+}
+.score-cost-tooltip-status .task-baseline-sq {
+  display: inline-block;
+  width: 6.5px;
+  height: 6.5px;
+  border-radius: 1.5px;
+  background: currentColor;
+  flex-shrink: 0;
 }
 .score-cost-tooltip-ineligible {
   margin-top: 8px;
@@ -356,12 +368,12 @@
   white-space: nowrap;
 }
 .score-cost-tooltip-delta.is-better {
-  background: color-mix(in srgb, var(--ok, #15803d) 12%, transparent);
-  color: var(--ok, #15803d);
+  background: var(--green-soft, rgba(24, 154, 88, 0.14));
+  color: var(--green, #189a58);
 }
 .score-cost-tooltip-delta.is-worse {
-  background: color-mix(in srgb, var(--bad, #b91c1c) 12%, transparent);
-  color: var(--bad, #b91c1c);
+  background: var(--red-soft, rgba(214, 69, 69, 0.12));
+  color: var(--red, #d64545);
 }
 .score-cost-tooltip p {
   grid-column: 1/-1;

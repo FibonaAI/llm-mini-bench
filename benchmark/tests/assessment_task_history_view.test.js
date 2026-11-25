@@ -1072,3 +1072,84 @@ test('abnormal tasks support healthy channel/model promotion without cluttering 
     expect(nodes.get('bench-baseline-task').title).toBe('不可设为基线：含 6 个 API 失败样本；重试时源码版本发生变化');
     expect(nodes.get('bench-task-detail').innerHTML).not.toContain('data-baseline-level=');
 });
+
+test('cancelling and queued states render distinct non-running tones across cards, pods, chips and legends', () => {
+    const { nodes, state, view } = fixture();
+    const cancellingTask = {
+        id: 'task-cancelling',
+        status: 'cancelling',
+        created_at: '2026-11-25T07:00:00Z',
+        plan: {
+            targets: [
+                { id: 't-cancel', provider_id: 'ch-alpha', model: 'deepseek-r1', thinking: 'high', account_ref: 'acct-1' },
+                { id: 't-queue', provider_id: 'ch-beta', model: 'qwen-max', thinking: 'medium', account_ref: 'acct-2' }
+            ],
+            run_count: 2,
+            rounds: 3,
+            sample_count: 72
+        },
+        children: [
+            {
+                run_id: 'run-cancelling',
+                target: { id: 't-cancel', provider_id: 'ch-alpha', model: 'deepseek-r1', thinking: 'high', account_ref: 'acct-1' },
+                status: 'cancelling',
+                sample_count: 36,
+                sample_status_counts: { completed: 12, running: 2, pending: 22 }
+            },
+            {
+                run_id: 'run-queued',
+                target: { id: 't-queue', provider_id: 'ch-beta', model: 'qwen-max', thinking: 'medium', account_ref: 'acct-2' },
+                status: 'queued',
+                sample_count: 36,
+                sample_status_counts: { pending: 36 }
+            }
+        ]
+    };
+    const queuedTask = {
+        id: 'task-queued',
+        status: 'queued',
+        created_at: '2026-11-25T06:59:00Z',
+        plan: {
+            targets: [{ id: 't-q2', provider_id: 'ch-gamma', model: 'gpt-5', thinking: 'low', account_ref: 'acct-3' }],
+            run_count: 1,
+            rounds: 1,
+            sample_count: 12
+        },
+        children: [
+            {
+                run_id: 'run-queued-only',
+                target: { id: 't-q2', provider_id: 'ch-gamma', model: 'gpt-5', thinking: 'low', account_ref: 'acct-3' },
+                status: 'queued',
+                sample_count: 12,
+                sample_status_counts: { pending: 12 }
+            }
+        ]
+    };
+    state.tasks = [cancellingTask, queuedTask];
+    state.selectedTaskId = cancellingTask.id;
+    state.taskDetail = cancellingTask;
+    state.selectedRunId = null;
+    state.runDetail = null;
+    view.renderDetails();
+
+    const listHtml = nodes.get('bench-run-list').innerHTML;
+    expect(listHtml).toContain('class="run-list-status is-cancelling"><i class="task-dot is-cancelling" aria-hidden="true"></i>cancelling');
+    expect(listHtml).toContain('class="run-list-status is-queued"><i class="task-dot is-queued" aria-hidden="true"></i>queued');
+    expect(listHtml).toContain('class="task-channel-badge is-cancelling"');
+    expect(listHtml).toContain('class="task-channel-badge is-queued"');
+    expect(listHtml).toContain('class="task-count-pill is-cancelling"');
+    expect(listHtml).toContain('取消中 1');
+    expect(listHtml).toContain('class="task-count-pill is-queued"');
+    expect(listHtml).toContain('class="task-progress-seg is-cancelling"');
+    expect(listHtml).not.toContain('task-dot is-cancelling is-pulse');
+
+    const detailHtml = nodes.get('bench-task-detail').innerHTML;
+    expect(detailHtml).toContain('class="channel-pod is-cancelling"');
+    expect(detailHtml).toContain('class="channel-pod-status is-cancelling"');
+    expect(detailHtml).toContain('class="channel-pod is-queued"');
+    expect(detailHtml).toContain('class="channel-pod-status is-queued"');
+    expect(detailHtml).toContain('class="task-preview-chip is-cancelling"');
+    expect(detailHtml).toContain('取消中 12/36');
+    expect(detailHtml).not.toContain('task-preview-chip-fill');
+    expect(detailHtml).toContain('class="task-preview-legend-item"><i class="task-dot is-cancelling" aria-hidden="true"></i>取消中');
+});
