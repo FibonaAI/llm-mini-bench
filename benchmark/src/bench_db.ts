@@ -1135,6 +1135,36 @@ export class BenchDatabase {
         return this.db.query('SELECT * FROM baselines ORDER BY created_at ASC, id ASC').all() as StoredBaselineRow[];
     }
 
+    save_baselines_batch(baselines: readonly RecordValue[]): void {
+        if (!baselines.length) return;
+        this.run_in_transaction(() => {
+            for (const baseline of baselines) this.save_baseline(baseline);
+        });
+    }
+
+    delete_baseline(id: string): boolean {
+        const result = this.db.run('DELETE FROM baselines WHERE id = ?', [id]);
+        if (result.changes > 0) {
+            this._baselines_revision++;
+            return true;
+        }
+        return false;
+    }
+
+    delete_baselines_batch(ids: readonly string[]): string[] {
+        if (!ids.length) return [];
+        const deleted: string[] = [];
+        const seen = new Set<string>();
+        this.run_in_transaction(() => {
+            for (const id of ids) {
+                if (seen.has(id)) continue;
+                seen.add(id);
+                if (this.delete_baseline(id)) deleted.push(id);
+            }
+        });
+        return deleted;
+    }
+
     list_baseline_metadata(): Array<{ id: string; payload_length: number }> {
         return this.db
             .query('SELECT id, length(payload_json) AS payload_length FROM baselines ORDER BY created_at ASC, id ASC')

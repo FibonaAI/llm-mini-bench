@@ -51,4 +51,70 @@
     const afterLaneRefresh=page.waitForResponse(response=>new URL(response.url()).pathname==='/api/bench/tasks');
     await page.evaluate(()=>window.dispatchEvent(new Event('mini-bench:refresh')));await afterLaneRefresh;
   }
+  {
+    const baseTaskId='baseline-ui-task-0123456789abcdef0123';
+    const baseChildren=[
+      {run_id:'b-ref-hi',target:{id:'bt-1',provider_id:'openai-official',model:'gpt-5.4',thinking:'high',account_ref:'gateway-default'},status:'completed',sample_count:36,sample_status_counts:{completed:36},baseline_eligible:true,ineligibility_reason:null,baseline_id:null},
+      {run_id:'b-ref-med',target:{id:'bt-2',provider_id:'openai-official',model:'gpt-5.4',thinking:'medium',account_ref:'gateway-default'},status:'completed',sample_count:36,sample_status_counts:{completed:36},baseline_eligible:true,ineligibility_reason:null,baseline_id:null},
+      {run_id:'b-ref-fail',target:{id:'bt-5',provider_id:'openai-official',model:'gpt-5.4-mini',thinking:'high',account_ref:'gateway-default'},status:'failed',sample_count:36,sample_status_counts:{completed:30,api_failure:6},baseline_eligible:false,ineligibility_reason:'Assessment baseline: run must be completed',baseline_id:null},
+      {run_id:'b-rel-hi',target:{id:'bt-3',provider_id:'third-relay',model:'gpt-5.4',thinking:'high',account_ref:'gateway-default'},status:'completed',sample_count:36,sample_status_counts:{completed:36},baseline_eligible:true,ineligibility_reason:null,baseline_id:null},
+      {run_id:'b-rel-to',target:{id:'bt-4',provider_id:'third-relay',model:'gpt-5.4',thinking:'low',account_ref:'gateway-default'},status:'completed',sample_count:36,sample_status_counts:{completed:35,timeout:1},baseline_eligible:false,ineligibility_reason:'Assessment baseline: failed or incomplete samples are not scores',baseline_id:null}
+    ];
+    // Abnormal parent task (status=failed) still allows promoting healthy models/channels, while keeping chips clean.
+    taskRecords.unshift({id:baseTaskId,status:'failed',created_at:'2026-11-24T12:00:00Z',plan:{bank_version:'1.0',targets:baseChildren.map(c=>c.target),rounds:3,sample_concurrency:6,run_concurrency:3,run_count:5,samples_per_run:36,sample_count:180,limits:{timeout:600,timeout_scope:'sample',max_cost_usd:null}},children:baseChildren});
+    for(const child of baseChildren){
+      runs.push({id:child.run_id,task_id:baseTaskId,bank_version:'1.0',status:child.status,updated_at:'2026-11-24T12:05:00Z',sample_count:36,sample_status_counts:child.sample_status_counts,baseline_eligible:child.baseline_eligible,ineligibility_reason:child.ineligibility_reason,baseline_id:null,plan:{bank_version:'1.0',targets:[child.target],limits:{timeout:600}},budget:{requests:36,estimated_uncached_cost_usd:0.5},samples:BANK.tasks.flatMap((t,ti)=>[1,2,3].map(r=>({sample_id:child.run_id+'-'+t.id+'-'+r,task:t.id,round:r,thinking:child.target.thinking,status:child.run_id==='b-rel-to'&&ti===0&&r===1?'timeout':child.run_id==='b-ref-fail'&&ti<2?'api_failure':'completed',grade:child.run_id==='b-rel-to'&&ti===0&&r===1?{content_score:0,outcome:'timeout'}:child.run_id==='b-ref-fail'&&ti<2?null:{content_score:0.9,outcome:'ok'}})))});
+    }
+    const baseTaskLoaded=page.waitForResponse(response=>new URL(response.url()).pathname==='/api/bench/tasks');
+    await page.evaluate(()=>window.dispatchEvent(new Event('mini-bench:refresh')));await baseTaskLoaded;
+    const baseCard=page.locator('[data-bench-task-id="'+baseTaskId+'"]');
+    await baseCard.click();await page.locator('#bench-baseline-task').waitFor({state:'visible'});
+    require((await page.locator('#bench-baseline-task').innerText()).includes('设为基线 (3)')&&await page.locator('#bench-unbaseline-task').isHidden(),'Abnormal task header must still count 3 eligible runs');
+    require(await page.locator('#bench-task-detail .task-chip-baseline').count()===0,'Thinking chips must stay clean without inline baseline buttons');
+    require(await page.locator('#bench-task-detail [data-baseline-level="model"]').count()===1,'Only promotable models in multi-model pods should show a model-level baseline button');
+    // Model-level promotion marks healthy openai-official gpt-5.4 runs as baselines; failed sibling model stays clean.
+    await page.locator('#bench-task-detail [data-baseline-level="model"][data-baseline-promote-runs="b-ref-hi,b-ref-med"]').click();
+    await page.waitForFunction(()=>document.querySelector('#bench-unbaseline-task')&&!document.querySelector('#bench-unbaseline-task').hidden);
+    require((await page.locator('.history-entry.is-expanded .task-count-pill.is-baseline').innerText()).includes('基线 2'),'Outer task pill must show 2 baselines');
+    require((await page.locator('#bench-baseline-task').innerText()).includes('设为基线 (1)')&&(await page.locator('#bench-unbaseline-task').innerText()).includes('取消基线 (2)'),'Partial model promotion did not update task header counts');
+    require(await page.locator('#bench-task-detail .task-preview-chip.is-baseline').count()===2,'Promoted preview chips must carry .is-baseline');
+    require(await page.locator('#bench-task-detail .task-preview-chip.is-baseline .task-preview-chip-baseline .task-baseline-sq').count()===2,'Promoted preview chips must render leading baseline square');
+    require((await page.locator('#bench-task-detail .task-preview-chip.is-baseline .task-preview-chip-state').first().innerText()).includes('✓ 完成'),'Promoted preview chips must preserve completed state text');
+    // Expanding a single thinking chip lets the user promote/demote that run from the run detail header.
+    await page.locator('#bench-task-detail [data-preview-run-id="b-rel-hi"]').click();
+    await page.locator('#bench-baseline-run').waitFor({state:'visible'});
+    await page.locator('#bench-baseline-run').click();
+    await page.locator('#bench-unbaseline-run').waitFor({state:'visible'});
+    require(await page.locator('#bench-run-detail .run-baseline-pill').isVisible(),'Promoted run detail must surface baseline pill');
+    require((await page.locator('.history-entry.is-expanded .task-count-pill.is-baseline').innerText()).includes('基线 3'),'Single run promotion did not increment baseline count');
+    await page.locator('#bench-unbaseline-run').click();
+    await page.locator('#bench-baseline-run').waitFor({state:'visible'});
+    require((await page.locator('.history-entry.is-expanded .task-count-pill.is-baseline').innerText()).includes('基线 2'),'Single run demotion did not decrement baseline count');
+    // Channel-level promotion marks remaining healthy run in third-relay while skipping timed-out sibling.
+    await page.locator('#bench-task-detail [data-baseline-level="channel"][data-baseline-promote-runs="b-rel-hi"]').click();
+    await page.waitForFunction(()=>(document.querySelector('.history-entry.is-expanded .task-count-pill.is-baseline')?.textContent||'').includes('基线 3'));
+    // Completed ineligible run keeps visible aria-disabled baseline button in run detail header and explains why.
+    await page.locator('#bench-task-detail [data-preview-run-id="b-rel-to"]').click();
+    await page.waitForFunction(()=>document.querySelector('#bench-run-detail').textContent.includes('不可设为基线：含 1 个超时样本'));
+    require(await page.locator('#bench-baseline-run').isVisible()&&(await page.locator('#bench-baseline-run').getAttribute('aria-disabled'))==='true'&&await page.locator('#bench-unbaseline-run').isHidden(),'Timed-out run must show aria-disabled baseline button with reason');
+    await page.locator('#bench-baseline-run').click({force:true});
+    await page.locator('#baseline-reason-popover').waitFor({state:'visible'});
+    require((await page.locator('#baseline-reason-popover').innerText()).includes('含 1 个超时样本'),'Run ineligible button click must surface timeout reason');
+    await page.locator('.history-entry.is-expanded').screenshot({path:ARTIFACTS+'/baseline-ineligible-run.png'});
+    await page.keyboard.press('Escape');
+    await page.locator('#baseline-reason-popover').waitFor({state:'hidden'});
+    await page.setViewportSize({width:320,height:740});
+    require(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth),'Baseline actions overflow 320px viewport');
+    await page.setViewportSize({width:1440,height:1000});
+    // Task-level batch cancellation removes all 3 baselines while keeping run records.
+    await page.locator('#bench-unbaseline-task').click();
+    await page.waitForFunction(()=>document.querySelector('#bench-unbaseline-task').hidden);
+    require(await page.locator('.history-entry.is-expanded .task-count-pill.is-baseline').count()===0&&(await page.locator('#bench-baseline-task').innerText()).includes('设为基线 (3)'),'Task batch unbaseline did not restore initial state');
+    await page.locator('#bench-close-task').click();
+    taskRecords.shift();
+    runs.splice(runs.length-5,5);
+    observations=observations.filter(row=>!String(row.id).startsWith('baseline-b-'));
+    const cleanBaseRefresh=page.waitForResponse(response=>new URL(response.url()).pathname==='/api/bench/tasks');
+    await page.evaluate(()=>window.dispatchEvent(new Event('mini-bench:refresh')));await cleanBaseRefresh;
+  }
   observations.splice(0,observations.length,...[[1,1],[10,.5],[10.1,.6]].map(([cost,score],i)=>({...peer,id:'zoom-'+i,model:'zoom-model-'+i,model_display_name:'Zoom model '+i,estimated_cost_usd:cost*3,usage:{input_tokens:cost*1000,output_tokens:0},tasks:tasks.map(task=>({...task,samples:task.samples.map(sample=>({...sample,content_score:score}))}))})));

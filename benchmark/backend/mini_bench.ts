@@ -167,8 +167,8 @@ export class BenchService {
     private _baselines_cache: { key: string; baselines: AssessmentBaseline[] } | null = null;
     private _observations_cache: { key: string; etag: string; body: string; gzip: Uint8Array<ArrayBuffer> | null } | null = null;
     private _banks_cache: { key: string; body: string; gzip: Uint8Array<ArrayBuffer> | null } | null = null;
-    private _tasks_cache: { revision: number; etag: string; body: string; gzip: Uint8Array<ArrayBuffer> | null } | null = null;
-    private _runs_cache: { revision: number; etag: string; body: string; gzip: Uint8Array<ArrayBuffer> | null } | null = null;
+    private _tasks_cache: { key: string; etag: string; body: string; gzip: Uint8Array<ArrayBuffer> | null } | null = null;
+    private _runs_cache: { key: string; etag: string; body: string; gzip: Uint8Array<ArrayBuffer> | null } | null = null;
     private static readonly RUN_DETAIL_CACHE_MAX = 64;
     private readonly _run_detail_cache = new Map<
         string,
@@ -201,10 +201,31 @@ export class BenchService {
         if (!context) this._baselines_cache = { key, baselines: validated };
         return validated;
     }
-    save_baseline(baseline: AssessmentBaseline): void {
-        this.db.save_baseline(baseline);
+    private invalidate_baseline_caches(): void {
         this._baselines_cache = null;
         this._observations_cache = null;
+        this._tasks_cache = null;
+        this._runs_cache = null;
+        this._run_detail_cache.clear();
+    }
+    save_baseline(baseline: AssessmentBaseline): void {
+        this.db.save_baseline(baseline);
+        this.invalidate_baseline_caches();
+    }
+    save_baselines_batch(baselines: readonly AssessmentBaseline[]): void {
+        if (!baselines.length) return;
+        this.db.save_baselines_batch(baselines);
+        this.invalidate_baseline_caches();
+    }
+    delete_baseline(id: string): boolean {
+        const deleted = this.db.delete_baseline(id);
+        if (deleted) this.invalidate_baseline_caches();
+        return deleted;
+    }
+    delete_baselines_batch(ids: readonly string[]): string[] {
+        const deleted = this.db.delete_baselines_batch(ids);
+        if (deleted.length) this.invalidate_baseline_caches();
+        return deleted;
     }
     create_run_baseline(run_id: string, target_id: string) {
         const run = this.bench_execution().get_run(run_id);
@@ -212,6 +233,114 @@ export class BenchService {
         const baseline = build_assessment_baseline(run, target_id);
         this.save_baseline(baseline);
         return baseline;
+    }
+    create_run_baselines_batch(items: readonly { run_id: string; target_id: string }[]) {
+        const execution = this.bench_execution();
+        const context = create_assessment_source_context();
+        const toSave: AssessmentBaseline[] = [];
+        const created: Array<{ id: string; run_id: string; target_id: string }> = [];
+        const rejected: Array<{ run_id: string; target_id: string; error: string }> = [];
+        const seen = new Set<string>();
+        for (const item of items) {
+            const pairKey = `${item.run_id}\u0000${item.target_id}`;
+            if (seen.has(pairKey)) continue;
+            seen.add(pairKey);
+            const run = execution.get_run(item.run_id);
+            if (!run) {
+                rejected.push({ run_id: item.run_id, target_id: item.target_id, error: 'run not found' });
+                continue;
+            }
+            try {
+                const baseline = build_assessment_baseline(run, item.target_id, context);
+                toSave.push(baseline);
+                created.push({ id: baseline.id, run_id: item.run_id, target_id: item.target_id });
+            } catch (error) {
+                rejected.push({
+                    run_id: item.run_id,
+                    target_id: item.target_id,
+                    error: error instanceof Error ? error.message : 'ineligible for baseline'
+                });
+            }
+        }
+        if (toSave.length) this.save_baselines_batch(toSave);
+        return { created, rejected };
+    }
+    private baseline_lookup(sourceSig = assessment_source_signature()): Map<string, { id: string; created_at: string }> {
+        const map = new Map<string, { id: string; created_at: string }>();
+        for (const baseline of this.baselines(undefined, sourceSig)) {
+            map.set(`${baseline.run_id}\u0000${baseline.target_id}`, { id: baseline.id, created_at: baseline.created_at });
+        }
+        return map;
+    }
+    private enrich_task_child(
+        execution: BenchExecutionService,
+        child: JsonObject,
+        lookup: ReadonlyMap<string, { id: string; created_at: string }>,
+        context: AssessmentSourceContext,
+        sourceSig: string
+    ): JsonObject {
+        const runId = typeof child.run_id === 'string' ? child.run_id : '';
+        const targetObj = object(child.target) ? child.target : null;
+        const targetId = typeof targetObj?.id === 'string' ? targetObj.id : '';
+        const targets =
+            typeof execution.get_run_baseline_targets === 'function' ? execution.get_run_baseline_targets(runId, context, sourceSig) : [];
+        const entry = targets.find(item => item.target_id === targetId) ?? (targets.length === 1 ? targets[0] : undefined);
+        const match = runId && targetId ? lookup.get(`${runId}\u0000${targetId}`) : undefined;
+        const createdAt = typeof child.created_at === 'string' ? child.created_at : '';
+        const baseline_id = match && (!match.created_at || !createdAt || match.created_at === createdAt) ? match.id : null;
+        return {
+            ...child,
+            baseline_eligible: Boolean(entry?.baseline_eligible),
+            ineligibility_reason: entry?.ineligibility_reason ?? null,
+            baseline_id
+        };
+    }
+    enrich_task_payload(
+        execution: BenchExecutionService,
+        task: JsonObject,
+        lookup?: ReadonlyMap<string, { id: string; created_at: string }>,
+        context?: AssessmentSourceContext,
+        sourceSig = assessment_source_signature()
+    ): JsonObject {
+        if (!Array.isArray(task.children)) return task;
+        const resolvedLookup = lookup ?? this.baseline_lookup(sourceSig);
+        const resolvedContext = context ?? create_assessment_source_context();
+        return {
+            ...task,
+            children: (task.children as JsonObject[]).map(child =>
+                this.enrich_task_child(execution, child, resolvedLookup, resolvedContext, sourceSig)
+            )
+        };
+    }
+    enrich_run_payload(
+        execution: BenchExecutionService,
+        run: JsonObject,
+        lookup?: ReadonlyMap<string, { id: string; created_at: string }>,
+        context?: AssessmentSourceContext,
+        sourceSig = assessment_source_signature()
+    ): JsonObject {
+        const runId = typeof run.id === 'string' ? run.id : '';
+        if (!runId || typeof execution.get_run_baseline_targets !== 'function') return run;
+        const resolvedLookup = lookup ?? this.baseline_lookup(sourceSig);
+        const resolvedContext = context ?? create_assessment_source_context();
+        const createdAt = typeof run.created_at === 'string' ? run.created_at : '';
+        const baseline_targets = execution.get_run_baseline_targets(runId, resolvedContext, sourceSig).map(item => {
+            const match = resolvedLookup.get(`${runId}\u0000${item.target_id}`);
+            const baseline_id = match && (!match.created_at || !createdAt || match.created_at === createdAt) ? match.id : null;
+            return {
+                target_id: item.target_id,
+                baseline_eligible: item.baseline_eligible,
+                ineligibility_reason: item.ineligibility_reason,
+                baseline_id
+            };
+        });
+        return {
+            ...run,
+            baseline_targets,
+            baseline_eligible: baseline_targets.some(item => item.baseline_eligible),
+            ineligibility_reason: baseline_targets.length === 1 ? baseline_targets[0]!.ineligibility_reason : null,
+            baseline_id: baseline_targets.length === 1 ? baseline_targets[0]!.baseline_id : null
+        };
     }
     observations() {
         const execution = this.bench_execution(),
@@ -258,25 +387,43 @@ export class BenchService {
         return this._banks_cache;
     }
     cached_tasks_payload(execution: BenchExecutionService): { etag: string | null; body: string; gzip: Uint8Array<ArrayBuffer> | null } {
-        if (execution.list_tasks !== BenchExecutionService.prototype.list_tasks)
-            return { etag: null, body: JSON.stringify({ tasks: execution.list_tasks() }), gzip: null };
+        const sourceSig = assessment_source_signature();
+        const lookup = this.baseline_lookup(sourceSig);
+        const context = create_assessment_source_context();
+        if (execution.list_tasks !== BenchExecutionService.prototype.list_tasks) {
+            const tasks = execution.list_tasks().map(task => this.enrich_task_payload(execution, task, lookup, context, sourceSig));
+            return { etag: null, body: JSON.stringify({ tasks }), gzip: null };
+        }
         const revision = execution.revision;
-        if (this._tasks_cache?.revision === revision) return this._tasks_cache;
-        const etag = `${this.instance_id}-t-${revision}`;
-        const raw = execution.serialize_tasks_payload();
+        const baselineSig = this.baselines_signature();
+        const key = `${revision}\u0000${sourceSig}\u0000${baselineSig}`;
+        if (this._tasks_cache?.key === key) return this._tasks_cache;
+        const sigDigest = createHash('sha256').update(`${sourceSig}\u0000${baselineSig}`).digest('hex').slice(0, 12);
+        const etag = `${this.instance_id}-t-${revision}-${sigDigest}`;
+        if (typeof execution.ensure_source_index === 'function') execution.ensure_source_index(context, sourceSig);
+        const raw = execution.serialize_tasks_payload(child => this.enrich_task_child(execution, child, lookup, context, sourceSig));
         const body = `{"etag":${JSON.stringify(etag)},${raw.slice(1)}`;
-        this._tasks_cache = { revision, etag, body, gzip: null };
+        this._tasks_cache = { key, etag, body, gzip: null };
         return this._tasks_cache;
     }
     cached_runs_payload(execution: BenchExecutionService): { etag: string | null; body: string; gzip: Uint8Array<ArrayBuffer> | null } {
-        if (execution.list_runs !== BenchExecutionService.prototype.list_runs)
-            return { etag: null, body: JSON.stringify({ runs: execution.list_runs() }), gzip: null };
+        const sourceSig = assessment_source_signature();
+        const lookup = this.baseline_lookup(sourceSig);
+        const context = create_assessment_source_context();
+        if (execution.list_runs !== BenchExecutionService.prototype.list_runs) {
+            const runs = execution.list_runs().map(run => this.enrich_run_payload(execution, run, lookup, context, sourceSig));
+            return { etag: null, body: JSON.stringify({ runs }), gzip: null };
+        }
         const revision = execution.revision;
-        if (this._runs_cache?.revision === revision) return this._runs_cache;
-        const etag = `${this.instance_id}-r-${revision}`;
-        const raw = execution.serialize_runs_payload();
+        const baselineSig = this.baselines_signature();
+        const key = `${revision}\u0000${sourceSig}\u0000${baselineSig}`;
+        if (this._runs_cache?.key === key) return this._runs_cache;
+        const sigDigest = createHash('sha256').update(`${sourceSig}\u0000${baselineSig}`).digest('hex').slice(0, 12);
+        const etag = `${this.instance_id}-r-${revision}-${sigDigest}`;
+        if (typeof execution.ensure_source_index === 'function') execution.ensure_source_index(context, sourceSig);
+        const raw = execution.serialize_runs_payload(run => this.enrich_run_payload(execution, run, lookup, context, sourceSig));
         const body = `{"etag":${JSON.stringify(etag)},${raw.slice(1)}`;
-        this._runs_cache = { revision, etag, body, gzip: null };
+        this._runs_cache = { key, etag, body, gzip: null };
         return this._runs_cache;
     }
     cached_run_detail_payload(
@@ -284,12 +431,15 @@ export class BenchService {
         id: string,
         omitProvenance: boolean
     ): { body: string; gzip: Uint8Array<ArrayBuffer> | null } | null {
+        const sourceSig = assessment_source_signature();
         if (execution.get_run !== BenchExecutionService.prototype.get_run) {
             const run = omitProvenance ? execution.get_run(id, { omit_provenance: true }) : execution.get_run(id);
-            return run ? { body: JSON.stringify(run), gzip: null } : null;
+            return run
+                ? { body: JSON.stringify(this.enrich_run_payload(execution, run, undefined, undefined, sourceSig)), gzip: null }
+                : null;
         }
         const meta = execution.get_run_cache_key(id);
-        const cacheKey = `${id}:${omitProvenance ? 'slim' : 'full'}`;
+        const cacheKey = `${id}:${omitProvenance ? 'slim' : 'full'}:${sourceSig}:${this.db.baselines_revision}`;
         if (meta) {
             const hit = this._run_detail_cache.get(cacheKey);
             if (hit && hit.status === meta.status && hit.updated_at === meta.updated_at) {
@@ -300,7 +450,8 @@ export class BenchService {
         }
         const run = execution.get_run(id, omitProvenance ? { omit_provenance: true } : undefined);
         if (!run) return null;
-        const entry = { status: run.status, updated_at: run.updated_at, body: JSON.stringify(run), gzip: null };
+        const enriched = this.enrich_run_payload(execution, run, undefined, undefined, sourceSig);
+        const entry = { status: run.status, updated_at: run.updated_at, body: JSON.stringify(enriched), gzip: null };
         if (meta && run.status === meta.status && run.updated_at === meta.updated_at) {
             this._run_detail_cache.delete(cacheKey);
             this._run_detail_cache.set(cacheKey, entry);
@@ -415,6 +566,45 @@ export function make_handler(service: BenchService, web_dir?: string): (request:
                 if (request.method === 'GET' && path === '/api/bench/banks') return jsonCached(200, service.cached_banks_payload());
                 await service.ensure_ready();
                 if (request.method === 'GET' && path === '/api/bench/baselines') return json(200, { baselines: service.baselines() });
+                if (request.method === 'POST' && path === '/api/bench/baselines/batch') {
+                    const body = await requestBody(request);
+                    if (body.action === 'promote') {
+                        if (
+                            Object.keys(body).some(key => key !== 'action' && key !== 'items') ||
+                            !Array.isArray(body.items) ||
+                            body.items.length === 0 ||
+                            body.items.length > 256 ||
+                            body.items.some(
+                                item =>
+                                    !object(item) ||
+                                    Object.keys(item).some(key => key !== 'run_id' && key !== 'target_id') ||
+                                    typeof item.run_id !== 'string' ||
+                                    !/^[0-9a-f]{32}$/.test(item.run_id) ||
+                                    typeof item.target_id !== 'string' ||
+                                    !item.target_id.trim()
+                            )
+                        )
+                            throw new TypeError('baseline batch promote requires 1..256 { run_id, target_id } items');
+                        return json(200, service.create_run_baselines_batch(body.items as Array<{ run_id: string; target_id: string }>));
+                    }
+                    if (body.action === 'delete') {
+                        if (
+                            Object.keys(body).some(key => key !== 'action' && key !== 'ids') ||
+                            !Array.isArray(body.ids) ||
+                            body.ids.length === 0 ||
+                            body.ids.length > 256 ||
+                            body.ids.some(id => typeof id !== 'string' || !/^[0-9a-f]{64}$/.test(id))
+                        )
+                            throw new TypeError('baseline batch delete requires 1..256 64-hex baseline ids');
+                        return json(200, { deleted: service.delete_baselines_batch(body.ids as string[]) });
+                    }
+                    throw new TypeError('baseline batch action must be promote or delete');
+                }
+                const baselineMatch = path.match(/^\/api\/bench\/baselines\/([0-9a-f]{64})\/delete$/);
+                if (baselineMatch && request.method === 'POST') {
+                    const id = baselineMatch[1]!;
+                    return service.delete_baseline(id) ? json(200, { ok: true, id }) : json(404, { error: 'baseline not found' });
+                }
                 if (request.method === 'GET' && path === '/api/bench/observations') {
                     // `known` lets a client that already holds this exact list skip the download.
                     const cached = service.cached_observations_payload();
@@ -446,7 +636,7 @@ export function make_handler(service: BenchService, web_dir?: string): (request:
                         const task = omitProvenance
                             ? execution.get_task(taskMatch[1]!, { omit_provenance: true })
                             : execution.get_task(taskMatch[1]!);
-                        return task ? json(200, task) : json(404, { error: 'task not found' });
+                        return task ? json(200, service.enrich_task_payload(execution, task)) : json(404, { error: 'task not found' });
                     }
                     if (request.method === 'POST' && taskMatch[2] === '/retry') {
                         const body = await requestBody(request);

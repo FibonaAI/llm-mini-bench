@@ -10,6 +10,13 @@
   require(await point('eligible').count()===0&&await point('promoted').count()===1,'Promoted run should render as baseline square without a covering run circle');
   require(await point('promoted').locator('rect.record-marker').count()===1,'Promoted baseline point must render as a square rect');
   require((await page.locator('.score-cost-tooltip.is-pinned').innerText()).includes('基线')&&await page.locator('[data-promote-id]').count()===0,'Pinned card did not switch to promoted baseline after saving');
+  require(await page.locator('[data-demote-baseline-id="promoted"]').count()===1,'Promoted baseline card must expose cancel baseline action');
+  await page.locator('[data-demote-baseline-id="promoted"]').click();
+  await page.waitForFunction(()=>document.querySelector('#dataset-summary').textContent.includes('1 份基线'));
+  require(await point('promoted').count()===0&&await point('eligible').count()===1,'Demoting baseline did not restore run circle');
+  require(await page.locator('[data-promote-id="eligible"]').count()===1,'Demoted run card did not restore promote action');
+  await page.locator('[data-promote-id="eligible"]').click();
+  await page.waitForFunction(()=>document.querySelector('#dataset-summary').textContent.includes('2 份基线'));
   await page.locator('.score-cost-tooltip-close').click();
   await point('peer').evaluate(node=>node.dispatchEvent(new MouseEvent('click',{bubbles:true})));
   require(await page.locator('.score-cost-tooltip-baseline').isVisible(),'Matching baseline comparison missing in chart tooltip');

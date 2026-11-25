@@ -53,6 +53,45 @@
       run.status='completed';run.retryable_samples=0;run.samples.forEach(sample=>{if(sample.status==='api_failure')Object.assign(sample,{status:'completed',response:'retried answer',grade:{content_score:1},attempts:[{status:'api_failure'}]});});
       return json({id:run.id});
     }
+    if(path==='/api/bench/baselines/batch'&&request.method()==='POST'){
+      const body=request.postDataJSON();
+      if(body.action==='promote'){
+        const created=body.items.map(({run_id,target_id})=>{
+          const id='baseline-'+run_id;
+          for(const task of taskRecords){const child=task.children?.find(c=>c.run_id===run_id);if(child)child.baseline_id=id;}
+          const run=runs.find(r=>r.id===run_id);if(run)run.baseline_id=id;
+          const src=observations.find(row=>row.run_id===run_id&&row.target_id===target_id)||baseline;
+          if(!observations.some(row=>row.id===id))observations.push({...src,id,source:'baseline',run_id,target_id});
+          return {id,run_id,target_id};
+        });
+        return json({created,rejected:[]});
+      }
+      if(body.action==='delete'){
+        const removeSet=new Set(body.ids);
+        observations=observations.filter(row=>!removeSet.has(row.id));
+        for(const task of taskRecords)for(const child of task.children||[])if(removeSet.has(child.baseline_id))child.baseline_id=null;
+        for(const run of runs)if(removeSet.has(run.baseline_id))run.baseline_id=null;
+        return json({deleted:body.ids});
+      }
+    }
+    const baseDelete=path.match(/^\/api\/bench\/baselines\/([^/]+)\/delete$/);
+    if(baseDelete&&request.method()==='POST'){
+      const baseId=decodeURIComponent(baseDelete[1]);
+      observations=observations.filter(row=>row.id!==baseId);
+      for(const task of taskRecords)for(const child of task.children||[])if(child.baseline_id===baseId)child.baseline_id=null;
+      for(const run of runs)if(run.baseline_id===baseId)run.baseline_id=null;
+      return json({ok:true,id:baseId});
+    }
+    const runBaselinePath=path.match(/^\/api\/bench\/runs\/([^/]+)\/baseline$/);
+    if(runBaselinePath&&request.method()==='POST'){
+      const runId=decodeURIComponent(runBaselinePath[1]),targetId=request.postDataJSON().target_id;
+      const baseId=runId==='eligible-run'?'promoted':'baseline-'+runId;
+      for(const task of taskRecords){const child=task.children?.find(c=>c.run_id===runId);if(child)child.baseline_id=baseId;}
+      const run=runs.find(r=>r.id===runId);if(run)run.baseline_id=baseId;
+      const src=observations.find(row=>(runId==='eligible-run'&&row.id==='eligible')||(row.run_id===runId&&row.target_id===targetId))||baseline;
+      observations.push({...src,id:baseId,source:'baseline',run_id:runId,target_id:targetId});
+      return json({baseline:observations.at(-1)});
+    }
     if(path==='/api/bench/tasks')return json({tasks:taskRecords});
     const taskPath=path.match(/^\/api\/bench\/tasks\/([^/]+)(\/cancel)?$/);
     if(taskPath){const task=taskRecords.find(task=>task.id===taskPath[1]);require(task,'Unknown task '+path);if(taskPath[2]){task.children.forEach(child=>cancelChildRun(child.run_id));task.status='cancelled';}return json(task);}
@@ -60,7 +99,6 @@
     if(path==='/api/bench/runs')return json({runs:runs.map(({samples,...run})=>run)});
     const runPath=path.match(/^\/api\/bench\/runs\/([^/]+)(\/cancel)?$/);
     if(runPath){const run=runs.find(run=>run.id===runPath[1]);require(run,'Unknown run '+path);if(!runPath[2]&&runResponseGate?.id===run.id){runResponseGate.started();await runResponseGate.wait;}return json(runPath[2]?cancelChildRun(run.id):run);}
-    if(path==='/api/bench/runs/eligible-run/baseline'){const src=observations.find(row=>row.id==='eligible')||baseline;observations.push({...src,id:'promoted',source:'baseline',run_id:'eligible-run',target_id:'eligible-target'});return json({baseline:observations.at(-1)});}
     throw Error('Unexpected API '+path);
   });
   const point=id=>page.locator('.score-cost-point[data-record-id="'+id+'"]');

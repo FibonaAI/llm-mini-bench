@@ -222,6 +222,7 @@
   display: inline-flex;
   align-items: center;
   gap: 4px;
+  min-block-size: 24px;
   padding: 3px 9px;
   border: 1px solid var(--line);
   border-radius: 6px;
@@ -235,6 +236,14 @@
 .score-cost-tooltip-link:hover {
   border-color: var(--accent);
   color: var(--accent);
+}
+.score-cost-tooltip-link.is-danger-subtle:hover {
+  border-color: color-mix(in srgb, var(--red) 46%, var(--line));
+  color: var(--red);
+}
+.score-cost-tooltip-link:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
 }
 .score-cost-tooltip-link:disabled {
   opacity: 0.6;

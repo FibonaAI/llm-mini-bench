@@ -849,3 +849,133 @@ test('task and run detail endpoints support omit_provenance=1 and cache terminal
     expect(slimRun3.updated_at).toBe('2026-11-22T00:05:00.000Z');
     expect(loadCalls).toBeGreaterThan(1);
 });
+
+test('task and run baseline summaries, batch promotion, and baseline deletion preserve underlying runs', async () => {
+    const { service, execution, request } = fixture();
+    const taskId = await execution.start_task({
+        bank_version: '1.0',
+        targets: [
+            { id: 'target-a', route_id: 'route-a', thinking: 'high' },
+            { id: 'target-b', route_id: 'route-a', thinking: 'low' },
+            { id: 'target-c', route_id: 'route-a', thinking: 'default' }
+        ],
+        rounds: 1,
+        sample_concurrency: 6,
+        run_concurrency: 3,
+        limits: {
+            timeout: 600,
+            timeout_scope: 'sample',
+            max_requests: null,
+            max_output_tokens: null,
+            max_cost_usd: null,
+            max_turns: null,
+            max_tool_calls: null,
+            max_api_retries: 3
+        }
+    });
+    const initialTask = execution.get_task(taskId)!;
+    const childIds = initialTask.child_run_ids as string[];
+    for (const childId of childIds) await execution.wait_run(childId, 4);
+
+    // Make child 0 and child 1 baseline-eligible; keep child 2 ineligible (failed sample).
+    for (const [index, childId] of childIds.entries()) {
+        const run = execution.get_run(childId)!;
+        const { max_output_tokens, max_turns, max_tool_calls, timeout, max_api_retries, timeout_scope } = run.plan.limits;
+        const config = {
+            max_output_tokens,
+            max_turns,
+            max_tool_calls,
+            timeout,
+            max_api_retries,
+            ...(timeout_scope ? { timeout_scope } : {})
+        };
+        for (const [sampleIdx, sample] of run.samples.entries()) {
+            const card = run.plan.task_snapshots.find(item => item.id === sample.task)!;
+            const { execution_protocol: protocol, assessment_protocol_sha256 } = assessment_sample_protocol(
+                card as { id: string; [key: string]: unknown },
+                sample.thinking,
+                config,
+                false
+            );
+            const failed = index === 2 && sampleIdx === 0;
+            Object.assign(sample, {
+                status: failed ? 'api_failure' : 'completed',
+                ok: !failed,
+                execution_protocol: protocol,
+                execution_protocol_sha256: execution_protocol_hash(protocol),
+                assessment_protocol_sha256,
+                grade: failed ? null : { content_score: 0.9, instruction_checks: { format: true }, outcome: 'correct' }
+            });
+        }
+        run.status = index === 2 ? 'failed' : 'completed';
+        execution._persist(run);
+    }
+    service._bench_execution = undefined;
+
+    // Input validation and auth checks on batch and delete endpoints.
+    expect((await request('/api/bench/baselines/batch', 'POST', { action: 'promote', items: [] })).status).toBe(400);
+    expect((await request('/api/bench/baselines/batch', 'POST', { action: 'delete', ids: ['not-hex'] })).status).toBe(400);
+    expect((await request('/api/bench/baselines/' + 'a'.repeat(64) + '/delete', 'POST', {}, { 'X-Mini-Bench-Token': '' })).status).toBe(
+        403
+    );
+    expect((await request('/api/bench/baselines/' + 'a'.repeat(64) + '/delete', 'POST', {})).status).toBe(404);
+
+    // Task list and task detail surface baseline eligibility before promotion.
+    const tasksResp1 = await (await request('/api/bench/tasks')).json();
+    const etagBefore = tasksResp1.etag as string;
+    const childrenBefore = tasksResp1.tasks[0].children as Array<Record<string, unknown>>;
+    expect(childrenBefore.map(child => [child.baseline_eligible, child.baseline_id])).toEqual([
+        [true, null],
+        [true, null],
+        [false, null]
+    ]);
+    expect(typeof childrenBefore[2]!.ineligibility_reason).toBe('string');
+
+    // Batch promote promotes eligible targets and reports ineligible ones without failing the batch.
+    const batchPromoteResp = await request('/api/bench/baselines/batch', 'POST', {
+        action: 'promote',
+        items: [
+            { run_id: childIds[0]!, target_id: 'target-a' },
+            { run_id: childIds[1]!, target_id: 'target-b' },
+            { run_id: childIds[2]!, target_id: 'target-c' }
+        ]
+    });
+    expect(batchPromoteResp.status).toBe(200);
+    const batchPromote = await batchPromoteResp.json();
+    expect(batchPromote.created).toHaveLength(2);
+    expect(batchPromote.rejected).toHaveLength(1);
+    expect(batchPromote.rejected[0].run_id).toBe(childIds[2]);
+    expect(service.baselines()).toHaveLength(2);
+
+    // Task list ETag invalidates on baseline mutation so polling sees new baseline_id values.
+    const tasksAfterPromote = await (await request(`/api/bench/tasks?known=${encodeURIComponent(etagBefore)}`)).json();
+    expect(tasksAfterPromote.unchanged).toBeUndefined();
+    expect(tasksAfterPromote.etag).not.toBe(etagBefore);
+    const promotedIds = batchPromote.created.map((entry: { id: string }) => entry.id);
+    expect(tasksAfterPromote.tasks[0].children.map((child: Record<string, unknown>) => child.baseline_id)).toEqual([
+        promotedIds[0],
+        promotedIds[1],
+        null
+    ]);
+
+    const runDetailAfterPromote = await (await request(`/api/bench/runs/${childIds[0]}?omit_provenance=1`)).json();
+    expect(runDetailAfterPromote.baseline_id).toBe(promotedIds[0]);
+    expect(runDetailAfterPromote.baseline_eligible).toBe(true);
+
+    // Single baseline delete removes the baseline snapshot while retaining the underlying run.
+    const singleDel = await request(`/api/bench/baselines/${promotedIds[0]}/delete`, 'POST', {});
+    expect(singleDel.status).toBe(200);
+    expect(await singleDel.json()).toEqual({ ok: true, id: promotedIds[0] });
+    expect((await request(`/api/bench/baselines/${promotedIds[0]}/delete`, 'POST', {})).status).toBe(404);
+    expect(service.baselines().map(item => item.id)).toEqual([promotedIds[1]]);
+    expect((await (await request(`/api/bench/runs/${childIds[0]}?omit_provenance=1`)).json()).baseline_id).toBeNull();
+    expect((await (await request(`/api/bench/runs/${childIds[0]}`)).json()).samples).toHaveLength(12);
+
+    // Batch delete removes remaining baselines cleanly.
+    const batchDel = await request('/api/bench/baselines/batch', 'POST', { action: 'delete', ids: promotedIds });
+    expect(batchDel.status).toBe(200);
+    expect(await batchDel.json()).toEqual({ deleted: [promotedIds[1]] });
+    expect(service.baselines()).toEqual([]);
+    const tasksAfterDelete = await (await request('/api/bench/tasks')).json();
+    expect(tasksAfterDelete.tasks[0].children.map((child: Record<string, unknown>) => child.baseline_id)).toEqual([null, null, null]);
+});
