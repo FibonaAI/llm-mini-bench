@@ -4,7 +4,12 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createHash } from 'node:crypto';
 import { ASSESSMENT_PROJECT_ROOT, assessment_task_snapshot, load_assessment_bank } from '../src/assessment_bank.ts';
-import { assessment_observations, build_assessment_baseline, load_assessment_baselines } from '../src/assessment_baselines.ts';
+import {
+    assessment_observations,
+    build_assessment_baseline,
+    load_assessment_baselines,
+    validate_assessment_baseline
+} from '../src/assessment_baselines.ts';
 import { create_assessment_source_context } from '../src/assessment_provenance.ts';
 import { project_assessment_observation } from '../src/assessment_observations.ts';
 import { assessment_hash } from '../src/assessment_json.ts';
@@ -378,6 +383,93 @@ describe('assessment baseline validation', () => {
         expect(load_assessment_baselines(paths)).toHaveLength(1);
         writeFileSync(paths[0]!, '{}');
         expect(() => importBaseline(args)).toThrow('different evidence');
+    });
+    test('retried runs stay eligible across backend source updates when bank sources, limits and policy match', () => {
+        const bank = load_assessment_bank();
+        const run = completeRun(1);
+        const retrySources: Record<string, string> = {
+            ...run.plan.source_sha256,
+            ...(bank.extension_sha256 ?? {}),
+            'src/bench_execution.ts': 'a'.repeat(64),
+            'src/assessment_runner.ts': 'b'.repeat(64)
+        };
+        run.retry_batches = [
+            {
+                request_id: '1'.repeat(32),
+                sample_ids: [run.samples[0].sample_id],
+                source_sha256: retrySources,
+                limits: { ...run.plan.limits, max_requests: null, max_cost_usd: null },
+                created_at: '2026-11-12T00:00:00Z'
+            }
+        ];
+        run.samples[0].retry_source_sha256 = structuredClone(retrySources);
+        run.samples[0].retry_limits = { ...run.plan.limits, max_requests: null, max_cost_usd: null };
+
+        const baseline = build_assessment_baseline(run, 'target-1');
+        expect(validate_assessment_baseline(baseline)).toEqual(baseline);
+        const observation = assessment_observations([], [run])[0]!;
+        expect(observation.baseline_eligible).toBe(true);
+        expect(observation.ineligibility_reason).toBeNull();
+    });
+    test('retried runs reject bank source changes, policy/limit changes, and still surface sample timeout failures', () => {
+        const bank = load_assessment_bank();
+        const base = completeRun(1);
+        const retrySources: Record<string, string> = {
+            ...base.plan.source_sha256,
+            ...(bank.extension_sha256 ?? {}),
+            'src/bench_execution.ts': 'c'.repeat(64)
+        };
+        base.retry_batches = [
+            {
+                request_id: '2'.repeat(32),
+                sample_ids: [base.samples[0].sample_id],
+                source_sha256: retrySources,
+                limits: structuredClone(base.plan.limits),
+                created_at: '2026-11-12T00:00:00Z'
+            }
+        ];
+        base.samples[0].retry_source_sha256 = structuredClone(retrySources);
+        base.samples[0].retry_limits = structuredClone(base.plan.limits);
+
+        const changedBank = structuredClone(base);
+        changedBank.retry_batches[0].source_sha256['src/assessment_tasks.ts'] = '0'.repeat(64);
+        expect(() => build_assessment_baseline(changedBank, 'target-1')).toThrow('retry: task source hashes are missing or stale');
+
+        const changedExt = structuredClone(base);
+        changedExt.retry_batches[0].source_sha256['src/assessment_blackbox.ts'] = '0'.repeat(64);
+        expect(() => build_assessment_baseline(changedExt, 'target-1')).toThrow('retry: task source hashes are missing or stale');
+
+        const changedPolicy = structuredClone(base);
+        changedPolicy.retry_batches[0].policy = 'sample-timeout-v1';
+        expect(() => build_assessment_baseline(changedPolicy, 'target-1')).toThrow('retry execution policy differs');
+
+        const changedLimits = structuredClone(base);
+        changedLimits.retry_batches[0].limits.timeout = 600;
+        expect(() => build_assessment_baseline(changedLimits, 'target-1')).toThrow('retry execution limits differ');
+
+        const missingProvenance = structuredClone(base);
+        delete missingProvenance.retry_batches[0].source_sha256['src/client.ts'];
+        expect(() => build_assessment_baseline(missingProvenance, 'target-1')).toThrow('retry: execution source provenance is missing');
+
+        const invalidDigest = structuredClone(base);
+        invalidDigest.retry_batches[0].source_sha256['src/bench_execution.ts'] = 'not-a-sha256';
+        expect(() => build_assessment_baseline(invalidDigest, 'target-1')).toThrow('retry: invalid source digest');
+
+        const timedOutSample = structuredClone(base);
+        timedOutSample.samples[1].status = 'timeout';
+        timedOutSample.samples[1].ok = false;
+        expect(() => build_assessment_baseline(timedOutSample, 'target-1')).toThrow('failed or incomplete samples are not scores');
+
+        const forgedBaseline = build_assessment_baseline(base, 'target-1');
+        forgedBaseline.samples[0].retry_source_sha256 = {
+            ...retrySources,
+            'src/assessment_tasks.ts': '0'.repeat(64)
+        };
+        expect(() => validate_assessment_baseline(forgedBaseline)).toThrow('retry: task source hashes are missing or stale');
+
+        const forgedLimits = build_assessment_baseline(base, 'target-1');
+        forgedLimits.samples[0].retry_limits = { ...base.plan.limits, max_turns: 99 };
+        expect(() => validate_assessment_baseline(forgedLimits)).toThrow('retry execution limits differ');
     });
     test('importer help is offline and default output is module-relative', () => {
         expect(importBaseline(['--help'])).toBe(0);

@@ -67,6 +67,7 @@ export interface BaselineRun extends Evidence {
     status: string;
     created_at: string;
     evidence?: unknown;
+    retry_batches?: unknown[];
     plan: BaselinePlan;
     samples: BaselineSample[];
 }
@@ -93,9 +94,9 @@ const protocolLimits = ['max_output_tokens', 'max_turns', 'max_tool_calls', 'tim
 const object = (value: unknown): value is Evidence => value !== null && typeof value === 'object' && !Array.isArray(value);
 const same = (left: unknown, right: unknown) => canonicalAssessmentJson(left) === canonicalAssessmentJson(right);
 const finiteScore = (value: unknown): value is number => typeof value === 'number' && Number.isFinite(value) && value >= 0 && value <= 1;
-const requireBaseline = (condition: unknown, reason: string) => {
+function requireBaseline(condition: unknown, reason: string): asserts condition {
     if (!condition) throw new TypeError('Assessment baseline: ' + reason);
-};
+}
 
 /** Freeze a complete current-runtime target; historical sources cannot be promoted. */
 export function build_assessment_baseline(
@@ -116,6 +117,53 @@ function buildBaselineWithContext(run: unknown, target_id: string, context: Asse
     }
 }
 
+function requireProvenanceSources(sources: unknown, bank: AssessmentBank, prefix = ''): void {
+    const tag = prefix ? `${prefix}: ` : '';
+    requireBaseline(
+        object(sources) &&
+            Object.entries(bank.source_sha256).every(([key, value]) => sources[key] === value) &&
+            Object.entries(bank.extension_sha256 ?? {}).every(([key, value]) => !Object.hasOwn(sources, key) || sources[key] === value),
+        tag + 'task source hashes are missing or stale'
+    );
+    requireBaseline(
+        ['calibrate_assessment.ts', 'src/run_protocol.ts', 'src/client.ts'].every(key => Object.hasOwn(sources, key)),
+        tag + 'execution source provenance is missing'
+    );
+    requireBaseline(
+        Object.values(sources).every(value => typeof value === 'string' && /^[0-9a-f]{64}$/.test(value)),
+        tag + 'invalid source digest'
+    );
+}
+
+function validateProtocolLimits(limits: unknown): ProtocolLimits {
+    requireBaseline(object(limits), 'invalid protocol limits');
+    const config: ProtocolLimits = {
+        max_output_tokens: limits.max_output_tokens as number | null,
+        max_turns: limits.max_turns as number | null,
+        max_tool_calls: limits.max_tool_calls as number | null,
+        timeout: limits.timeout as number
+    };
+    requireBaseline(
+        protocolLimits.every(
+            key => (key !== 'timeout' && config[key] === null) || (Number.isInteger(config[key]) && Number(config[key]) > 0)
+        ),
+        'invalid protocol limits'
+    );
+    if (limits.timeout_scope !== undefined) {
+        requireBaseline(limits.timeout_scope === 'sample', 'invalid timeout scope');
+        config.timeout_scope = 'sample';
+    }
+    if (limits.max_api_retries !== undefined) {
+        const retries = limits.max_api_retries;
+        requireBaseline(
+            typeof retries === 'number' && Number.isInteger(retries) && retries >= 0 && retries <= 5,
+            'invalid API retry policy'
+        );
+        config.max_api_retries = retries;
+    }
+    return config;
+}
+
 function buildBaseline(
     run: BaselineRun,
     target_id: string,
@@ -123,12 +171,6 @@ function buildBaseline(
     getCards = () => bank.tasks.map(assessment_task_snapshot)
 ): AssessmentBaseline {
     const plan = run.plan;
-    if (Array.isArray(run.retry_batches))
-        for (const batch of run.retry_batches)
-            requireBaseline(
-                object(batch) && same(batch.source_sha256, plan.source_sha256),
-                'retry execution sources differ; retained for analysis, not baseline promotion'
-            );
     requireBaseline(run.status === 'completed', 'run must be completed');
     requireBaseline(typeof run.id === 'string' && run.id, 'run identity is missing');
     requireBaseline(plan.bank_version === '1.0' && plan.bank_scope === 'whole', 'only the whole Assessment 1.0 bank is eligible');
@@ -139,18 +181,7 @@ function buildBaseline(
     const cards = getCards();
     requireBaseline(same(plan.task_snapshots, cards), 'task snapshots differ from current bank');
     const sources = plan.source_sha256;
-    requireBaseline(
-        object(sources) && Object.entries(bank.source_sha256).every(([key, value]) => sources[key] === value),
-        'task source hashes are missing or stale'
-    );
-    requireBaseline(
-        ['calibrate_assessment.ts', 'src/run_protocol.ts', 'src/client.ts'].every(key => Object.hasOwn(sources, key)),
-        'execution source provenance is missing'
-    );
-    requireBaseline(
-        Object.values(sources).every(value => typeof value === 'string' && /^[0-9a-f]{64}$/.test(value)),
-        'invalid source digest'
-    );
+    requireProvenanceSources(sources, bank);
     const rounds = plan.rounds;
     requireBaseline(Number.isInteger(rounds) && rounds >= 1 && rounds <= 3, 'invalid round count');
     const targets = plan.targets.filter(target => target.id === target_id);
@@ -160,28 +191,19 @@ function buildBaseline(
         (['id', 'model', 'thinking', 'route_id'] as const).every(key => typeof target[key] === 'string' && target[key].trim()),
         'target identity is incomplete'
     );
-    const config: ProtocolLimits = {
-        max_output_tokens: plan.limits.max_output_tokens,
-        max_turns: plan.limits.max_turns,
-        max_tool_calls: plan.limits.max_tool_calls,
-        timeout: plan.limits.timeout
-    };
-    requireBaseline(
-        protocolLimits.every(
-            key => (key !== 'timeout' && config[key] === null) || (Number.isInteger(config[key]) && Number(config[key]) > 0)
-        ),
-        'invalid protocol limits'
-    );
-    if (plan.limits.timeout_scope !== undefined) {
-        requireBaseline(plan.limits.timeout_scope === 'sample', 'invalid timeout scope');
-        config.timeout_scope = 'sample';
-    }
-    if (plan.limits.max_api_retries !== undefined) {
-        requireBaseline(
-            Number.isInteger(plan.limits.max_api_retries) && plan.limits.max_api_retries >= 0 && plan.limits.max_api_retries <= 5,
-            'invalid API retry policy'
-        );
-        config.max_api_retries = plan.limits.max_api_retries;
+    const config = validateProtocolLimits(plan.limits);
+    if (run.retry_batches !== undefined) {
+        requireBaseline(Array.isArray(run.retry_batches), 'invalid retry batch evidence');
+        for (const batch of run.retry_batches) {
+            requireBaseline(object(batch), 'invalid retry batch evidence');
+            requireBaseline(batch.policy === undefined, 'retry execution policy differs; retained for analysis, not baseline promotion');
+            if (batch.limits !== undefined)
+                requireBaseline(
+                    same(validateProtocolLimits(batch.limits), config),
+                    'retry execution limits differ; retained for analysis, not baseline promotion'
+                );
+            requireProvenanceSources(batch.source_sha256, bank, 'retry');
+        }
     }
     const firstSample = run.samples.find(sample => sample.target_id === target_id);
     const streaming = firstSample?.execution_protocol?.requests?.[firstSample.task]?.stream === true;
@@ -214,6 +236,12 @@ function buildBaseline(
             requireBaseline(
                 (sample[key] ?? null) === (key === 'run_id' ? run.id : (target[key] ?? null)),
                 'sample identity differs: ' + key
+            );
+        if (sample.retry_source_sha256 !== undefined) requireProvenanceSources(sample.retry_source_sha256, bank, 'retry');
+        if (sample.retry_limits !== undefined)
+            requireBaseline(
+                same(validateProtocolLimits(sample.retry_limits), config),
+                'retry execution limits differ; retained for analysis, not baseline promotion'
             );
         requireBaseline(
             same(sample.execution_protocol, protocols[taskId]) &&

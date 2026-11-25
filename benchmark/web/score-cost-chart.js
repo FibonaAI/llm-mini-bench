@@ -85,6 +85,16 @@ function formatBaselineIneligibilityReason(reason, point) {
   const raw = typeof reason === 'string' ? reason.trim() : '';
   const text = raw.replace(/^Assessment baseline:\s*/i, '');
   if (text.includes('retry execution sources differ')) return '重试时源码版本发生变化';
+  if (text.includes('retry execution policy differs') || text.includes('retry execution limits differ')) {
+    return '重试时评测限额或策略发生变化';
+  }
+  if (text.includes('invalid retry batch evidence')) return '重试批次证据不完整';
+  if (
+    text.includes('retry:') &&
+    (text.includes('source hashes') || text.includes('source provenance') || text.includes('invalid source digest'))
+  ) {
+    return '重试时题库或源码快照已过期';
+  }
   if (text.includes('failed or incomplete samples')) {
     return point?.timeoutCount > 0 ? `含 ${point.timeoutCount} 个超时样本` : '含未完成或失败样本';
   }
