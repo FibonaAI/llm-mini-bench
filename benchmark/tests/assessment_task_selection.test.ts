@@ -91,6 +91,22 @@ function fixture() {
             if (failStart) throw Error('timeout');
             return { id: 'task-created' };
         }
+        if (path.endsWith('/baselines/batch') && options?.method === 'POST') {
+            const payload = JSON.parse(options.body);
+            if (payload.action === 'promote') {
+                return {
+                    created: payload.items.map((item, idx) => ({ id: `promoted-${idx}`, ...item })),
+                    rejected: []
+                };
+            }
+            return { deleted: payload.ids };
+        }
+        if (path.endsWith('/baseline') && options?.method === 'POST') {
+            return { baseline: { id: 'promoted-single' } };
+        }
+        if (path.endsWith('/delete') && path.includes('/baselines/') && options?.method === 'POST') {
+            return { ok: true };
+        }
         if (path.endsWith('/tasks')) return { tasks: historyTasks };
         if (path.endsWith('/runs')) return { runs: historyRuns };
         const basePath = path.split('?')[0];
@@ -646,4 +662,95 @@ test('web UI avoids native form submission so sandboxed iframes without allow-fo
     const html = readFileSync(join(import.meta.dir, '../web/index.html'), 'utf8');
     expect(html).not.toMatch(/<form\b/i);
     expect(html).not.toMatch(/type=["']submit["']/i);
+});
+
+test('task, channel-pod, and single-run baseline controls promote and demote with observation sync', async () => {
+    const f = fixture();
+    const task = {
+        id: 'batch-task',
+        status: 'completed',
+        plan: {
+            targets: [
+                { id: 't-a', route_id: 'route-a', provider_id: 'channel-a', model: 'Luna', thinking: 'high' },
+                { id: 't-b', route_id: 'route-b', provider_id: 'channel-b', model: 'Luna', thinking: 'high' },
+                { id: 't-c', route_id: 'route-b', provider_id: 'channel-b', model: 'Luna', thinking: 'low' }
+            ],
+            rounds: 3
+        },
+        children: [
+            {
+                run_id: 'run-a',
+                target: { id: 't-a', route_id: 'route-a', provider_id: 'channel-a', model: 'Luna', thinking: 'high' },
+                status: 'completed',
+                baseline_eligible: true,
+                baseline_id: null
+            },
+            {
+                run_id: 'run-b',
+                target: { id: 't-b', route_id: 'route-b', provider_id: 'channel-b', model: 'Luna', thinking: 'high' },
+                status: 'completed',
+                baseline_eligible: true,
+                baseline_id: null
+            },
+            {
+                run_id: 'run-c',
+                target: { id: 't-c', route_id: 'route-b', provider_id: 'channel-b', model: 'Luna', thinking: 'low' },
+                status: 'failed',
+                baseline_eligible: false,
+                baseline_id: null
+            }
+        ]
+    };
+    f.setHistory([task], []);
+    f.setDetail('./api/bench/tasks/batch-task', task);
+    await f.load();
+    let obsChanged = 0;
+    f.window.addEventListener('mini-bench:observations-changed', () => obsChanged++);
+
+    // Task-level batch promote skips ineligible child and posts both eligible children together.
+    await f.element('bench-baseline-task').emit('click');
+    const batchCall = f.calls.find(call => call.path === './api/bench/baselines/batch');
+    expect(JSON.parse(batchCall.options.body)).toEqual({
+        action: 'promote',
+        items: [
+            { run_id: 'run-a', target_id: 't-a' },
+            { run_id: 'run-b', target_id: 't-b' }
+        ]
+    });
+    expect(obsChanged).toBe(1);
+
+    // Channel-pod single-item promote uses single run baseline endpoint; multi-id demote uses batch delete.
+    task.children[0].baseline_id = 'base-a';
+    task.children[1].baseline_id = 'base-b';
+    await f.element('bench-unbaseline-task').emit('click');
+    const batchDelete = f.calls.filter(call => call.path === './api/bench/baselines/batch').at(-1);
+    expect(JSON.parse(batchDelete.options.body)).toEqual({
+        action: 'delete',
+        ids: ['base-a', 'base-b']
+    });
+    expect(obsChanged).toBe(2);
+
+    // Single-run promote & demote via run section buttons.
+    task.children[0].baseline_id = null;
+    const runDetail = {
+        id: 'run-a',
+        task_id: 'batch-task',
+        status: 'completed',
+        updated_at: '2026-11-24T00:00:00Z',
+        plan: { targets: [task.children[0].target] },
+        samples: []
+    };
+    f.setDetail('./api/bench/runs/run-a', runDetail);
+    await f.window.dispatchEvent(
+        new (class {
+            type = 'mini-bench:select-run';
+            detail = 'run-a';
+        })()
+    );
+    await f.element('bench-baseline-run').emit('click');
+    expect(f.calls.some(call => call.path === './api/bench/runs/run-a/baseline' && call.options?.method === 'POST')).toBe(true);
+    task.children[0].baseline_id = 'base-single';
+    await f.load();
+    await f.element('bench-unbaseline-run').emit('click');
+    expect(f.calls.some(call => call.path === './api/bench/baselines/base-single/delete' && call.options?.method === 'POST')).toBe(true);
 });

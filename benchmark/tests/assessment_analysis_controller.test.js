@@ -499,3 +499,122 @@ test('anomaly insights support collapsing, clean-state guard, progressive pagina
     expect(countGroups(element('analysis-insights-list').innerHTML)).toBe(4);
     expect(element('analysis-insights-list').scrollTop).toBe(0);
 });
+
+test('analysis controller promotes and demotes baselines while preserving selection and notifying tasks', async () => {
+    const nodes = new Map(),
+        listeners = new Map(),
+        requests = [];
+    const element = id => {
+        if (!nodes.has(id)) nodes.set(id, new ControllerNode());
+        return nodes.get(id);
+    };
+    element('chart-axis').value = 'cost';
+    element('chart-color-by').value = 'series';
+    const ids = Array.from({ length: 12 }, (_, index) => `task-${index}`);
+    const tasks = ids.map(task_id => ({ task_id, samples: [{ round: 1, status: 'completed', content_score: 0.8 }] }));
+    let observations = [
+        {
+            id: 'run-obs',
+            run_id: 'r1',
+            target_id: 't1',
+            model: 'model',
+            thinking: 'high',
+            source: 'run',
+            bank_version: '1.0',
+            bank_scope: 'whole',
+            status: 'completed',
+            baseline_eligible: true,
+            rounds: 1,
+            sample_count: 12,
+            estimated_cost_usd: 0.1,
+            usage: { input_tokens: 10, output_tokens: 5 },
+            tasks
+        }
+    ];
+    const services = {
+        byId: element,
+        finite: Number.isFinite,
+        escapeHtml: value => String(value ?? ''),
+        notify() {},
+        available: true,
+        formatDate: value => value,
+        statusText: value => value,
+        request: async (path, options) => {
+            requests.push({ path, options });
+            if (path.endsWith('/baseline') && options?.method === 'POST') {
+                observations = [{ ...observations[0], id: 'base-obs', source: 'baseline' }, observations[0]];
+                return { baseline: { id: 'base-obs' } };
+            }
+            if (path.endsWith('/baselines/base-obs/delete') && options?.method === 'POST') {
+                observations = observations.filter(item => item.id !== 'base-obs');
+                return { ok: true, id: 'base-obs' };
+            }
+            return { observations: [...observations] };
+        }
+    };
+    let baselinesChanged = 0;
+    const events = {
+        addEventListener(name, handler) {
+            (listeners.get(name) || listeners.set(name, []).get(name)).push(handler);
+        },
+        removeEventListener() {},
+        dispatchEvent(event) {
+            if (event.type === 'mini-bench:baselines-changed') baselinesChanged++;
+            return Promise.all((listeners.get(event.type) || []).map(handler => handler(event)));
+        }
+    };
+    const app = createAppContext(services, events);
+    app.setBank({ version: '1.0', tasks: ids.map(id => ({ id })) });
+    let chartCallbacks;
+    const renderOptions = [];
+    const chart = {
+        registerCatalog() {},
+        render: (_records, options) => {
+            renderOptions.push(options);
+        },
+        resetZoom() {},
+        zoom() {}
+    };
+    const context = vm.createContext({
+        getAppContext: () => app,
+        createAnalysisModel,
+        attachAnalysisBatchIds,
+        selectAnalysisHistoryRecords,
+        renderAnalysisRecordList,
+        buildObservationAnomalies,
+        observationQualitySummary,
+        createAnalysisFilters: () => ({ matches: () => true, setRecords() {}, reset() {}, setSource() {}, focus() {} }),
+        createAnalysisPopover: (_, panel) => ({ setOpen: open => (panel.hidden = !open), position() {}, close() {}, isOpen: false }),
+        createScoreCostChart: (_container, callbacks) => {
+            chartCallbacks = callbacks;
+            return chart;
+        },
+        dedupePromotedRuns,
+        analyzeAnomalies,
+        selectionKey: () => 'key',
+        thinkingLabel: value => value,
+        MutationObserver: class {
+            observe() {}
+        },
+        document: { addEventListener() {}, documentElement: {} },
+        window: { matchMedia: () => ({ addEventListener() {} }) },
+        URL: { createObjectURL: () => '', revokeObjectURL() {} },
+        Blob: class {},
+        setTimeout() {},
+        location: { hash: '' }
+    });
+    vm.runInContext(readFileSync(new URL('../web/analysis.js', import.meta.url), 'utf8').replace(/^import .*;\n/gm, ''), context);
+    await new Promise(resolve => setTimeout(resolve, 0));
+
+    chartCallbacks.onSelect('run-obs');
+    expect(renderOptions.at(-1).selectedIds).toEqual(['run-obs']);
+
+    await chartCallbacks.onPromoteBaseline('run-obs');
+    expect(renderOptions.at(-1).selectedIds).toEqual(['base-obs']);
+    expect(baselinesChanged).toBe(1);
+
+    await chartCallbacks.onDemoteBaseline('base-obs');
+    expect(requests.some(req => req.path === './api/bench/baselines/base-obs/delete' && req.options?.method === 'POST')).toBe(true);
+    expect(renderOptions.at(-1).selectedIds).toEqual(['run-obs']);
+    expect(baselinesChanged).toBe(2);
+});

@@ -26,15 +26,18 @@ import { createTaskSubmission } from './task-submission.js';
     cancelling: new Set()
   };
   const retryRequests = new Map(),
-    retrying = new Set();
+    retrying = new Set(),
+    baselineBusy = new Set();
   let pendingRevealRunId = null;
   let pendingForceFresh = false;
-  const { element, historyEntries, renderDetails, inProgress, canCancel, fixedTargets, taskSection, runSection } = createTaskHistoryView({
-    app,
-    state,
-    retryRequests,
-    retrying
-  });
+  const { element, historyEntries, renderDetails, inProgress, canCancel, fixedTargets, runBaselineTargets, taskSection, runSection } =
+    createTaskHistoryView({
+      app,
+      state,
+      retryRequests,
+      retrying,
+      baselineBusy
+    });
   const { updateTaskPreview, renderBanks } = createTaskSubmission({
     app,
     state,
@@ -72,6 +75,24 @@ import { createTaskSubmission } from './task-submission.js';
   };
   const taskDetailUrl = id => `./api/bench/tasks/${encodeURIComponent(id)}?omit_provenance=1`;
   const runDetailUrl = id => `./api/bench/runs/${encodeURIComponent(id)}?omit_provenance=1`;
+  const baselineStateSignature = record => {
+    if (!record) return '';
+    if (Array.isArray(record.children)) {
+      return record.children.map(child => `${child.run_id}:${child.baseline_eligible ? 1 : 0}:${child.baseline_id || ''}`).join('|');
+    }
+    if (Array.isArray(record.baseline_targets) && record.baseline_targets.length > 0) {
+      return record.baseline_targets.map(item => `${item.target_id}:${item.baseline_eligible ? 1 : 0}:${item.baseline_id || ''}`).join('|');
+    }
+    const targetId =
+      typeof record.target?.id === 'string' && record.target.id
+        ? record.target.id
+        : Array.isArray(record.plan?.targets) && record.plan.targets.length === 1 && typeof record.plan.targets[0]?.id === 'string'
+          ? record.plan.targets[0].id
+          : '';
+    return targetId
+      ? `${targetId}:${record.baseline_eligible ? 1 : 0}:${record.baseline_id || ''}`
+      : `${record.baseline_eligible ? 1 : 0}:${record.baseline_id || ''}`;
+  };
   const detailUnchanged = (detail, summary) =>
     Boolean(
       detail &&
@@ -80,7 +101,8 @@ import { createTaskSubmission } from './task-submission.js';
       !inProgress(detail) &&
       detail.status === summary.status &&
       detail.updated_at !== undefined &&
-      detail.updated_at === summary.updated_at
+      detail.updated_at === summary.updated_at &&
+      baselineStateSignature(detail) === baselineStateSignature(summary)
     );
   const RUN_DETAIL_CACHE_MAX = 32;
   const runDetailCache = new Map();
@@ -399,6 +421,185 @@ import { createTaskSubmission } from './task-submission.js';
       renderDetails();
     }
   }
+  const BASELINE_BATCH_LIMIT = 256;
+  const chunkList = (list, size) => {
+    const chunks = [];
+    for (let offset = 0; offset < list.length; offset += size) chunks.push(list.slice(offset, offset + size));
+    return chunks;
+  };
+  async function promoteRunsToBaseline(scopeKey, items) {
+    const seen = new Set();
+    const uniqueItems = [];
+    for (const item of Array.isArray(items) ? items : []) {
+      if (!item || typeof item.run_id !== 'string' || !item.run_id || typeof item.target_id !== 'string' || !item.target_id) continue;
+      const key = `${item.run_id}\u0000${item.target_id}`;
+      if (seen.has(key)) continue;
+      seen.add(key);
+      uniqueItems.push({ run_id: item.run_id, target_id: item.target_id });
+    }
+    if (!scopeKey || baselineBusy.has(scopeKey) || !uniqueItems.length) return;
+    baselineBusy.add(scopeKey);
+    renderDetails();
+    let createdCount = 0;
+    let rejectedCount = 0;
+    try {
+      if (uniqueItems.length === 1) {
+        const single = uniqueItems[0];
+        await request(`./api/bench/runs/${encodeURIComponent(single.run_id)}/baseline`, {
+          method: 'POST',
+          body: JSON.stringify({ target_id: single.target_id })
+        });
+        createdCount = 1;
+      } else {
+        for (const chunk of chunkList(uniqueItems, BASELINE_BATCH_LIMIT)) {
+          const result = await request('./api/bench/baselines/batch', {
+            method: 'POST',
+            body: JSON.stringify({ action: 'promote', items: chunk })
+          });
+          createdCount += Array.isArray(result?.created) ? result.created.length : chunk.length;
+          rejectedCount += Array.isArray(result?.rejected) ? result.rejected.length : 0;
+        }
+      }
+      await refreshHistory(true);
+      app.emit('mini-bench:observations-changed');
+      if (rejectedCount > 0 && createdCount === 0) {
+        notify(`未能保存基线：${rejectedCount} 个运行不符合当前基线条件。`, true);
+      } else if (rejectedCount > 0) {
+        notify(`已将 ${createdCount} 个运行保存为基线；${rejectedCount} 个运行不符合条件已跳过。`);
+      } else {
+        notify(createdCount > 1 ? `已将 ${createdCount} 个运行目标保存为 Mini Bench 基线。` : '已将该运行目标保存为 Mini Bench 基线。');
+      }
+    } catch (error) {
+      if (createdCount > 0) {
+        try {
+          await refreshHistory(true);
+        } catch {
+          /* Preserve the primary batch error message. */
+        }
+        app.emit('mini-bench:observations-changed');
+        notify(`部分保存基线失败（已保存 ${createdCount} 个）：${error.message}`, true);
+      } else {
+        notify(`保存基线失败：${error.message}`, true);
+      }
+    } finally {
+      baselineBusy.delete(scopeKey);
+      renderDetails();
+    }
+  }
+  async function demoteBaselines(scopeKey, ids) {
+    const uniqueIds = [...new Set((ids || []).filter(id => typeof id === 'string' && id))];
+    if (!scopeKey || baselineBusy.has(scopeKey) || !uniqueIds.length) return;
+    baselineBusy.add(scopeKey);
+    renderDetails();
+    let deletedCount = 0;
+    try {
+      if (uniqueIds.length === 1) {
+        await request(`./api/bench/baselines/${encodeURIComponent(uniqueIds[0])}/delete`, { method: 'POST' });
+        deletedCount = 1;
+      } else {
+        for (const chunk of chunkList(uniqueIds, BASELINE_BATCH_LIMIT)) {
+          const result = await request('./api/bench/baselines/batch', {
+            method: 'POST',
+            body: JSON.stringify({ action: 'delete', ids: chunk })
+          });
+          deletedCount += Array.isArray(result?.deleted) ? result.deleted.length : chunk.length;
+        }
+      }
+      await refreshHistory(true);
+      app.emit('mini-bench:observations-changed');
+      notify(deletedCount > 1 ? `已取消 ${deletedCount} 份基线标记，原始运行记录已保留。` : '已取消该基线标记，原始运行记录已保留。');
+    } catch (error) {
+      if (deletedCount > 0) {
+        try {
+          await refreshHistory(true);
+        } catch {
+          /* Preserve the primary batch error message. */
+        }
+        app.emit('mini-bench:observations-changed');
+        notify(`部分取消基线失败（已取消 ${deletedCount} 份）：${error.message}`, true);
+      } else {
+        notify(`取消基线失败：${error.message}`, true);
+      }
+    } finally {
+      baselineBusy.delete(scopeKey);
+      renderDetails();
+    }
+  }
+  let reasonPopover = null;
+  let reasonAnchor = null;
+  function closeBaselineReasonPopover() {
+    if (reasonPopover) reasonPopover.hidden = true;
+    reasonAnchor = null;
+  }
+  function showBaselineIneligibleHint(anchor, reason) {
+    const cleanReason = typeof reason === 'string' && reason.trim() ? reason.trim() : '当前不符合基线校验条件';
+    notify(`不可设为基线：${cleanReason}`);
+    if (typeof document === 'undefined' || !anchor?.getBoundingClientRect) return;
+    if (reasonPopover && !reasonPopover.hidden && reasonAnchor === anchor) {
+      closeBaselineReasonPopover();
+      return;
+    }
+    if (!reasonPopover) {
+      reasonPopover = document.createElement('div');
+      reasonPopover.id = 'baseline-reason-popover';
+      reasonPopover.className = 'baseline-reason-popover';
+      reasonPopover.setAttribute('role', 'status');
+      reasonPopover.setAttribute('aria-live', 'polite');
+      reasonPopover.hidden = true;
+      document.body.append(reasonPopover);
+    }
+    reasonAnchor = anchor;
+    reasonPopover.replaceChildren();
+    const headEl = document.createElement('div');
+    headEl.className = 'baseline-reason-head';
+    const titleEl = document.createElement('strong');
+    titleEl.textContent = '不可设为基线';
+    const closeBtn = document.createElement('button');
+    closeBtn.type = 'button';
+    closeBtn.className = 'baseline-reason-close';
+    closeBtn.setAttribute('aria-label', '关闭提示');
+    closeBtn.textContent = '×';
+    closeBtn.addEventListener('click', () => {
+      const prev = reasonAnchor;
+      closeBaselineReasonPopover();
+      prev?.focus?.({ preventScroll: true });
+    });
+    headEl.append(titleEl, closeBtn);
+    const bodyEl = document.createElement('p');
+    bodyEl.textContent = cleanReason;
+    reasonPopover.append(headEl, bodyEl);
+    reasonPopover.hidden = false;
+    const rect = anchor.getBoundingClientRect();
+    const popRect = reasonPopover.getBoundingClientRect();
+    const margin = 12;
+    const vw = window.innerWidth || 1024;
+    const vh = window.innerHeight || 768;
+    const left = Math.min(vw - popRect.width - margin, Math.max(margin, rect.left + rect.width / 2 - popRect.width / 2));
+    const below = rect.bottom + 8;
+    const top = below + popRect.height <= vh - margin ? below : Math.max(margin, rect.top - popRect.height - 8);
+    reasonPopover.style.left = `${Math.round(left)}px`;
+    reasonPopover.style.top = `${Math.round(top)}px`;
+  }
+  if (typeof document !== 'undefined') {
+    document.addEventListener('pointerdown', event => {
+      if (!reasonPopover || reasonPopover.hidden) return;
+      const target = /** @type {Node | null} */ (event.target);
+      if (reasonPopover.contains(target) || reasonAnchor?.contains?.(target)) return;
+      closeBaselineReasonPopover();
+    });
+    document.addEventListener('keydown', event => {
+      if (event.key !== 'Escape' || !reasonPopover || reasonPopover.hidden) return;
+      const prev = reasonAnchor;
+      closeBaselineReasonPopover();
+      prev?.focus?.({ preventScroll: true });
+    });
+  }
+  if (typeof window !== 'undefined') {
+    window.addEventListener('scroll', closeBaselineReasonPopover, true);
+    window.addEventListener('resize', closeBaselineReasonPopover);
+  }
+  const activeTaskRecord = () =>
+    state.taskDetail?.id === state.selectedTaskId ? state.taskDetail : state.tasks.find(task => task.id === state.selectedTaskId);
   element('bench-run-list').addEventListener('click', async event => {
     const path = event.composedPath?.() || [];
     // Rendering can detach the clicked button before this ancestor receives the same event.
@@ -410,6 +611,31 @@ import { createTaskSubmission } from './task-submission.js';
   });
   element('bench-task-detail').addEventListener('click', async event => {
     if (event.composedPath?.().includes(runSection) || runSection.contains?.(event.target)) return;
+    const ineligibleBtn = event.target.closest('[data-baseline-ineligible-reason]');
+    if (ineligibleBtn) {
+      showBaselineIneligibleHint(ineligibleBtn, ineligibleBtn.dataset.baselineIneligibleReason);
+      return;
+    }
+    const promoteBtn = event.target.closest('[data-baseline-promote-runs]');
+    if (promoteBtn) {
+      closeBaselineReasonPopover();
+      const task = activeTaskRecord();
+      const runIdSet = new Set((promoteBtn.dataset.baselinePromoteRuns || '').split(',').filter(Boolean));
+      const items = (task?.children || [])
+        .filter(
+          child => runIdSet.has(child.run_id) && !inProgress(child) && child.baseline_eligible && !child.baseline_id && child.target?.id
+        )
+        .map(child => ({ run_id: child.run_id, target_id: child.target.id }));
+      await promoteRunsToBaseline(promoteBtn.dataset.baselineScope || `scope-promote:${task?.id || ''}`, items);
+      return;
+    }
+    const demoteBtn = event.target.closest('[data-baseline-demote-ids]');
+    if (demoteBtn) {
+      closeBaselineReasonPopover();
+      const ids = (demoteBtn.dataset.baselineDemoteIds || '').split(',').filter(Boolean);
+      await demoteBaselines(demoteBtn.dataset.baselineScope || `scope-demote:${state.selectedTaskId || ''}`, ids);
+      return;
+    }
     const cancel = event.target.closest('[data-cancel-child]');
     if (cancel) {
       await cancelExecution('run', cancel.dataset.cancelChild);
@@ -418,13 +644,62 @@ import { createTaskSubmission } from './task-submission.js';
     const run = event.target.closest('[data-preview-run-id], [data-bench-run-id], [data-child-run-id]');
     if (run) await toggleAssessmentRun(run.dataset.previewRunId || run.dataset.benchRunId || run.dataset.childRunId);
   });
+  element('bench-baseline-task')?.addEventListener?.('click', event => {
+    const btn = /** @type {HTMLElement} */ (event.currentTarget || element('bench-baseline-task'));
+    const reason = btn?.dataset?.baselineIneligibleReason;
+    if (btn?.getAttribute?.('aria-disabled') === 'true' || reason) {
+      showBaselineIneligibleHint(btn, reason);
+      return;
+    }
+    closeBaselineReasonPopover();
+    const task = activeTaskRecord();
+    if (!task) return;
+    const items = (task.children || [])
+      .filter(child => !inProgress(child) && child.baseline_eligible && !child.baseline_id && child.target?.id)
+      .map(child => ({ run_id: child.run_id, target_id: child.target.id }));
+    return promoteRunsToBaseline(`task-promote:${task.id}`, items);
+  });
+  element('bench-unbaseline-task')?.addEventListener?.('click', () => {
+    closeBaselineReasonPopover();
+    const task = activeTaskRecord();
+    if (!task) return;
+    const ids = (task.children || []).map(child => child.baseline_id).filter(Boolean);
+    return demoteBaselines(`task-demote:${task.id}`, ids);
+  });
+  element('bench-baseline-run')?.addEventListener?.('click', event => {
+    const btn = /** @type {HTMLElement} */ (event.currentTarget || element('bench-baseline-run'));
+    const reason = btn?.dataset?.baselineIneligibleReason;
+    if (btn?.getAttribute?.('aria-disabled') === 'true' || reason) {
+      showBaselineIneligibleHint(btn, reason);
+      return;
+    }
+    closeBaselineReasonPopover();
+    const run = state.runDetail?.id === state.selectedRunId ? state.runDetail : findRunSummary(state.selectedRunId);
+    const runId = state.selectedRunId;
+    if (!run || !runId || inProgress(run)) return;
+    const items = (runBaselineTargets ? runBaselineTargets(run) : [])
+      .filter(item => item.baseline_eligible && !item.baseline_id && item.target_id)
+      .map(item => ({ run_id: runId, target_id: item.target_id }));
+    return promoteRunsToBaseline(`run-promote:${runId}`, items);
+  });
+  element('bench-unbaseline-run')?.addEventListener?.('click', () => {
+    closeBaselineReasonPopover();
+    const run = state.runDetail?.id === state.selectedRunId ? state.runDetail : findRunSummary(state.selectedRunId);
+    const runId = state.selectedRunId;
+    if (!run || !runId) return;
+    const ids = (runBaselineTargets ? runBaselineTargets(run) : []).map(item => item.baseline_id).filter(Boolean);
+    return demoteBaselines(`run-demote:${runId}`, ids);
+  });
   element('bench-cancel-task').addEventListener('click', () => cancelExecution('task', state.selectedTaskId));
   element('bench-cancel-run').addEventListener('click', () => cancelExecution('run', state.selectedRunId));
+  app.on('mini-bench:baselines-changed', () => refreshHistory(true));
   app.on('mini-bench:select-run', event => {
+    closeBaselineReasonPopover();
     pendingRevealRunId = event.detail;
     return selectAssessmentRun(event.detail);
   });
   app.on('mini-bench:view', event => {
+    closeBaselineReasonPopover();
     if (event.detail !== 'runs') return;
     if (!state.historyClosed && !state.selectedTaskId && !state.selectedRunId) {
       const first = historyEntries()[0];

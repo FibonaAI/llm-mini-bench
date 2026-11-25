@@ -210,7 +210,7 @@ function svgNode(tag, attributes = {}, text) {
 /** Native score / cost / tokens / duration scatter plot. render is synchronous; exportSvg returns standalone SVG text. */
 export function createScoreCostChart(
   container,
-  { onSelect = _id => {}, onOpenRun = _runId => {}, onPromoteBaseline = _id => {}, catalog = [] } = {}
+  { onSelect = _id => {}, onOpenRun = _runId => {}, onPromoteBaseline = _id => {}, onDemoteBaseline = _id => {}, catalog = [] } = {}
 ) {
   const colors = createChartColorRegistry(catalog);
   container.classList.add('score-cost-chart');
@@ -1413,6 +1413,32 @@ export function createScoreCostChart(
           const promotedBadge = node('span', 'score-cost-tooltip-status is-promoted', '已设为基线');
           promotedBadge.title = '该运行目标已保存为基线';
           actionButtons.append(promotedBadge);
+          if (typeof promotedBaseline.id === 'string' && promotedBaseline.id) {
+            const demoting = Boolean(options.demotingIds?.has?.(promotedBaseline.id));
+            const demoteBtn = node('button', 'score-cost-tooltip-link is-danger-subtle', demoting ? '取消中…' : '取消基线');
+            demoteBtn.type = 'button';
+            demoteBtn.dataset.demoteBaselineId = promotedBaseline.id;
+            demoteBtn.disabled = demoting;
+            demoteBtn.title = '取消该基线标记（保留原始运行记录）';
+            demoteBtn.addEventListener('click', event => {
+              event.stopPropagation();
+              onDemoteBaseline(promotedBaseline.id);
+            });
+            actionButtons.append(demoteBtn);
+          }
+          hasActionButtons = true;
+        } else if (point.source === 'baseline' && typeof point.id === 'string' && point.id) {
+          const demoting = Boolean(options.demotingIds?.has?.(point.id));
+          const demoteBtn = node('button', 'score-cost-tooltip-link is-danger-subtle', demoting ? '取消中…' : '取消基线');
+          demoteBtn.type = 'button';
+          demoteBtn.dataset.demoteBaselineId = point.id;
+          demoteBtn.disabled = demoting;
+          demoteBtn.title = '取消该基线标记（保留原始运行记录）';
+          demoteBtn.addEventListener('click', event => {
+            event.stopPropagation();
+            onDemoteBaseline(point.id);
+          });
+          actionButtons.append(demoteBtn);
           hasActionButtons = true;
         }
         if (point.source === 'run' && !promotedBaseline && !point.original?.baseline_eligible) {

@@ -98,8 +98,12 @@ const requireBaseline = (condition: unknown, reason: string) => {
 };
 
 /** Freeze a complete current-runtime target; historical sources cannot be promoted. */
-export function build_assessment_baseline(run: unknown, target_id: string): AssessmentBaseline {
-    return buildBaselineWithContext(run, target_id, create_assessment_source_context());
+export function build_assessment_baseline(
+    run: unknown,
+    target_id: string,
+    context: AssessmentSourceContext = create_assessment_source_context()
+): AssessmentBaseline {
+    return buildBaselineWithContext(run, target_id, context);
 }
 
 function buildBaselineWithContext(run: unknown, target_id: string, context: AssessmentSourceContext): AssessmentBaseline {

@@ -9,6 +9,28 @@ class HistoryNode {
         this.samples = [];
         this.slots = new Map();
         this.handlers = new Map();
+        this.attributes = new Map();
+        this.dataset = {};
+        this.classes = new Set();
+        this.classList = {
+            toggle: (name, force) => {
+                if (force === undefined) {
+                    if (this.classes.has(name)) this.classes.delete(name);
+                    else this.classes.add(name);
+                } else if (force) this.classes.add(name);
+                else this.classes.delete(name);
+            },
+            contains: name => this.classes.has(name)
+        };
+    }
+    setAttribute(name, value) {
+        this.attributes.set(name, String(value));
+    }
+    removeAttribute(name) {
+        this.attributes.delete(name);
+    }
+    getAttribute(name) {
+        return this.attributes.has(name) ? this.attributes.get(name) : null;
     }
     addEventListener(name, handler) {
         this.handlers.set(name, handler);
@@ -847,4 +869,206 @@ test('large task history paginates to 40 cards, expands for deep selection, and 
     });
     expect(list.innerHTML.match(/class="history-entry/g)?.length).toBe(55);
     expect(list.innerHTML).not.toContain('data-history-show-more');
+});
+
+test('task history renders task, channel-pod, and run baseline actions, badges, and ineligibility reasons', () => {
+    const { nodes, state, view } = fixture();
+    const children = [
+        {
+            run_id: 'ref-promoted',
+            target: { id: 't1', provider_id: 'openai-official', model: 'gpt-5.4', thinking: 'high', account_ref: 'gateway-default' },
+            status: 'completed',
+            sample_count: 36,
+            sample_status_counts: { completed: 36 },
+            baseline_eligible: true,
+            ineligibility_reason: null,
+            baseline_id: 'b'.repeat(64)
+        },
+        {
+            run_id: 'ref-eligible',
+            target: { id: 't2', provider_id: 'openai-official', model: 'gpt-5.4', thinking: 'medium', account_ref: 'gateway-default' },
+            status: 'completed',
+            sample_count: 36,
+            sample_status_counts: { completed: 36 },
+            baseline_eligible: true,
+            ineligibility_reason: null,
+            baseline_id: null
+        },
+        {
+            run_id: 'third-eligible',
+            target: { id: 't3', provider_id: 'proxy-relay', model: 'gpt-5.4', thinking: 'high', account_ref: 'gateway-default' },
+            status: 'completed',
+            sample_count: 36,
+            sample_status_counts: { completed: 36 },
+            baseline_eligible: true,
+            ineligibility_reason: null,
+            baseline_id: null
+        },
+        {
+            run_id: 'third-timeout',
+            target: { id: 't4', provider_id: 'proxy-relay', model: 'gpt-5.4', thinking: 'low', account_ref: 'gateway-default' },
+            status: 'completed',
+            sample_count: 36,
+            sample_status_counts: { completed: 34, timeout: 2 },
+            baseline_eligible: false,
+            ineligibility_reason: 'Assessment baseline: failed or incomplete samples are not scores',
+            baseline_id: null
+        }
+    ];
+    const task = {
+        id: 'baseline-task',
+        status: 'completed',
+        plan: { targets: children.map(c => c.target), run_count: 4, rounds: 3 },
+        children
+    };
+    state.tasks = [task];
+    state.selectedTaskId = 'baseline-task';
+    state.taskDetail = task;
+    state.selectedRunId = 'ref-promoted';
+    state.runDetail = {
+        id: 'ref-promoted',
+        task_id: 'baseline-task',
+        status: 'completed',
+        updated_at: '2026-11-24T00:00:00Z',
+        plan: { targets: [children[0].target] },
+        samples: [{ sample_id: 's1', task: 'one', round: 1, thinking: 'high', status: 'completed', grade: { content_score: 1 } }]
+    };
+    view.renderDetails();
+
+    // Outer card shows baseline count pill.
+    expect(nodes.get('bench-run-list').innerHTML).toContain('基线 1');
+
+    // Task header shows both remaining promotable count (2) and existing baseline count (1).
+    expect(nodes.get('bench-baseline-task').hidden).toBe(false);
+    expect(nodes.get('bench-baseline-task').textContent).toBe('设为基线 (2)');
+    expect(nodes.get('bench-baseline-task').title).toContain('跳过 1 个不可设为基线的运行：含 2 个超时样本');
+    expect(nodes.get('bench-unbaseline-task').hidden).toBe(false);
+    expect(nodes.get('bench-unbaseline-task').textContent).toBe('取消基线');
+
+    // Channel-level controls appear for eligible/promoted channels; single-model channels avoid duplicate model buttons,
+    // and thinking chips stay compact without inline baseline buttons.
+    const taskDetailHtml = nodes.get('bench-task-detail').innerHTML;
+    expect(taskDetailHtml).toContain('data-baseline-level="channel"');
+    expect(taskDetailHtml).toContain('data-baseline-promote-runs="ref-eligible"');
+    expect(taskDetailHtml).toContain('aria-label="openai-official 设为基线 (1)"');
+    expect(taskDetailHtml).toContain(`data-baseline-demote-ids="${'b'.repeat(64)}"`);
+    expect(taskDetailHtml).toContain('aria-label="openai-official 取消基线 (1)"');
+    expect(taskDetailHtml).toContain('data-baseline-promote-runs="third-eligible"');
+    expect(taskDetailHtml).toContain('aria-label="proxy-relay 设为基线 (1)"');
+    expect(taskDetailHtml).not.toContain('data-baseline-level="model"');
+    expect(taskDetailHtml).not.toContain('task-chip-baseline');
+    expect(taskDetailHtml).not.toContain('task-preview-chip-pair');
+    expect(taskDetailHtml).toContain('不可设为基线：含 2 个超时样本');
+    expect(taskDetailHtml).toContain('task-preview-chip is-completed is-baseline');
+    expect(taskDetailHtml).toContain(
+        '<span class="task-preview-chip-baseline"><i class="task-baseline-sq" aria-hidden="true"></i><span class="visually-hidden">已设基线</span></span><span class="task-preview-chip-label">high</span><span class="task-preview-chip-state">✓ 完成</span>'
+    );
+    expect(taskDetailHtml).toContain('task-baseline-inline');
+
+    // Selected promoted run surfaces unbaseline button and banner pill.
+    expect(nodes.get('bench-baseline-run').hidden).toBe(true);
+    expect(nodes.get('bench-unbaseline-run').hidden).toBe(false);
+    expect(nodes.get('bench-run-detail').innerHTML).toContain('run-baseline-pill');
+
+    // Switching to completed ineligible run keeps baseline button visible as aria-disabled with reason.
+    state.selectedRunId = 'third-timeout';
+    state.runDetail = {
+        id: 'third-timeout',
+        task_id: 'baseline-task',
+        status: 'completed',
+        updated_at: '2026-11-24T00:00:00Z',
+        sample_status_counts: { completed: 34, timeout: 2 },
+        plan: { targets: [children[3].target] },
+        samples: []
+    };
+    view.renderDetails();
+    expect(nodes.get('bench-baseline-run').hidden).toBe(false);
+    expect(nodes.get('bench-baseline-run').getAttribute('aria-disabled')).toBe('true');
+    expect(nodes.get('bench-baseline-run').dataset.baselineIneligibleReason).toBe('含 2 个超时样本');
+    expect(nodes.get('bench-baseline-run').title).toBe('不可设为基线：含 2 个超时样本');
+    expect(nodes.get('bench-unbaseline-run').hidden).toBe(true);
+    expect(nodes.get('bench-run-detail').innerHTML).toContain('run-baseline-note');
+    expect(nodes.get('bench-run-detail').innerHTML).toContain('不可设为基线：含 2 个超时样本');
+});
+
+test('abnormal tasks support healthy channel/model promotion without cluttering chips or ineligible scopes', () => {
+    const { nodes, state, view } = fixture();
+    const children = [
+        {
+            run_id: 'ab-ok-hi',
+            target: { id: 't1', provider_id: 'devin', model: 'swe-2', thinking: 'high', account_ref: 'acct-a' },
+            status: 'completed',
+            sample_count: 36,
+            sample_status_counts: { completed: 36 },
+            baseline_eligible: true,
+            ineligibility_reason: null,
+            baseline_id: null
+        },
+        {
+            run_id: 'ab-ok-hi-b',
+            target: { id: 't2', provider_id: 'devin', model: 'swe-2', thinking: 'high', account_ref: 'acct-b' },
+            status: 'failed',
+            sample_count: 36,
+            sample_status_counts: { completed: 30, api_failure: 6 },
+            baseline_eligible: false,
+            ineligibility_reason: 'Assessment baseline: run must be completed',
+            baseline_id: null
+        },
+        {
+            run_id: 'ab-bad-med',
+            target: { id: 't3', provider_id: 'devin', model: 'swe-2-flash', thinking: 'medium', account_ref: 'acct-a' },
+            status: 'completed',
+            sample_count: 36,
+            sample_status_counts: { completed: 36 },
+            baseline_eligible: false,
+            ineligibility_reason: 'Assessment baseline: retry execution sources differ; retained for analysis, not baseline promotion',
+            baseline_id: null
+        }
+    ];
+    const abnormalTask = {
+        id: 'abnormal-task',
+        status: 'failed',
+        plan: { targets: children.map(c => c.target), run_count: 3, rounds: 3 },
+        children
+    };
+    state.tasks = [abnormalTask];
+    state.selectedTaskId = 'abnormal-task';
+    state.taskDetail = abnormalTask;
+    state.selectedRunId = null;
+    state.runDetail = null;
+    view.renderDetails();
+
+    // Even when parent task failed, healthy child run stays promotable at task, channel, and model levels.
+    expect(nodes.get('bench-baseline-task').hidden).toBe(false);
+    expect(nodes.get('bench-baseline-task').getAttribute('aria-disabled')).toBeNull();
+    expect(nodes.get('bench-baseline-task').textContent).toBe('设为基线 (1)');
+    expect(nodes.get('bench-baseline-task').title).toContain('含 6 个 API 失败样本');
+    expect(nodes.get('bench-baseline-task').title).toContain('重试时源码版本发生变化');
+
+    const html = nodes.get('bench-task-detail').innerHTML;
+    // Multi-model channel surfaces a model-level action only for the model with promotable runs.
+    expect(html).toContain('data-baseline-level="model"');
+    expect(html).toContain('aria-label="devin swe-2 设为基线 (1)"');
+    // Fully ineligible model omits disabled baseline buttons, while chip tooltips retain specific reasons.
+    expect(html).not.toContain('devin swe-2-flash 不可设为基线');
+    expect(html).not.toContain('task-chip-baseline');
+    expect(html).not.toContain('task-thinking-rail-actions');
+    expect(html).toContain('不可设为基线：含 6 个 API 失败样本');
+    expect(html).toContain('不可设为基线：重试时源码版本发生变化');
+
+    // All-ineligible task keeps one task-level aria-disabled button with aggregated reason and omits pod/model buttons.
+    const allBadTask = {
+        id: 'all-bad-task',
+        status: 'failed',
+        plan: { targets: [children[1].target, children[2].target], run_count: 2, rounds: 3 },
+        children: [children[1], children[2]]
+    };
+    state.tasks = [allBadTask];
+    state.selectedTaskId = 'all-bad-task';
+    state.taskDetail = allBadTask;
+    view.renderDetails();
+    expect(nodes.get('bench-baseline-task').hidden).toBe(false);
+    expect(nodes.get('bench-baseline-task').getAttribute('aria-disabled')).toBe('true');
+    expect(nodes.get('bench-baseline-task').title).toBe('不可设为基线：含 6 个 API 失败样本；重试时源码版本发生变化');
+    expect(nodes.get('bench-task-detail').innerHTML).not.toContain('data-baseline-level=');
 });

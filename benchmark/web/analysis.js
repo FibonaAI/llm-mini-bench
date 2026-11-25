@@ -33,7 +33,8 @@ const state = {
   activeInsightHighlight: null,
   selectedId: null,
   loading: false,
-  promoting: new Set()
+  promoting: new Set(),
+  demoting: new Set()
 };
 const filters = createAnalysisFilters(element('analysis-picker'), { onChange: renderObservations });
 const model = createAnalysisModel();
@@ -45,7 +46,8 @@ const chart = createScoreCostChart(element('score-cost-chart'), {
     location.hash = 'runs';
     app.emit('mini-bench:select-run', runId);
   },
-  onPromoteBaseline: promoteObservation
+  onPromoteBaseline: promoteObservation,
+  onDemoteBaseline: demoteObservationBaseline
 });
 const dataPopover = createAnalysisPopover(element('analysis-data-trigger'), element('analysis-data-panel'));
 const settingsPopover = createAnalysisPopover(element('chart-settings-trigger'), element('chart-settings-panel'), { width: 280 });
@@ -248,6 +250,7 @@ function renderObservations() {
     selectedIds: state.selectedId ? [state.selectedId] : [],
     insightHighlight: state.activeInsightHighlight,
     promotingIds: state.promoting,
+    demotingIds: state.demoting,
     maskAccounts: Boolean(app.maskAccounts)
   });
   dataPopover.position();
@@ -455,11 +458,36 @@ async function promoteObservation(id) {
     const promotedId = typeof result?.baseline?.id === 'string' ? result.baseline.id : null;
     if (promotedId && state.selectedId === record.id) state.selectedId = promotedId;
     await loadObservations();
+    app.emit('mini-bench:baselines-changed');
     notify('已将该运行目标保存为 Mini Bench 基线。');
   } catch (error) {
     notify(`保存基线失败：${error.message}`, true);
   } finally {
     state.promoting.delete(record.id);
+    renderObservations();
+  }
+}
+
+async function demoteObservationBaseline(baselineId) {
+  if (!baselineId || state.demoting.has(baselineId)) return;
+  const baselineRecord = state.observations.find(entry => entry.source === 'baseline' && entry.id === baselineId);
+  const runCounterpart = baselineRecord
+    ? state.observations.find(
+        entry => entry.source === 'run' && entry.run_id === baselineRecord.run_id && entry.target_id === baselineRecord.target_id
+      )
+    : null;
+  state.demoting.add(baselineId);
+  renderObservations();
+  try {
+    await request(`./api/bench/baselines/${encodeURIComponent(baselineId)}/delete`, { method: 'POST' });
+    if (state.selectedId === baselineId) state.selectedId = runCounterpart?.id ?? null;
+    await loadObservations();
+    app.emit('mini-bench:baselines-changed');
+    notify('已取消该基线标记，原始运行记录已保留。');
+  } catch (error) {
+    notify(`取消基线失败：${error.message}`, true);
+  } finally {
+    state.demoting.delete(baselineId);
     renderObservations();
   }
 }
@@ -661,7 +689,12 @@ element('analysis-view').addEventListener('click', async event => {
     return;
   }
   const promote = event.target.closest('[data-promote-id]');
-  if (promote) await promoteObservation(promote.dataset.promoteId);
+  if (promote) {
+    await promoteObservation(promote.dataset.promoteId);
+    return;
+  }
+  const demote = event.target.closest('[data-demote-baseline-id]');
+  if (demote) await demoteObservationBaseline(demote.dataset.demoteBaselineId);
 });
 element('analysis-insights-summary').addEventListener('click', event => {
   if (!insightsCollapsible) {

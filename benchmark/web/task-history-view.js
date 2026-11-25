@@ -2,7 +2,7 @@ import { remoteRouteNamespace } from './data-adapter.js';
 import { sortThinkingEfforts, thinkingLabel } from './data-picker.js';
 
 /** Render history and movable inline details; coordinator owns selection and polling. */
-export function createTaskHistoryView({ app, state, retryRequests, retrying }) {
+export function createTaskHistoryView({ app, state, retryRequests, retrying, baselineBusy = new Set() }) {
   const { byId: lookupElement, escapeHtml, activeStatus, statusText, formatDate, request } = app.services;
   const callSummaries = new Map(); // run id -> { key, calls | null, loading }
   const detailElements = new Map(
@@ -11,12 +11,16 @@ export function createTaskHistoryView({ app, state, retryRequests, retrying }) {
       'bench-close-run',
       'bench-task-section',
       'bench-task-detail',
+      'bench-baseline-task',
+      'bench-unbaseline-task',
       'bench-cancel-task',
       'bench-copy-task',
       'bench-retry-task',
       'bench-run-section',
       'bench-run-detail',
       'bench-run-title',
+      'bench-baseline-run',
+      'bench-unbaseline-run',
       'bench-cancel-run',
       'bench-copy-run',
       'bench-retry-run'
@@ -26,6 +30,151 @@ export function createTaskHistoryView({ app, state, retryRequests, retrying }) {
   const inProgress = record => record && (activeStatus(record.status) || record.status === 'cancelling');
   const canCancel = record => inProgress(record) && record.status !== 'cancelling';
   const fixedTargets = record => record.plan?.targets || record.targets || [];
+  function formatBaselineReason(reason, record) {
+    const raw = typeof reason === 'string' ? reason.trim() : '';
+    const text = raw.replace(/^Assessment baseline:\s*/i, '');
+    const status = record?.status;
+    const counts = record?.sample_status_counts || {};
+    const statusReason = () => {
+      if (status === 'queued' || status === 'running' || status === 'cancelling') return '运行尚未完成';
+      if (status === 'failed') {
+        const failed = counts.api_failure ?? 0;
+        return failed > 0 ? `含 ${failed} 个 API 失败样本` : '含 API 失败样本';
+      }
+      if (status === 'cancelled') return '运行已取消';
+      if (status === 'interrupted') return '运行已中断';
+      if (status === 'incomplete') return '运行未完成';
+      if (status === 'timeout') {
+        const timeouts = counts.timeout ?? 0;
+        return timeouts > 0 ? `含 ${timeouts} 个超时样本` : '含超时样本';
+      }
+      return '';
+    };
+    if (text.includes('retry execution sources differ')) return '重试时源码版本发生变化';
+    if (text.includes('failed or incomplete samples')) {
+      const timeouts = counts.timeout ?? 0;
+      if (timeouts > 0) return `含 ${timeouts} 个超时样本`;
+      const failed = counts.api_failure ?? 0;
+      if (failed > 0) return `含 ${failed} 个 API 失败样本`;
+      return statusReason() || '含未完成或失败样本';
+    }
+    if (text.includes('run must be completed')) return statusReason() || '运行尚未完成';
+    if (text.includes('only the whole Assessment') || text.includes('only whole released Mini Bench banks'))
+      return '仅全量官方题库可设为基线';
+    if (text.includes('all 12 tasks are required')) return '缺少完整 12 题';
+    if (text.includes('current bank provenance mismatch') || text.includes('task snapshots differ')) return '题库版本与当前不一致';
+    if (text.includes('source hashes are missing or stale') || text.includes('execution source provenance is missing'))
+      return '题库或源码快照已过期';
+    if (text.includes('invalid round count')) return '轮次不在 1~3 范围内';
+    if (text.includes('every planned round must contain exactly 12 samples')) return '轮次样本数不完整';
+    if (text.includes('ungradable content')) return '含无法评分样本';
+    if (text.includes('instruction checks are missing') || text.includes('grade outcome is missing')) return '评分证据不完整';
+    if (text.includes('sample execution protocol is unknown')) return '执行协议与当前不兼容';
+    if (text.includes('invalid protocol limits') || text.includes('invalid API retry policy') || text.includes('invalid timeout scope'))
+      return '评测限额协议与当前不兼容';
+    if (
+      text.includes('target identity is incomplete') ||
+      text.includes('sample identity differs') ||
+      text.includes('sample target identity differs')
+    )
+      return '运行目标标识不完整';
+    if (text.includes('malformed run evidence')) return '运行证据不完整';
+    if (text) return '不符合当前基线校验条件';
+    return statusReason() || '不符合基线条件';
+  }
+  function summarizeIneligibleReasons(items) {
+    if (!items.length) return '';
+    const counts = new Map();
+    for (const item of items) {
+      const text = formatBaselineReason(item.reason, item.record);
+      counts.set(text, (counts.get(text) || 0) + 1);
+    }
+    const entries = [...counts.entries()];
+    if (entries.length === 1) return entries[0][0];
+    return entries.map(([text, count]) => (count > 1 ? `${text} ×${count}` : text)).join('；');
+  }
+  function childBaselineState(child) {
+    return {
+      eligible: Boolean(child?.baseline_eligible),
+      reason: typeof child?.ineligibility_reason === 'string' && child.ineligibility_reason ? child.ineligibility_reason : null,
+      baselineId: typeof child?.baseline_id === 'string' && child.baseline_id ? child.baseline_id : null
+    };
+  }
+  function summarizeBaselineGroup(children) {
+    const promotable = [];
+    const promoted = [];
+    const ineligible = [];
+    for (const child of children) {
+      const base = childBaselineState(child);
+      if (base.baselineId) promoted.push(child);
+      else if (!inProgress(child) && base.eligible && child.target?.id) promotable.push(child);
+      else ineligible.push({ record: child, reason: inProgress(child) ? 'Assessment baseline: run must be completed' : base.reason });
+    }
+    return { promotable, promoted, ineligible, ineligibleReason: summarizeIneligibleReasons(ineligible) };
+  }
+  function setBaselineHeaderButton(btn, { hidden, busy, busyText, label, title, ariaLabel, ineligibleReason }) {
+    if (!btn) return;
+    btn.hidden = Boolean(hidden);
+    btn.textContent = busy ? busyText : label;
+    btn.title = title || '';
+    if (ineligibleReason) {
+      btn.disabled = false;
+      btn.setAttribute?.('aria-disabled', 'true');
+      if (ariaLabel) btn.setAttribute?.('aria-label', ariaLabel);
+      btn.classList?.toggle('is-baseline-ineligible', true);
+      if (btn.dataset) btn.dataset.baselineIneligibleReason = ineligibleReason;
+      else btn.setAttribute?.('data-baseline-ineligible-reason', ineligibleReason);
+    } else {
+      btn.disabled = Boolean(busy);
+      btn.removeAttribute?.('aria-disabled');
+      if (ariaLabel) btn.setAttribute?.('aria-label', ariaLabel);
+      else btn.removeAttribute?.('aria-label');
+      btn.classList?.toggle('is-baseline-ineligible', false);
+      if (btn.dataset) delete btn.dataset.baselineIneligibleReason;
+      btn.removeAttribute?.('data-baseline-ineligible-reason');
+    }
+  }
+  function latestRunSummary(runId) {
+    if (!runId) return null;
+    const fromSelectedTask = state.taskDetail?.children?.find(child => child.run_id === runId);
+    if (fromSelectedTask) return fromSelectedTask;
+    for (const task of state.tasks || []) {
+      const child = task.children?.find(item => item.run_id === runId);
+      if (child) return child;
+    }
+    return (state.runs || []).find(item => item.id === runId) || null;
+  }
+  function runBaselineTargets(run) {
+    if (!run) return [];
+    const runId = run.id || run.run_id || '';
+    const summary = runId ? latestRunSummary(runId) : null;
+    const source =
+      summary && (Array.isArray(summary.baseline_targets) || summary.baseline_eligible !== undefined || summary.baseline_id !== undefined)
+        ? summary
+        : run;
+    if (Array.isArray(source.baseline_targets)) {
+      return source.baseline_targets.map(item => ({
+        target_id: typeof item?.target_id === 'string' ? item.target_id : '',
+        baseline_eligible: Boolean(item?.baseline_eligible),
+        ineligibility_reason:
+          typeof item?.ineligibility_reason === 'string' && item.ineligibility_reason ? item.ineligibility_reason : null,
+        baseline_id: typeof item?.baseline_id === 'string' && item.baseline_id ? item.baseline_id : null
+      }));
+    }
+    if (source.baseline_eligible !== undefined || source.baseline_id !== undefined || source.ineligibility_reason !== undefined) {
+      const targetId = source.target?.id || fixedTargets(run)[0]?.id || '';
+      return [
+        {
+          target_id: typeof targetId === 'string' ? targetId : '',
+          baseline_eligible: Boolean(source.baseline_eligible),
+          ineligibility_reason:
+            typeof source.ineligibility_reason === 'string' && source.ineligibility_reason ? source.ineligibility_reason : null,
+          baseline_id: typeof source.baseline_id === 'string' && source.baseline_id ? source.baseline_id : null
+        }
+      ];
+    }
+    return [];
+  }
   const sampleProgress = record => {
     const counts = record.sample_status_counts || {};
     const done = record.samples
@@ -471,6 +620,9 @@ export function createTaskHistoryView({ app, state, retryRequests, retrying }) {
                     ].filter(Boolean);
               const quality = qualityLabel(record);
               if (quality) taskMetaParts.push(quality);
+              if (kind !== 'task' && runBaselineTargets(record).some(item => Boolean(item.baseline_id))) {
+                taskMetaParts.push('已设为基线');
+              }
               const idTag = `<code class="task-id-tag" title="${escapeHtml(record.id)}">${escapeHtml(shortId(record.id))}</code>`;
               const counts = kind === 'task' ? renderTaskCountsBar(record, children, progress) : '';
               const recordTone = statusTone(record);
@@ -603,6 +755,12 @@ export function createTaskHistoryView({ app, state, retryRequests, retrying }) {
     };
     if (counts.running) pushPill('running', `运行中 ${counts.running}`);
     if (counts.completed) pushPill('completed', `已完成 ${counts.completed}`);
+    const baselineCount = children.filter(child => Boolean(childBaselineState(child).baselineId)).length;
+    if (baselineCount > 0) {
+      pills.push(
+        `<span class="task-count-pill is-baseline"><i class="task-baseline-sq" aria-hidden="true"></i>基线 ${baselineCount}</span>`
+      );
+    }
     if (counts.queued) pushPill('queued', `排队 ${counts.queued}`);
     if (counts.timeout) pushPill('timeout', `超时 ${counts.timeout}${timeoutSamples ? `（${timeoutSamples} 样本）` : ''}`);
     if (counts.incomplete) pushPill('timeout', `未完成 ${counts.incomplete}`);
@@ -643,17 +801,53 @@ export function createTaskHistoryView({ app, state, retryRequests, retrying }) {
     }
     return escapeHtml(statusText(child.status));
   }
+  function renderScopeBaselineButtons({ level, scopeId, scopeName, children, focusKeyPrefix, unitLabel }) {
+    if (!children.length) return '';
+    const { promotable, promoted, ineligible, ineligibleReason } = summarizeBaselineGroup(children);
+    if (promotable.length === 0 && promoted.length === 0) return '';
+    const promoteScope = `${level}-promote:${scopeId}`;
+    const demoteScope = `${level}-demote:${scopeId}`;
+    const promoteBusy = baselineBusy.has(promoteScope);
+    const demoteBusy = baselineBusy.has(demoteScope);
+    const multiRun = children.length > 1;
+    const buttons = [];
+    if (promotable.length > 0) {
+      const promoteLabel = promoteBusy ? '保存中…' : multiRun ? `设为基线 (${promotable.length})` : '设为基线';
+      const skipNote = ineligible.length > 0 ? `（跳过 ${ineligible.length} 个不可设为基线的运行：${ineligibleReason}）` : '';
+      buttons.push(
+        `<button type="button" class="channel-pod-action is-baseline" data-baseline-level="${escapeHtml(level)}" data-baseline-scope="${escapeHtml(promoteScope)}" data-baseline-promote-runs="${escapeHtml(promotable.map(child => child.run_id).join(','))}" data-history-focus="${escapeHtml(`${focusKeyPrefix}:promote`)}" aria-label="${escapeHtml(`${scopeName} ${promoteLabel}`)}" title="${escapeHtml(`将该${unitLabel}中 ${promotable.length} 个符合条件的已完成运行设为基线${skipNote}`)}" ${promoteBusy ? 'disabled' : ''}><i class="task-baseline-sq" aria-hidden="true"></i>${escapeHtml(promoteLabel)}</button>`
+      );
+    }
+    if (promoted.length > 0) {
+      const demoteLabel = demoteBusy ? '取消中…' : multiRun || promoted.length > 1 ? `取消基线 (${promoted.length})` : '取消基线';
+      const skipNote =
+        promotable.length === 0 && ineligible.length > 0 ? `；另 ${ineligible.length} 个不可设为基线：${ineligibleReason}` : '';
+      buttons.push(
+        `<button type="button" class="channel-pod-action is-unbaseline" data-baseline-level="${escapeHtml(level)}" data-baseline-scope="${escapeHtml(demoteScope)}" data-baseline-demote-ids="${escapeHtml(promoted.map(child => childBaselineState(child).baselineId).join(','))}" data-history-focus="${escapeHtml(`${focusKeyPrefix}:demote`)}" aria-label="${escapeHtml(`${scopeName} ${demoteLabel}`)}" title="${escapeHtml(`取消该${unitLabel}已保存的 ${promoted.length} 份基线标记（保留原始运行记录）${skipNote}`)}" ${demoteBusy ? 'disabled' : ''}>${escapeHtml(demoteLabel)}</button>`
+      );
+    }
+    return buttons.join('');
+  }
   function renderTaskPreview(task, visibleChildren) {
     if (!visibleChildren.length) return '<div class="empty">没有匹配的子运行。</div>';
     const channelPods = groupByChannel(visibleChildren);
     const presentTones = new Set(visibleChildren.map(childPreviewTone));
+    const hasAnyBaseline = visibleChildren.some(child => Boolean(childBaselineState(child).baselineId));
     let slotIndex = 0;
     const podsHtml = channelPods
-      .map(pod => {
+      .map((pod, podIndex) => {
         const podSum = summarizeChildren(pod.children);
         const podTone = channelHealthTone(pod.children, 'queued', podSum);
         const isRemote = pod.children.some(child => Boolean(remoteRouteNamespace(child.target)));
         const { distinct: podAccounts, podBadge } = describeChannelAccounts(pod.children);
+        const podBaselineHtml = renderScopeBaselineButtons({
+          level: 'channel',
+          scopeId: `${task.id}:${podIndex}`,
+          scopeName: pod.name,
+          children: pod.children,
+          focusKeyPrefix: `pod:${pod.name}`,
+          unitLabel: '渠道'
+        });
         const statusBits = [
           podSum.counts.running ? `运行中 ${podSum.counts.running}` : '',
           podSum.counts.completed ? `完成 ${podSum.counts.completed}` : '',
@@ -681,15 +875,30 @@ export function createTaskHistoryView({ app, state, retryRequests, retrying }) {
           const target = child.target || {},
             progress = sampleProgress(child),
             tone = childPreviewTone(child),
+            baseState = childBaselineState(child),
+            isBaseline = Boolean(baseState.baselineId),
+            canPromote = !inProgress(child) && baseState.eligible && !isBaseline && Boolean(target.id),
+            ineligibleReason =
+              !isBaseline && !canPromote
+                ? formatBaselineReason(inProgress(child) ? 'Assessment baseline: run must be completed' : baseState.reason, child)
+                : '',
             selected = child.run_id === state.selectedRunId,
             budget = budgetLabel(child.budget, child.status),
             quality = qualityLabel(child);
           const stateHtml = childPreviewStateHtml(child, progress);
           const pct = progress.total > 0 ? Math.min(100, Math.round((progress.done / progress.total) * 100)) : 0;
+          const baselineTip = isBaseline
+            ? '已设为基线'
+            : canPromote
+              ? '可设为基线（点击展开设置）'
+              : ineligibleReason
+                ? `不可设为基线：${ineligibleReason}`
+                : '';
           const tooltip = [
             targetLabel(target),
             targetIdentity(target),
             recordStatusLabel(child),
+            baselineTip,
             `${progress.done}/${progress.total} 样本`,
             budget,
             quality,
@@ -701,10 +910,13 @@ export function createTaskHistoryView({ app, state, retryRequests, retrying }) {
             tone === 'running'
               ? '<span class="task-preview-chip-fill" aria-hidden="true"></span><span class="task-preview-chip-track" aria-hidden="true"></span><i class="task-dot is-running is-pulse" aria-hidden="true"></i>'
               : '';
-          return `<button type="button" class="task-preview-chip is-${tone}${selected ? ' is-selected' : ''}"${tone === 'running' ? ` style="--pct:${pct}%"` : ''} data-preview-run-id="${escapeHtml(child.run_id)}" data-history-focus="preview-run:${escapeHtml(child.run_id)}" aria-expanded="${selected}" aria-controls="${escapeHtml(slotId)}"${describedById ? ` aria-describedby="${escapeHtml(describedById)}"` : ''} title="${escapeHtml(tooltip)}">${runningDecor}<span class="task-preview-chip-label">${escapeHtml(label)}</span><span class="task-preview-chip-state">${stateHtml}</span></button>`;
+          const baselineDecor = isBaseline
+            ? '<span class="task-preview-chip-baseline"><i class="task-baseline-sq" aria-hidden="true"></i><span class="visually-hidden">已设基线</span></span>'
+            : '';
+          return `<button type="button" class="task-preview-chip is-${tone}${isBaseline ? ' is-baseline' : ''}${selected ? ' is-selected' : ''}"${tone === 'running' ? ` style="--pct:${pct}%"` : ''} data-preview-run-id="${escapeHtml(child.run_id)}" data-history-focus="preview-run:${escapeHtml(child.run_id)}" aria-expanded="${selected}" aria-controls="${escapeHtml(slotId)}"${describedById ? ` aria-describedby="${escapeHtml(describedById)}"` : ''} title="${escapeHtml(tooltip)}">${runningDecor}${baselineDecor}<span class="task-preview-chip-label">${escapeHtml(label)}</span><span class="task-preview-chip-state">${stateHtml}</span></button>`;
         };
         const modelRows = modelGroups
-          .map(group => {
+          .map((group, modelIndex) => {
             const currentSlot = slotIndex++;
             const slotId = `history-preview-run-${task.id}-${currentSlot}`;
             const accounts = [...new Set(group.children.map(child => shortAccount(child.target)))];
@@ -720,6 +932,17 @@ export function createTaskHistoryView({ app, state, retryRequests, retrying }) {
               groupSum.counts.failed ? `失败 ${groupSum.counts.failed}` : '',
               groupSum.counts.interrupted ? `中断 ${groupSum.counts.interrupted}` : ''
             ].filter(Boolean);
+            const modelBaselineHtml =
+              modelGroups.length > 1
+                ? renderScopeBaselineButtons({
+                    level: 'model',
+                    scopeId: `${task.id}:${podIndex}:${modelIndex}`,
+                    scopeName: `${pod.name} ${group.modelName}`,
+                    children: group.children,
+                    focusKeyPrefix: `model:${pod.name}:${group.modelName}`,
+                    unitLabel: '模型'
+                  })
+                : '';
             const sortedThinkingKeys = collectSortedThinkingKeys(group.children);
             let runsMarkup;
             if (multiAccount) {
@@ -749,10 +972,10 @@ export function createTaskHistoryView({ app, state, retryRequests, retrying }) {
               const chips = sortedChildren.map(child => renderPreviewChip(child, shortThink(child.target), slotId)).join('');
               runsMarkup = `<div class="task-preview-runs is-single-account"><span class="task-thinking-inline-label">思考档位</span>${chips}</div>`;
             }
-            return `<div class="task-preview-group"><div class="task-preview-head"><strong>${escapeHtml(group.modelName)}</strong><span class="task-preview-stats">${escapeHtml(contextParts.join(' · '))}</span></div>${runsMarkup}<div id="${escapeHtml(slotId)}" class="task-preview-slot" data-preview-model-slot="${currentSlot}" data-preview-run-ids="${escapeHtml(group.children.map(child => child.run_id).join(','))}"></div></div>`;
+            return `<div class="task-preview-group"><div class="task-preview-head"><strong>${escapeHtml(group.modelName)}</strong><div class="task-preview-head-meta"><span class="task-preview-stats">${escapeHtml(contextParts.join(' · '))}</span>${modelBaselineHtml ? `<span class="task-preview-head-actions">${modelBaselineHtml}</span>` : ''}</div></div>${runsMarkup}<div id="${escapeHtml(slotId)}" class="task-preview-slot" data-preview-model-slot="${currentSlot}" data-preview-run-ids="${escapeHtml(group.children.map(child => child.run_id).join(','))}"></div></div>`;
           })
           .join('');
-        return `<section class="channel-pod is-${podTone}" aria-label="${escapeHtml(`渠道 ${pod.name}`)}"><header class="channel-pod-head"><div class="channel-pod-identity"><span class="channel-pod-icon">${isRemote ? CHANNEL_REMOTE_ICON : CHANNEL_LOCAL_ICON}</span><strong class="channel-pod-name">${escapeHtml(pod.name)}</strong>${podBadge ? `<span class="channel-pod-tag">${escapeHtml(podBadge)}</span>` : ''}${isRemote ? '<span class="channel-pod-tag is-remote">远端路由</span>' : ''}</div><div class="channel-pod-summary">${statusBits ? `<span class="channel-pod-status is-${podTone}"><i class="task-dot is-${podTone}" aria-hidden="true"></i>${escapeHtml(statusBits)}</span>` : ''}${podSum.sampleTotal > 0 ? `<span class="channel-pod-progress">${renderProgressBar(podSum.segments, podSum.sampleTotal, true)}<span class="channel-pod-count">${podSum.sampleDone}/${podSum.sampleTotal}</span></span>` : ''}</div></header><div class="channel-pod-body">${modelRows}</div></section>`;
+        return `<section class="channel-pod is-${podTone}" aria-label="${escapeHtml(`渠道 ${pod.name}`)}"><header class="channel-pod-head"><div class="channel-pod-identity"><span class="channel-pod-icon">${isRemote ? CHANNEL_REMOTE_ICON : CHANNEL_LOCAL_ICON}</span><strong class="channel-pod-name">${escapeHtml(pod.name)}</strong>${podBadge ? `<span class="channel-pod-tag">${escapeHtml(podBadge)}</span>` : ''}${isRemote ? '<span class="channel-pod-tag is-remote">远端路由</span>' : ''}</div><div class="channel-pod-summary">${statusBits ? `<span class="channel-pod-status is-${podTone}"><i class="task-dot is-${podTone}" aria-hidden="true"></i>${escapeHtml(statusBits)}</span>` : ''}${podBaselineHtml}${podSum.sampleTotal > 0 ? `<span class="channel-pod-progress">${renderProgressBar(podSum.segments, podSum.sampleTotal, true)}<span class="channel-pod-count">${podSum.sampleDone}/${podSum.sampleTotal}</span></span>` : ''}</div></header><div class="channel-pod-body">${modelRows}</div></section>`;
       })
       .join('');
     const legend = [
@@ -767,6 +990,11 @@ export function createTaskHistoryView({ app, state, retryRequests, retrying }) {
       .filter(([tone]) => presentTones.has(tone))
       .map(
         ([tone, label]) => `<span class="task-preview-legend-item"><i class="task-dot is-${tone}" aria-hidden="true"></i>${label}</span>`
+      )
+      .concat(
+        hasAnyBaseline
+          ? ['<span class="task-preview-legend-item"><i class="task-baseline-sq is-legend" aria-hidden="true"></i>已设基线</span>']
+          : []
       )
       .join('');
     return `<div class="task-preview" aria-label="任务按渠道与模型预览">${podsHtml}</div><p class="task-preview-legend">${legend}<span class="muted">点击运行标签查看样本详情</span></p>`;
@@ -797,12 +1025,66 @@ export function createTaskHistoryView({ app, state, retryRequests, retrying }) {
     element('bench-task-section').hidden = !state.selectedTaskId;
     element('bench-cancel-task').hidden = !inProgress(task);
     element('bench-cancel-task').disabled = !canCancel(task) || state.cancelling.has(`task:${task?.id}`);
+    const taskBaselineBtn = element('bench-baseline-task');
+    const taskUnbaselineBtn = element('bench-unbaseline-task');
     if (!task) {
+      if (taskBaselineBtn) taskBaselineBtn.hidden = true;
+      if (taskUnbaselineBtn) taskUnbaselineBtn.hidden = true;
       replaceHistoryMarkup(element('bench-task-detail'), '<div class="empty">正在读取任务详情…</div>');
       return;
     }
     const plan = task.plan || {},
       children = task.children || [];
+    const {
+      promotable: promotableChildren,
+      promoted: promotedChildren,
+      ineligible: ineligibleChildren,
+      ineligibleReason: taskIneligibleReason
+    } = summarizeBaselineGroup(children);
+    const taskPromoteBusy = baselineBusy.has(`task-promote:${task.id}`);
+    const taskDemoteBusy = baselineBusy.has(`task-demote:${task.id}`);
+    if (promotableChildren.length > 0) {
+      setBaselineHeaderButton(taskBaselineBtn, {
+        hidden: false,
+        busy: taskPromoteBusy,
+        busyText: '正在保存基线…',
+        label: children.length > 1 ? `设为基线 (${promotableChildren.length})` : '设为基线',
+        title: `将该任务中 ${promotableChildren.length} 个符合条件的已完成运行保存为基线${ineligibleChildren.length > 0 ? `（跳过 ${ineligibleChildren.length} 个不可设为基线的运行：${taskIneligibleReason}）` : ''}`,
+        ariaLabel: '',
+        ineligibleReason: ''
+      });
+    } else if (promotedChildren.length === 0 && children.length > 0) {
+      const reason = taskIneligibleReason || '不符合基线条件';
+      setBaselineHeaderButton(taskBaselineBtn, {
+        hidden: false,
+        busy: false,
+        busyText: '正在保存基线…',
+        label: '设为基线',
+        title: `不可设为基线：${reason}`,
+        ariaLabel: `设为基线（不可用：${reason}）`,
+        ineligibleReason: reason
+      });
+    } else {
+      setBaselineHeaderButton(taskBaselineBtn, {
+        hidden: true,
+        busy: false,
+        busyText: '正在保存基线…',
+        label: '设为基线',
+        title: '',
+        ariaLabel: '',
+        ineligibleReason: ''
+      });
+    }
+    if (taskUnbaselineBtn) {
+      taskUnbaselineBtn.hidden = promotedChildren.length === 0;
+      taskUnbaselineBtn.disabled = taskDemoteBusy;
+      taskUnbaselineBtn.textContent = taskDemoteBusy
+        ? '正在取消基线…'
+        : promotedChildren.length > 1
+          ? `取消基线 (${promotedChildren.length})`
+          : '取消基线';
+      taskUnbaselineBtn.title = `取消该任务已保存的 ${promotedChildren.length} 份基线标记（保留原始运行记录）${promotableChildren.length === 0 && ineligibleChildren.length > 0 ? `；另 ${ineligibleChildren.length} 个不可设为基线：${taskIneligibleReason}` : ''}`;
+    }
     const rawQuery = element('history-search').value.trim(),
       tokens = searchTokens(rawQuery);
     const filterChildren = tokens.length > 0 && !recordHeaderMatchesTokens(task, tokens);
@@ -821,9 +1103,10 @@ export function createTaskHistoryView({ app, state, retryRequests, retrying }) {
         .map(child => {
           const target = child.target || {},
             progress = sampleProgress(child),
+            baseState = childBaselineState(child),
             budget = budgetLabel(child.budget, child.status),
             quality = qualityLabel(child);
-          return `<div class="task-child-row ${child.run_id === state.selectedRunId ? 'is-selected' : ''}" data-child-run-id="${escapeHtml(child.run_id)}"><button class="task-child-open" type="button" aria-expanded="${child.run_id === state.selectedRunId}" aria-controls="history-run-${escapeHtml(child.run_id)}" data-history-focus="run:${escapeHtml(child.run_id)}" data-bench-run-id="${escapeHtml(child.run_id)}"><strong>${escapeHtml(targetLabel(target))}</strong><span>${escapeHtml(targetIdentity(target))}</span><small>运行 ${escapeHtml(child.run_id)} · ${progress.done}/${progress.total} 样本已结束${budget ? ` · ${escapeHtml(budget)}` : ''}${quality ? ` · ${escapeHtml(quality)}` : ''}${child.stop_reason && child.stop_reason !== 'api_failure' ? ` · 停止原因 ${escapeHtml(child.stop_reason)}` : ''}${child.retryable_samples > 0 && !inProgress(child) ? ` · ${child.retryable_samples} 个可重试` : ''}</small></button><span class="run-list-status ${statusBadgeClass(child)}">${escapeHtml(recordStatusLabel(child))}</span><button class="btn" type="button" data-history-focus="cancel:${escapeHtml(child.run_id)}" data-cancel-child="${escapeHtml(child.run_id)}" ${!canCancel(child) || state.cancelling.has(`run:${child.run_id}`) ? 'disabled' : ''}>取消运行</button></div><div id="history-run-${escapeHtml(child.run_id)}" data-inline-run="${escapeHtml(child.run_id)}"></div>`;
+          return `<div class="task-child-row ${child.run_id === state.selectedRunId ? 'is-selected' : ''}" data-child-run-id="${escapeHtml(child.run_id)}"><button class="task-child-open" type="button" aria-expanded="${child.run_id === state.selectedRunId}" aria-controls="history-run-${escapeHtml(child.run_id)}" data-history-focus="run:${escapeHtml(child.run_id)}" data-bench-run-id="${escapeHtml(child.run_id)}"><strong>${escapeHtml(targetLabel(target))}${baseState.baselineId ? '<span class="task-baseline-inline"><i class="task-baseline-sq" aria-hidden="true"></i>基线</span>' : ''}</strong><span>${escapeHtml(targetIdentity(target))}</span><small>运行 ${escapeHtml(child.run_id)} · ${progress.done}/${progress.total} 样本已结束${baseState.baselineId ? ' · 已设为基线' : ''}${budget ? ` · ${escapeHtml(budget)}` : ''}${quality ? ` · ${escapeHtml(quality)}` : ''}${child.stop_reason && child.stop_reason !== 'api_failure' ? ` · 停止原因 ${escapeHtml(child.stop_reason)}` : ''}${child.retryable_samples > 0 && !inProgress(child) ? ` · ${child.retryable_samples} 个可重试` : ''}</small></button><span class="run-list-status ${statusBadgeClass(child)}">${escapeHtml(recordStatusLabel(child))}</span><button class="btn" type="button" data-history-focus="cancel:${escapeHtml(child.run_id)}" data-cancel-child="${escapeHtml(child.run_id)}" ${!canCancel(child) || state.cancelling.has(`run:${child.run_id}`) ? 'disabled' : ''}>取消运行</button></div><div id="history-run-${escapeHtml(child.run_id)}" data-inline-run="${escapeHtml(child.run_id)}"></div>`;
         })
         .join(
           ''
@@ -867,7 +1150,11 @@ export function createTaskHistoryView({ app, state, retryRequests, retrying }) {
     element('bench-run-title').textContent = state.selectedTaskId ? '子运行样本' : '旧运行详情';
     element('bench-cancel-run').hidden = !inProgress(run);
     element('bench-cancel-run').disabled = !canCancel(run) || state.cancelling.has(`run:${run?.id}`);
+    const runBaselineBtn = element('bench-baseline-run');
+    const runUnbaselineBtn = element('bench-unbaseline-run');
     if (!run) {
+      if (runBaselineBtn) runBaselineBtn.hidden = true;
+      if (runUnbaselineBtn) runUnbaselineBtn.hidden = true;
       lastRunDetailInputs = null;
       lazyJsonPayloads.clear();
       replaceHistoryMarkup(
@@ -875,6 +1162,79 @@ export function createTaskHistoryView({ app, state, retryRequests, retrying }) {
         `<div class="empty">${state.selectedRunId ? '正在读取运行详情…' : '选择一个运行，查看逐题、逐轮样本与原始证据。'}</div>`
       );
       return;
+    }
+    const baseTargets = runBaselineTargets(run);
+    const promotableTargets = inProgress(run)
+      ? []
+      : baseTargets.filter(item => item.baseline_eligible && !item.baseline_id && item.target_id);
+    const promotedTargets = baseTargets.filter(item => Boolean(item.baseline_id));
+    const ineligibleTargets = baseTargets
+      .filter(item => !item.baseline_id && (inProgress(run) || !item.baseline_eligible || !item.target_id))
+      .map(item => ({
+        record: run,
+        reason: inProgress(run) ? 'Assessment baseline: run must be completed' : item.ineligibility_reason
+      }));
+    const runIneligibleReason =
+      promotableTargets.length === 0 && promotedTargets.length === 0
+        ? summarizeIneligibleReasons(
+            ineligibleTargets.length
+              ? ineligibleTargets
+              : [{ record: run, reason: inProgress(run) ? 'Assessment baseline: run must be completed' : run.ineligibility_reason }]
+          )
+        : '';
+    const runPromoteBusy = baselineBusy.has(`run-promote:${run.id}`);
+    const runDemoteBusy = baselineBusy.has(`run-demote:${run.id}`);
+    const baselineSig = baseTargets
+      .map(item => `${item.target_id}:${item.baseline_eligible ? 1 : 0}:${item.baseline_id || ''}:${item.ineligibility_reason || ''}`)
+      .join('|');
+    if (promotableTargets.length > 0) {
+      const skipNote =
+        ineligibleTargets.length > 0
+          ? `（跳过 ${ineligibleTargets.length} 个不可设为基线的目标：${summarizeIneligibleReasons(ineligibleTargets)}）`
+          : '';
+      setBaselineHeaderButton(runBaselineBtn, {
+        hidden: false,
+        busy: runPromoteBusy,
+        busyText: '正在保存基线…',
+        label: promotableTargets.length > 1 ? `设为基线 (${promotableTargets.length})` : '设为基线',
+        title:
+          promotableTargets.length > 1
+            ? `将该运行中 ${promotableTargets.length} 个符合条件的目标保存为基线${skipNote}`
+            : `将该运行目标保存为基线${skipNote}`,
+        ariaLabel: '',
+        ineligibleReason: ''
+      });
+    } else if (promotedTargets.length === 0) {
+      const reason = runIneligibleReason || '不符合基线条件';
+      setBaselineHeaderButton(runBaselineBtn, {
+        hidden: false,
+        busy: false,
+        busyText: '正在保存基线…',
+        label: '设为基线',
+        title: `不可设为基线：${reason}`,
+        ariaLabel: `设为基线（不可用：${reason}）`,
+        ineligibleReason: reason
+      });
+    } else {
+      setBaselineHeaderButton(runBaselineBtn, {
+        hidden: true,
+        busy: false,
+        busyText: '正在保存基线…',
+        label: '设为基线',
+        title: '',
+        ariaLabel: '',
+        ineligibleReason: ''
+      });
+    }
+    if (runUnbaselineBtn) {
+      runUnbaselineBtn.hidden = promotedTargets.length === 0;
+      runUnbaselineBtn.disabled = runDemoteBusy;
+      runUnbaselineBtn.textContent = runDemoteBusy
+        ? '正在取消基线…'
+        : promotedTargets.length > 1
+          ? `取消基线 (${promotedTargets.length})`
+          : '取消基线';
+      runUnbaselineBtn.title = '取消该运行已保存的基线标记（保留原始运行记录）';
     }
     const calls = ensureCallSummaries(run);
     const runDetailInputs = [
@@ -889,7 +1249,10 @@ export function createTaskHistoryView({ app, state, retryRequests, retrying }) {
       Boolean(callSummaries.get(run.id)?.loading),
       retryRequests.has(`runs:${run.id}`),
       retrying.has(`runs:${run.id}`),
-      state.cancelling.has(`run:${run.id}`)
+      state.cancelling.has(`run:${run.id}`),
+      baselineSig,
+      runPromoteBusy,
+      runDemoteBusy
     ];
     if (lastRunDetailInputs && runDetailInputs.every((value, index) => value === lastRunDetailInputs[index])) return;
     lastRunDetailInputs = runDetailInputs;
@@ -925,12 +1288,16 @@ export function createTaskHistoryView({ app, state, retryRequests, retrying }) {
           )
           .join(
             ''
-          )}</div><span class="run-list-status ${statusBadgeClass(run)}"><i class="task-dot is-${statusTone(run)}" aria-hidden="true"></i>${escapeHtml(recordStatusLabel(run))}${sampleTotal ? ` · ${runProgress.done}/${sampleTotal} 样本` : ''}</span></div>`
+          )}</div><div class="run-target-badges">${promotedTargets.length > 0 ? '<span class="run-baseline-pill"><i class="task-baseline-sq" aria-hidden="true"></i>已设为基线</span>' : ''}<span class="run-list-status ${statusBadgeClass(run)}"><i class="task-dot is-${statusTone(run)}" aria-hidden="true"></i>${escapeHtml(recordStatusLabel(run))}${sampleTotal ? ` · ${runProgress.done}/${sampleTotal} 样本` : ''}</span></div></div>`
+      : '';
+    const ineligibleNoteHtml = runIneligibleReason
+      ? `<p class="run-baseline-note" role="note">不可设为基线：${escapeHtml(runIneligibleReason)}</p>`
       : '';
     const provenanceBits = [
       `运行 <code class="task-meta-id">${escapeHtml(run.id)}</code>`,
       !runTargets.length ? `状态 <strong>${escapeHtml(recordStatusLabel(run))}</strong>` : '',
       !runTargets.length ? `已结束 <strong>${runProgress.done}/${sampleTotal}</strong>` : '',
+      promotedTargets.length > 0 && !runTargets.length ? '<strong>已设为基线</strong>' : '',
       retryBatches.length
         ? `手动重试 <strong>${retryBatches.length} 次${latestRetry?.created_at ? `（最近 ${escapeHtml(formatDate(latestRetry.created_at))}）` : ''}</strong>`
         : '',
@@ -938,7 +1305,7 @@ export function createTaskHistoryView({ app, state, retryRequests, retrying }) {
       runTargets.length ? escapeHtml(runTargets.map(target => `${targetLabel(target)} · ${targetIdentity(target)}`).join('；')) : '',
       !run.task_id ? '旧运行记录，未迁移为新任务。' : ''
     ].filter(Boolean);
-    const summary = `${retryRequests.has(`runs:${run.id}`) && !retrying.has(`runs:${run.id}`) ? `<p class="task-detail-note">${retryNotePrefix}；再次点击右上角“${escapeHtml(runConfirmLabel)}”后开始。</p>` : ''}${targetBanner}<p class="task-detail-note run-detail-provenance">${provenanceBits.join(' · ')}</p>`;
+    const summary = `${retryRequests.has(`runs:${run.id}`) && !retrying.has(`runs:${run.id}`) ? `<p class="task-detail-note">${retryNotePrefix}；再次点击右上角“${escapeHtml(runConfirmLabel)}”后开始。</p>` : ''}${targetBanner}${ineligibleNoteHtml}<p class="task-detail-note run-detail-provenance">${provenanceBits.join(' · ')}</p>`;
     const sampleTone = sample =>
       isTimeoutSample(sample)
         ? 'timeout'
@@ -1141,5 +1508,5 @@ export function createTaskHistoryView({ app, state, retryRequests, retrying }) {
   });
   element('history-search').addEventListener('input', renderDetails);
   element('history-status').addEventListener('change', renderDetails);
-  return { element, historyEntries, renderDetails, inProgress, canCancel, fixedTargets, taskSection, runSection };
+  return { element, historyEntries, renderDetails, inProgress, canCancel, fixedTargets, runBaselineTargets, taskSection, runSection };
 }

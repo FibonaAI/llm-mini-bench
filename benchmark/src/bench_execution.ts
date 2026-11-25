@@ -815,7 +815,7 @@ export class BenchExecutionService {
             task.child_run_ids.map(run_id => this.run_summary(run_id))
         );
     }
-    private collect_task_summaries(cloneOutput: boolean): RecordValue[] {
+    private collect_task_summaries(cloneOutput: boolean, enrichChild?: (child: RecordValue) => RecordValue): RecordValue[] {
         return [...this._tasks.keys()].reverse().map(id => {
             const task = this._tasks.get(id)!;
             const summary = execution_task_summary(
@@ -823,8 +823,9 @@ export class BenchExecutionService {
                 task.child_run_ids.map(run_id => this.run_summary(run_id, cloneOutput)),
                 cloneOutput
             );
+            const children = enrichChild ? (summary.children as RecordValue[]).map(enrichChild) : summary.children;
             const { task_snapshots: _snapshots, bank_snapshot: _bank, source_sha256: _sources, ...plan } = summary.plan as RecordValue;
-            return { ...summary, plan: { ...plan, provenance_omitted: true } };
+            return { ...summary, children, plan: { ...plan, provenance_omitted: true } };
         });
     }
     /** List independently persisted batches without duplicating raw child evidence. */
@@ -833,8 +834,8 @@ export class BenchExecutionService {
         return this.collect_task_summaries(true);
     }
     /** Serialize task summaries directly for HTTP caches without cloning every historical record. */
-    serialize_tasks_payload(): string {
-        return JSON.stringify({ tasks: this.collect_task_summaries(false) });
+    serialize_tasks_payload(enrichChild?: (child: RecordValue) => RecordValue): string {
+        return JSON.stringify({ tasks: this.collect_task_summaries(false, enrichChild) });
     }
     /** Persist cancellation intent before cancelling any child; never resume queued work. */
     cancel_task(id: string): boolean {
@@ -1182,30 +1183,58 @@ export class BenchExecutionService {
     list_run_snapshots(): ExecutionRun[] {
         return [...this._run_index.keys()].reverse().map(id => this.get_run(id)!);
     }
+    ensure_source_index(
+        context: AssessmentSourceContext = create_assessment_source_context(),
+        source_sig = assessment_source_signature()
+    ): void {
+        if (source_sig === this._cached_source_sig) return;
+        this._cached_source_sig = source_sig;
+        const cacheUpdates: RunIndexCacheEntry[] = [];
+        for (const [id, entry] of this._run_index) {
+            if (this._runs.has(id)) continue;
+            const run = this.load_run_from_db(id);
+            if (!run) continue;
+            const refreshed = this.index_run(run, context, entry.legacy_overlay);
+            this._run_index.set(id, refreshed);
+            if (TERMINAL_RUN_STATUSES.has(run.status)) cacheUpdates.push(this.to_cache_entry(refreshed, source_sig));
+        }
+        if (cacheUpdates.length && !this.db.is_closed) {
+            try {
+                this.db.save_run_index_cache_batch(cacheUpdates);
+            } catch {
+                /* Best-effort cache refresh. */
+            }
+        }
+    }
+    /** Read cached per-target baseline eligibility without cloning or querying SQLite. */
+    get_run_baseline_targets(
+        id: string,
+        context?: AssessmentSourceContext,
+        source_sig?: string
+    ): Array<{ target_id: string; baseline_eligible: boolean; ineligibility_reason: string | null }> {
+        const active = this._runs.get(id);
+        if (active) {
+            return (active.plan.targets ?? []).map(target => ({
+                target_id: String(target.id ?? ''),
+                baseline_eligible: false,
+                ineligibility_reason: 'Assessment baseline: run must be completed'
+            }));
+        }
+        if (source_sig !== undefined) this.ensure_source_index(context, source_sig);
+        const entry = this._run_index.get(id);
+        if (!entry) return [];
+        return entry.observations.map(obs => ({
+            target_id: String(obs.target_id ?? ''),
+            baseline_eligible: Boolean(obs.baseline_eligible),
+            ineligibility_reason: typeof obs.ineligibility_reason === 'string' ? obs.ineligibility_reason : null
+        }));
+    }
     /** Return cached terminal observations plus live projections for active runs without loading terminal runs from SQLite. */
     list_observations(
         context: AssessmentSourceContext = create_assessment_source_context(),
         source_sig = assessment_source_signature()
     ): AssessmentObservation[] {
-        if (source_sig !== this._cached_source_sig) {
-            this._cached_source_sig = source_sig;
-            const cacheUpdates: RunIndexCacheEntry[] = [];
-            for (const [id, entry] of this._run_index) {
-                if (this._runs.has(id)) continue;
-                const run = this.load_run_from_db(id);
-                if (!run) continue;
-                const refreshed = this.index_run(run, context, entry.legacy_overlay);
-                this._run_index.set(id, refreshed);
-                if (TERMINAL_RUN_STATUSES.has(run.status)) cacheUpdates.push(this.to_cache_entry(refreshed, source_sig));
-            }
-            if (cacheUpdates.length && !this.db.is_closed) {
-                try {
-                    this.db.save_run_index_cache_batch(cacheUpdates);
-                } catch {
-                    /* Best-effort cache refresh. */
-                }
-            }
-        }
+        this.ensure_source_index(context, source_sig);
         const result: AssessmentObservation[] = [];
         for (const id of [...this._run_index.keys()].reverse()) {
             const active = this._runs.get(id);
@@ -1218,8 +1247,12 @@ export class BenchExecutionService {
         return [...this._run_index.keys()].reverse().map(id => this.run_summary(id));
     }
     /** Serialize run summaries directly for HTTP caches without cloning every historical record. */
-    serialize_runs_payload(): string {
-        return JSON.stringify({ runs: [...this._run_index.keys()].reverse().map(id => this.run_summary(id, false)) });
+    serialize_runs_payload(enrichRun?: (run: RecordValue) => RecordValue): string {
+        const runs = [...this._run_index.keys()].reverse().map(id => {
+            const summary = this.run_summary(id, false);
+            return enrichRun ? enrichRun(summary) : summary;
+        });
+        return JSON.stringify({ runs });
     }
     /** Batch retries reuse one idempotency key and report partial publication without resending successes. */
     async retry_task(id: string, request_id: string): Promise<{ ids: string[]; rejected: string[] }> {
