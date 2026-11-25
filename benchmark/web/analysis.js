@@ -12,6 +12,11 @@ import { analyzeAnomalies } from './anomaly-analysis.js';
 
 const app = getAppContext();
 const { byId: element, escapeHtml, finite, request, notify, available, formatDate } = app.services;
+const DEFAULT_INSIGHT_GROUP_LIMIT = 4;
+const INSIGHT_GROUP_STEP = 12;
+const DEFAULT_ITEMS_PER_GROUP = 3;
+const ITEMS_PER_GROUP_STEP = 15;
+let insightsCollapsible = false;
 const state = {
   observations: [],
   observationsEtag: null,
@@ -21,8 +26,9 @@ const state = {
   historyPickerLimit: 100,
   disclosure: null,
   disclosureLimit: 80,
-  insightsExpanded: false,
-  expandedInsightGroups: new Set(),
+  insightsCollapsed: false,
+  insightGroupLimit: DEFAULT_INSIGHT_GROUP_LIMIT,
+  insightGroupItemLimits: new Map(),
   activeInsightId: null,
   activeInsightHighlight: null,
   selectedId: null,
@@ -279,12 +285,18 @@ function renderInsights(records) {
     state.activeInsightHighlight = null;
   }
   if (!groups.length && comparableGroups === 0 && baselinePairs === 0) {
+    insightsCollapsible = false;
     panel.hidden = true;
     return;
   }
   panel.hidden = false;
   panel.classList?.toggle?.('is-clean', !groups.length);
 
+  const disclosureEl = /** @type {HTMLDetailsElement} */ (element('analysis-insights-disclosure'));
+  const summaryEl = element('analysis-insights-summary');
+  const activeEl = element('analysis-insights-active');
+  const toggleHintEl = element('analysis-insights-toggle-hint');
+  const bodyEl = element('analysis-insights-body');
   const countEl = element('analysis-insights-count');
   const metaEl = element('analysis-insights-meta');
   const listEl = element('analysis-insights-list');
@@ -296,12 +308,36 @@ function renderInsights(records) {
   metaEl.textContent = metaParts.join(' · ');
 
   if (!groups.length) {
+    insightsCollapsible = false;
+    panel.classList?.toggle?.('is-collapsed', false);
+    disclosureEl.open = false;
+    summaryEl.setAttribute('aria-disabled', 'true');
+    activeEl.hidden = true;
+    activeEl.textContent = '';
+    toggleHintEl.hidden = true;
+    bodyEl.hidden = true;
     countEl.textContent = '未发现显著异常';
     countEl.className = 'insight-count is-clean';
     listEl.innerHTML = '';
     moreEl.hidden = true;
     moreEl.innerHTML = '';
     return;
+  }
+
+  insightsCollapsible = true;
+  panel.classList?.toggle?.('is-collapsed', state.insightsCollapsed);
+  if (summaryEl.removeAttribute) summaryEl.removeAttribute('aria-disabled');
+  else summaryEl.setAttribute('aria-disabled', 'false');
+  bodyEl.hidden = false;
+  disclosureEl.open = !state.insightsCollapsed;
+  toggleHintEl.hidden = false;
+  toggleHintEl.textContent = state.insightsCollapsed ? '展开' : '收起';
+  activeEl.hidden = !state.activeInsightId;
+  activeEl.textContent = state.activeInsightId ? '已定位对比' : '';
+
+  const validGroupIds = new Set(groups.map(group => group.id));
+  for (const key of state.insightGroupItemLimits.keys()) {
+    if (!validGroupIds.has(key)) state.insightGroupItemLimits.delete(key);
   }
 
   const hasHigh = findings.some(item => item.severity === 'high');
@@ -315,16 +351,16 @@ function renderInsights(records) {
   countEl.textContent = countParts.join(' · ');
   countEl.className = `insight-count${hasHigh ? ' is-high' : ''}`;
 
-  const defaultGroupLimit = 4;
-  const defaultItemsPerGroup = 3;
-  const visibleGroups = state.insightsExpanded || groups.length <= defaultGroupLimit ? groups : groups.slice(0, defaultGroupLimit);
+  const groupLimit = Math.max(DEFAULT_INSIGHT_GROUP_LIMIT, state.insightGroupLimit);
+  const visibleGroups = groups.length <= groupLimit ? groups : groups.slice(0, groupLimit);
   const metricLabel = metric => (metric === 'score' ? '能力偏低' : metric === 'cost' ? '成本偏高' : '耗时偏慢');
+  const prevScrollTop = listEl.scrollTop || 0;
 
   listEl.innerHTML = visibleGroups
     .map(group => {
-      const groupExpanded = state.expandedInsightGroups.has(group.id);
-      const visibleItems =
-        groupExpanded || group.items.length <= defaultItemsPerGroup ? group.items : group.items.slice(0, defaultItemsPerGroup);
+      const itemLimit = state.insightGroupItemLimits.get(group.id) ?? DEFAULT_ITEMS_PER_GROUP;
+      const visibleItems = group.items.length <= itemLimit ? group.items : group.items.slice(0, itemLimit);
+      const remainingItems = group.items.length - visibleItems.length;
       const identHtml =
         group.kind === 'account'
           ? `<span class="insight-scope is-account">账号</span><span class="insight-target insight-account">${escapeHtml(group.accountRaw)}</span><span class="insight-group-sub">· ${escapeHtml(group.providerLabel)}</span>`
@@ -341,17 +377,53 @@ function renderInsights(records) {
           return `<button class="insight-row${active ? ' is-active' : ''}" type="button" data-insight-record="${escapeHtml(item.primaryRecordId)}" data-insight-item="${escapeHtml(item.id)}" aria-pressed="${active ? 'true' : 'false'}"><span class="insight-badge is-${escapeHtml(item.metric)}">${metricLabel(item.metric)}</span><span class="insight-model"><span class="insight-model-name">${escapeHtml(item.modelName)}</span><span class="insight-model-think"> · ${escapeHtml(item.thinkLabel)}</span></span><span class="insight-compare"><strong class="insight-val">${escapeHtml(item.valueText)}</strong><span class="insight-vs"> vs </span><span class="insight-ref-val">${escapeHtml(item.refText)}</span><span class="insight-delta is-${escapeHtml(item.metric)}">${escapeHtml(item.deltaText)}</span></span><span class="insight-ref-ctx" title="对照 ${escapeHtml(item.refContext)}">对照 ${escapeHtml(item.refContext)}</span><span class="insight-locate">${active ? '已定位 ×' : '定位 →'}</span></button>`;
         })
         .join('');
-      const expandHtml =
-        group.items.length > defaultItemsPerGroup
-          ? `<button class="insight-group-expand" type="button" data-insight-group-toggle="${escapeHtml(group.id)}">${groupExpanded ? '收起明细' : `展开其余 ${group.items.length - defaultItemsPerGroup} 项`}</button>`
-          : '';
+      let expandHtml = '';
+      if (group.items.length > DEFAULT_ITEMS_PER_GROUP) {
+        const actions = [];
+        if (remainingItems > 0) {
+          const nextLabel =
+            remainingItems <= ITEMS_PER_GROUP_STEP
+              ? `展开其余 ${remainingItems} 项`
+              : `继续展开（已显示 ${visibleItems.length} / ${group.items.length} 项）`;
+          actions.push(
+            `<button class="insight-group-expand" type="button" data-insight-group-toggle="${escapeHtml(group.id)}" data-insight-group-step="more">${nextLabel}</button>`
+          );
+          if (remainingItems > ITEMS_PER_GROUP_STEP) {
+            actions.push(
+              `<button class="insight-group-expand" type="button" data-insight-group-toggle="${escapeHtml(group.id)}" data-insight-group-step="all">展开全部 ${group.items.length} 项</button>`
+            );
+          }
+        }
+        if (visibleItems.length > DEFAULT_ITEMS_PER_GROUP) {
+          actions.push(
+            `<button class="insight-group-expand" type="button" data-insight-group-toggle="${escapeHtml(group.id)}" data-insight-group-step="reset">收起明细</button>`
+          );
+        }
+        expandHtml = `<div class="insight-group-actions">${actions.join('')}</div>`;
+      }
       return `<div class="insight-group is-${group.kind}"><div class="insight-group-head"><div class="insight-group-ident">${identHtml}</div><div class="insight-group-badges">${badges.join('')}</div></div><div class="insight-group-rows">${rowsHtml}</div>${expandHtml}</div>`;
     })
     .join('');
+  if (prevScrollTop > 0) listEl.scrollTop = prevScrollTop;
 
-  if (groups.length > defaultGroupLimit) {
+  if (groups.length > DEFAULT_INSIGHT_GROUP_LIMIT) {
+    const remainingGroups = groups.length - visibleGroups.length;
+    const buttons = [];
+    if (remainingGroups > 0) {
+      const moreLabel =
+        remainingGroups <= INSIGHT_GROUP_STEP
+          ? `展开其余 ${remainingGroups} 个主体`
+          : `展开更多主体（已显示 ${visibleGroups.length} / ${groups.length}）`;
+      buttons.push(`<button class="text-control" type="button" data-insight-toggle="more">${moreLabel}</button>`);
+      if (remainingGroups > INSIGHT_GROUP_STEP) {
+        buttons.push(`<button class="text-control" type="button" data-insight-toggle="all">展开全部 ${groups.length} 个主体</button>`);
+      }
+    }
+    if (visibleGroups.length > DEFAULT_INSIGHT_GROUP_LIMIT) {
+      buttons.push('<button class="text-control" type="button" data-insight-toggle="reset">收起部分主体</button>');
+    }
     moreEl.hidden = false;
-    moreEl.innerHTML = `<button class="text-control" type="button" data-insight-toggle>${state.insightsExpanded ? '收起部分主体' : `展开其余 ${groups.length - defaultGroupLimit} 个主体`}</button>`;
+    moreEl.innerHTML = buttons.join('');
   } else {
     moreEl.hidden = true;
     moreEl.innerHTML = '';
@@ -511,7 +583,15 @@ element('analysis-view').addEventListener('click', async event => {
   }
   const insightToggle = event.target.closest('[data-insight-toggle]');
   if (insightToggle) {
-    state.insightsExpanded = !state.insightsExpanded;
+    const action = insightToggle.dataset.insightToggle;
+    if (action === 'reset') {
+      state.insightGroupLimit = DEFAULT_INSIGHT_GROUP_LIMIT;
+      element('analysis-insights-list').scrollTop = 0;
+    } else if (action === 'all') {
+      state.insightGroupLimit = Number.MAX_SAFE_INTEGER;
+    } else {
+      state.insightGroupLimit = Math.max(DEFAULT_INSIGHT_GROUP_LIMIT, state.insightGroupLimit) + INSIGHT_GROUP_STEP;
+    }
     renderInsights(matchingRecords());
     return;
   }
@@ -519,8 +599,11 @@ element('analysis-view').addEventListener('click', async event => {
   if (insightGroupToggle) {
     const groupId = insightGroupToggle.dataset.insightGroupToggle;
     if (groupId) {
-      if (state.expandedInsightGroups.has(groupId)) state.expandedInsightGroups.delete(groupId);
-      else state.expandedInsightGroups.add(groupId);
+      const step = insightGroupToggle.dataset.insightGroupStep;
+      const current = state.insightGroupItemLimits.get(groupId) ?? DEFAULT_ITEMS_PER_GROUP;
+      if (step === 'reset') state.insightGroupItemLimits.delete(groupId);
+      else if (step === 'all') state.insightGroupItemLimits.set(groupId, Number.MAX_SAFE_INTEGER);
+      else state.insightGroupItemLimits.set(groupId, current + ITEMS_PER_GROUP_STEP);
       renderInsights(matchingRecords());
     }
     return;
@@ -580,10 +663,31 @@ element('analysis-view').addEventListener('click', async event => {
   const promote = event.target.closest('[data-promote-id]');
   if (promote) await promoteObservation(promote.dataset.promoteId);
 });
+element('analysis-insights-summary').addEventListener('click', event => {
+  if (!insightsCollapsible) {
+    event.preventDefault();
+    return;
+  }
+  const disclosureEl = /** @type {HTMLDetailsElement} */ (element('analysis-insights-disclosure'));
+  const nextCollapsed = Boolean(disclosureEl.open);
+  state.insightsCollapsed = nextCollapsed;
+  element('analysis-insights')?.classList?.toggle?.('is-collapsed', nextCollapsed);
+  element('analysis-insights-toggle-hint').textContent = nextCollapsed ? '展开' : '收起';
+});
+element('analysis-insights-disclosure').addEventListener('toggle', () => {
+  const disclosureEl = /** @type {HTMLDetailsElement} */ (element('analysis-insights-disclosure'));
+  if (!insightsCollapsible) {
+    disclosureEl.open = false;
+    return;
+  }
+  const collapsed = !disclosureEl.open;
+  state.insightsCollapsed = collapsed;
+  element('analysis-insights')?.classList?.toggle?.('is-collapsed', collapsed);
+  element('analysis-insights-toggle-hint').textContent = collapsed ? '展开' : '收起';
+});
 document.addEventListener('keydown', event => {
-  if (!event.defaultPrevented && event.key === 'Escape' && state.selectedId) {
-    state.selectedId = null;
-    renderObservations();
+  if (!event.defaultPrevented && event.key === 'Escape' && (state.selectedId || state.activeInsightId)) {
+    selectObservation(null);
   }
 });
 app.on('mini-bench:refresh', loadObservations);

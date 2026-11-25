@@ -1017,16 +1017,22 @@ export function createScoreCostChart(
     const insightKeepoutBoxes = [];
     if (hasInsightHighlight) {
       const anomalyCoords = visibleCoords.filter(item => insightAnomalySet.has(item.point.id));
-      const refCoords = visibleCoords.filter(item => !insightAnomalySet.has(item.point.id) && insightRefSet.has(item.point.id));
+      const refOrder = new Map(
+        (Array.isArray(options.insightHighlight?.referenceIds) ? options.insightHighlight.referenceIds : []).map((id, idx) => [id, idx])
+      );
+      const refCoords = visibleCoords
+        .filter(item => !insightAnomalySet.has(item.point.id) && insightRefSet.has(item.point.id))
+        .sort((a, b) => (refOrder.get(a.point.id) ?? 1e9) - (refOrder.get(b.point.id) ?? 1e9) || a.index - b.index);
+      const linkedRefCoords = refCoords.slice(0, 6);
       const primaryAnchor = visibleCoords.find(item => selectedIdSet.has(item.point.id)) || anomalyCoords[0] || null;
-      for (const item of anomalyCoords) {
+      for (const item of anomalyCoords.slice(0, 12)) {
         insightKeepoutBoxes.push({ left: item.px - 16, right: item.px + 16, top: item.py - 16, bottom: item.py + 16 });
       }
-      for (const item of refCoords) {
+      for (const item of linkedRefCoords) {
         insightKeepoutBoxes.push({ left: item.px - 16, right: item.px + 16, top: item.py - 16, bottom: item.py + 16 });
       }
-      if (primaryAnchor && refCoords.length) {
-        for (const refItem of refCoords) {
+      if (primaryAnchor && linkedRefCoords.length) {
+        for (const refItem of linkedRefCoords) {
           insightCompareLayer.append(
             svgNode('line', {
               class: 'score-cost-insight-link',
@@ -1049,7 +1055,7 @@ export function createScoreCostChart(
           }
         }
       }
-      if (refCoords.length) {
+      if (linkedRefCoords.length) {
         const allInsightCoords = [...anomalyCoords, ...refCoords];
         const rawRefChannels = allInsightCoords.map(item =>
           String(item.point.providerName ?? item.point.providerDisplayId ?? item.point.provider ?? '')
@@ -1084,7 +1090,7 @@ export function createScoreCostChart(
         };
         const placedRefBoxes = [];
         const boxesOverlap = (a, b) => a.left < b.right && a.right > b.left && a.top < b.bottom && a.bottom > b.top;
-        for (const refItem of refCoords.slice(0, 6)) {
+        for (const refItem of linkedRefCoords) {
           const textStr = refLabelText(refItem.point);
           const labelNode = svgNode(
             'text',

@@ -732,20 +732,42 @@ input::placeholder {
 }
 .analysis-insights {
   margin-bottom: 12px;
-  padding: 12px 14px;
   border: 1px solid var(--line);
   border-radius: var(--radius-panel);
   background: var(--card);
+  overflow: hidden;
 }
-.analysis-insights.is-clean {
-  padding: 8px 14px;
+.insight-disclosure {
+  margin: 0;
 }
 .insight-head {
+  list-style: none;
   display: flex;
   align-items: center;
   justify-content: space-between;
   gap: 10px;
   flex-wrap: wrap;
+  padding: 10px 14px;
+  user-select: none;
+  -webkit-user-select: none;
+}
+.insight-head::-webkit-details-marker {
+  display: none;
+}
+.insight-head:where(:not([aria-disabled='true'])) {
+  cursor: pointer;
+}
+.insight-head:where(:not([aria-disabled='true'])):hover {
+  background: color-mix(in srgb, var(--pill-hover) 60%, transparent);
+}
+.insight-head:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+  border-radius: calc(var(--radius-panel) - 1px);
+}
+.analysis-insights.is-clean .insight-head,
+.analysis-insights.is-collapsed .insight-head {
+  padding: 8px 14px;
 }
 .insight-head-main {
   display: flex;
@@ -753,10 +775,60 @@ input::placeholder {
   gap: 8px;
   flex-wrap: wrap;
 }
-.insight-head h2 {
+.insight-title {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
   font-size: 13px;
   font-weight: 600;
   color: var(--fg);
+}
+.insight-head:where(:not([aria-disabled='true'])) .insight-title::before {
+  content: '';
+  inline-size: 12px;
+  block-size: 12px;
+  flex-shrink: 0;
+  background-color: var(--muted);
+  -webkit-mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16' fill='none' stroke='black' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M4 6l4 4 4-4'/%3E%3C/svg%3E")
+    no-repeat center / contain;
+  mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16' fill='none' stroke='black' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M4 6l4 4 4-4'/%3E%3C/svg%3E")
+    no-repeat center / contain;
+  rotate: -90deg;
+}
+.insight-head:where(:not([aria-disabled='true'])) .insight-title:dir(rtl)::before {
+  rotate: 90deg;
+}
+.insight-disclosure[open] > .insight-head .insight-title::before {
+  rotate: 0deg;
+}
+@media (prefers-reduced-motion: no-preference) {
+  .insight-head:where(:not([aria-disabled='true'])) .insight-title::before {
+    transition: rotate 0.16s ease;
+  }
+}
+.insight-head-side {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+.insight-toggle-hint {
+  font-size: 11.5px;
+  color: var(--accent);
+  font-weight: 500;
+}
+.insight-active-pill {
+  display: inline-flex;
+  align-items: center;
+  padding: 1px 7px;
+  border-radius: 999px;
+  font-size: 11px;
+  font-weight: 500;
+  background: var(--sel);
+  color: var(--accent);
+}
+.insight-body {
+  padding: 0 14px 12px;
 }
 .insight-count {
   display: inline-flex;
@@ -780,15 +852,18 @@ input::placeholder {
   font-size: 11.5px;
 }
 .insight-groups {
-  margin-top: 10px;
   display: flex;
   flex-direction: column;
   gap: 8px;
+  max-height: min(45vh, 360px);
+  overflow-y: auto;
+  overscroll-behavior: contain;
 }
 .insight-groups:empty {
   display: none;
 }
 .insight-group {
+  flex: none;
   border: 1px solid var(--line);
   border-radius: calc(var(--radius-panel) - 2px);
   background: var(--bg);
@@ -989,14 +1064,20 @@ input::placeholder {
   color: var(--fg);
   font-weight: 600;
 }
-.insight-group-expand {
+.insight-group-actions {
   display: flex;
   align-items: center;
-  width: 100%;
-  min-height: 0;
-  padding: 5px 10px;
-  border: 0;
+  flex-wrap: wrap;
+  gap: 2px 12px;
+  padding: 4px 10px;
   border-top: 1px solid var(--line-2, var(--line));
+}
+.insight-group-expand {
+  display: inline-flex;
+  align-items: center;
+  min-height: 0;
+  padding: 1px 0;
+  border: 0;
   border-radius: 0;
   background: transparent;
   color: var(--muted);
@@ -1004,12 +1085,15 @@ input::placeholder {
   text-align: left;
 }
 .insight-group-expand:hover {
-  background: var(--pill-hover);
   color: var(--fg);
+  text-decoration: underline;
 }
 .insight-more {
   margin-top: 8px;
   display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px 14px;
   justify-content: flex-start;
 }
 @media (max-width: 680px) {
