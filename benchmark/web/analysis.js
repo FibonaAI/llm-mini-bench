@@ -412,7 +412,8 @@ function renderInsights(records) {
   const visibleGroups = filteredGroups.length <= groupLimit ? filteredGroups : filteredGroups.slice(0, groupLimit);
   const metricLabel = metric => (metric === 'score' ? '能力偏低' : metric === 'cost' ? '成本偏高' : '耗时偏慢');
 
-  const showToolbar = groups.length > 1 || metricTotals.all > 3 || Boolean((state.insightSearch || '').trim());
+  const showToolbar =
+    groups.length > 1 || metricTotals.all > 3 || state.insightMetricFilter !== 'all' || Boolean((state.insightSearch || '').trim());
   if (toolbarEl) {
     toolbarEl.hidden = !showToolbar;
     if (showToolbar && filtersEl) {

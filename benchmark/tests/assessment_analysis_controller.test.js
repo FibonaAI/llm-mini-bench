@@ -524,6 +524,20 @@ test('anomaly insights support collapsing, clean-state guard, progressive pagina
     await clickView({ insightToggle: 'reset' });
     expect(countGroups(element('analysis-insights-list').innerHTML)).toBe(8);
     expect(element('analysis-insights-list').scrollTop).toBe(0);
+
+    // Narrowing to 1 subject with <= 3 anomalies must keep toolbar visible while a metric filter is active
+    await clickView({ insightMetric: 'cost' });
+    observations = highVolume.slice(0, 2);
+    await app.emit('mini-bench:refresh');
+    expect(element('analysis-insights-toolbar').hidden).toBe(false);
+    expect(element('analysis-insights-filters').innerHTML).toContain('全部 2');
+    expect(element('analysis-insights-list').innerHTML).toContain('成本偏高');
+    expect(element('analysis-insights-list').innerHTML).not.toContain('能力偏低');
+
+    await clickView({ insightMetric: 'all' });
+    expect(element('analysis-insights-list').innerHTML).toContain('能力偏低');
+    expect(element('analysis-insights-list').innerHTML).toContain('成本偏高');
+    expect(element('analysis-insights-toolbar').hidden).toBe(true);
 });
 
 test('analysis controller promotes and demotes baselines while preserving selection and notifying tasks', async () => {
