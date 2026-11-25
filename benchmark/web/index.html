@@ -253,11 +253,11 @@
             <span class="muted">选择目标后，核对样本数与超时再开始</span>
           </div>
           <div id="run-form">
-            <fieldset class="form-section">
-              <legend>独立运行目标</legend>
+            <fieldset class="form-section form-section-targets">
+              <legend class="visually-hidden">独立运行目标</legend>
               <div class="task-selection">
                 <div id="task-picker"></div>
-                <p class="field-hint" id="run-model-count"></p>
+                <p class="field-hint visually-hidden" id="run-model-count"></p>
               </div>
               <p id="task-route-warning" class="task-route-warning" role="status" hidden></p>
               <details class="selected-targets">
@@ -265,57 +265,64 @@
                 <div id="run-selected-targets"></div>
               </details>
             </fieldset>
-            <fieldset class="form-section">
-              <legend>评测配置</legend>
-              <div class="run-config-grid">
-                <label
-                  ><span>题库</span><input id="bench-bank" type="hidden" value="" /><output class="field" id="bench-bank-label"
-                    >Mini Bench · 正在加载</output
-                  ></label
-                ><label
-                  ><span>重复轮数</span
-                  ><input class="field" id="run-rounds" type="number" min="1" max="3" step="1" value="3" required /></label
-                ><label
-                  ><span>每运行样本并发</span
-                  ><input
-                    class="field"
-                    id="sample-concurrency"
-                    type="number"
-                    min="1"
-                    max="64"
-                    step="1"
-                    value="6"
-                    required
-                    aria-describedby="sample-concurrency-hint"
-                  /><small id="sample-concurrency-hint">每个运行同时执行的题目样本数</small></label
-                ><label
-                  ><span>运行并发</span
-                  ><input
-                    class="field"
-                    id="run-concurrency"
-                    type="number"
-                    min="1"
-                    max="10"
-                    step="1"
-                    value="3"
-                    required
-                    aria-describedby="run-concurrency-hint"
-                  /><small id="run-concurrency-hint">任务内同时执行的独立运行数</small></label
-                ><label
-                  ><span>每题总超时 / 秒</span
-                  ><input
-                    class="field"
-                    id="bench-timeout"
-                    type="number"
-                    min="10"
-                    max="3600"
-                    step="1"
-                    value="600"
-                    required
-                    aria-describedby="bench-timeout-hint"
-                  /><small id="bench-timeout-hint">包含请求、工具交互和 API 重试；超时后继续其他题</small></label
-                >
-              </div>
+            <fieldset class="form-section form-section-config">
+              <legend class="visually-hidden">评测配置</legend>
+              <details class="run-config-disclosure" id="run-config-disclosure">
+                <summary class="run-config-summary">
+                  <span class="run-config-title">评测配置</span>
+                  <span class="run-config-overview" id="run-config-overview">3 轮 · 样本并发 6 · 运行并发 3 · 超时 600 秒</span>
+                  <span class="run-config-toggle-hint" aria-hidden="true">调整</span>
+                </summary>
+                <div class="run-config-grid">
+                  <label
+                    ><span>题库</span><input id="bench-bank" type="hidden" value="" /><output class="field" id="bench-bank-label"
+                      >Mini Bench · 正在加载</output
+                    ></label
+                  ><label
+                    ><span>重复轮数</span
+                    ><input class="field" id="run-rounds" type="number" min="1" max="3" step="1" value="3" required /></label
+                  ><label
+                    ><span>每运行样本并发</span
+                    ><input
+                      class="field"
+                      id="sample-concurrency"
+                      type="number"
+                      min="1"
+                      max="64"
+                      step="1"
+                      value="6"
+                      required
+                      aria-describedby="sample-concurrency-hint"
+                    /><small id="sample-concurrency-hint">每个运行同时执行的题目样本数</small></label
+                  ><label
+                    ><span>运行并发</span
+                    ><input
+                      class="field"
+                      id="run-concurrency"
+                      type="number"
+                      min="1"
+                      max="10"
+                      step="1"
+                      value="3"
+                      required
+                      aria-describedby="run-concurrency-hint"
+                    /><small id="run-concurrency-hint">任务内同时执行的独立运行数</small></label
+                  ><label
+                    ><span>每题总超时 / 秒</span
+                    ><input
+                      class="field"
+                      id="bench-timeout"
+                      type="number"
+                      min="10"
+                      max="3600"
+                      step="1"
+                      value="600"
+                      required
+                      aria-describedby="bench-timeout-hint"
+                    /><small id="bench-timeout-hint">包含请求、工具交互和 API 重试；超时后继续其他题</small></label
+                  >
+                </div>
+              </details>
             </fieldset>
             <section class="run-plan-preview" id="bench-plan-preview" aria-live="polite" hidden></section>
             <div class="run-submit-row">

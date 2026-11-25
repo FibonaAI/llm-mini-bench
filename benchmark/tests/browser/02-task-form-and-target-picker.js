@@ -4,6 +4,10 @@
   require(await page.locator('#task-picker .dp-trigger').count()===0,'Inline task picker must not render a collapsed trigger button');
   require(await popup.locator('.dp-done').count()===0,'Inline task picker must not render a done button');
   require(await page.locator('#start-run').isDisabled(),'Default auto-selected paid targets');
+  const configDisclosure=page.locator('#run-config-disclosure');
+  require(!(await configDisclosure.evaluate(node=>node.open)),'Advanced benchmark settings should start collapsed to leave space for model selection');
+  require((await page.locator('#run-config-overview').innerText()).includes('12 题')&&(await page.locator('#run-config-overview').innerText()).includes('600 秒'),'Collapsed settings overview must display current bank and defaults');
+  await configDisclosure.locator('> summary').click();
   const configGeometry=await page.locator('.run-config-grid').evaluate(node=>{
     const labels=[...node.querySelectorAll('label')].slice(1);
     return labels.map(label=>({label:label.getBoundingClientRect().toJSON(),input:label.querySelector('input').getBoundingClientRect().toJSON()}));
@@ -15,6 +19,7 @@
   require(await page.locator('#bench-timeout').inputValue()==='600','Every sample must default to a 600-second deadline');
   require(!posts.some(post=>post.path==='/api/bench/tasks'||post.path==='/api/bench/runs'),'Opening the task view submitted paid work');
   require((await page.locator('#bench-bank-label').innerText()).includes('12'),'Bank 12 not loaded');
+  await configDisclosure.locator('> summary').click();
   const chooseProvider=async id=>{
     if(!id){await popup.locator('.dp-search').fill('');return;}
     await popup.locator('.dp-search').fill('');
@@ -58,15 +63,17 @@
   await chooseProvider('provider:chatgpt-lab');require(await popup.locator('.dp-think[data-think="high"]').getAttribute('aria-pressed')==='false','Cross-instance selection leaked');await popup.locator('.dp-think[data-think="low"]').click();
   await chooseProvider('provider:chatgpt-main');require(await popup.locator('.dp-think[data-think="high"]').getAttribute('aria-pressed')==='true','Channel switch cleared selection');
   for(let i=2;i<7;i++){await chooseProvider('provider:fixture-provider-'+i);await popup.locator('.dp-think[data-think="high"]').click();}
+  await configDisclosure.locator('> summary').click();
   for(const [id,bad,good] of [['bench-timeout','0','600'],['run-rounds','4','3'],['sample-concurrency','65','6'],['run-concurrency','11','3']]){await page.locator('#'+id).fill(bad);require(await page.locator('#start-run').isDisabled(),'Invalid config accepted: '+id);await page.locator('#'+id).fill(good);}
   require(await page.locator('#bench-plan').count()===0,'Manual plan button remains');
   await page.locator('#bench-plan-preview').waitFor({state:'visible'});
   const preview=await page.locator('#bench-plan-preview').innerText();require(preview.includes('252')&&preview.includes('36')&&preview.includes('7')&&preview.includes('600')&&preview.includes('不设置 token'),'7 runs × 36 samples / summed budget not shown: '+preview);
   require(!posts.some(post=>post.path==='/api/bench/tasks'),'Planning submitted paid work');
-  await page.locator('#run-rounds').fill('2');require((await page.locator('#bench-plan-preview').innerText()).includes('168'),'Preview did not follow rounds');
+  await page.locator('#run-rounds').fill('2');require((await page.locator('#bench-plan-preview').innerText()).includes('168')&&(await page.locator('#run-config-overview').innerText()).includes('2 轮'),'Preview or config overview did not follow rounds');
   await page.locator('#run-rounds').fill('3');
   for(const [id,value] of [['sample-concurrency','8'],['run-concurrency','2']]){await page.locator('#'+id).fill(value);require(!await page.locator('#start-run').isDisabled(),'Valid config requires a planning step');}
   await page.locator('#sample-concurrency').fill('6');await page.locator('#run-concurrency').fill('3');
+  await configDisclosure.locator('> summary').click();
   require(!posts.some(post=>post.path==='/api/bench/tasks'||post.path==='/api/bench/task-plans'),'Editing configuration submitted work');
   for(const [name,width,dark] of [['light',1440,false],['dark',1440,true],['mobile',390,false]]){
     await page.setViewportSize({width,height:1000});await page.evaluate(dark=>document.documentElement.dataset.theme=dark?'dark':'light',dark);
