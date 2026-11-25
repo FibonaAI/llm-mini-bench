@@ -51,6 +51,14 @@ export function createTaskHistoryView({ app, state, retryRequests, retrying, bas
       return '';
     };
     if (text.includes('retry execution sources differ')) return '重试时源码版本发生变化';
+    if (text.includes('retry execution policy differs') || text.includes('retry execution limits differ'))
+      return '重试时评测限额或策略发生变化';
+    if (text.includes('invalid retry batch evidence')) return '重试批次证据不完整';
+    if (
+      text.includes('retry:') &&
+      (text.includes('source hashes') || text.includes('source provenance') || text.includes('invalid source digest'))
+    )
+      return '重试时题库或源码快照已过期';
     if (text.includes('failed or incomplete samples')) {
       const timeouts = counts.timeout ?? 0;
       if (timeouts > 0) return `含 ${timeouts} 个超时样本`;
