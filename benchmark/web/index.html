@@ -116,16 +116,24 @@
           </div>
           <p id="analysis-count-status" class="visually-hidden" role="status" aria-live="polite"></p>
         </search>
-        <section class="analysis-insights" id="analysis-insights" aria-labelledby="analysis-insights-title" hidden>
-          <div class="insight-head">
-            <div class="insight-head-main">
-              <h2 id="analysis-insights-title">自动异常分析</h2>
-              <span class="insight-count" id="analysis-insights-count"></span>
+        <section class="analysis-insights" id="analysis-insights" aria-label="自动异常分析" hidden>
+          <details class="insight-disclosure" id="analysis-insights-disclosure" open>
+            <summary class="insight-head" id="analysis-insights-summary">
+              <div class="insight-head-main">
+                <span class="insight-title" id="analysis-insights-title">自动异常分析</span>
+                <span class="insight-count" id="analysis-insights-count"></span>
+                <span class="insight-active-pill" id="analysis-insights-active" hidden></span>
+              </div>
+              <div class="insight-head-side">
+                <span class="insight-meta muted" id="analysis-insights-meta"></span>
+                <span class="insight-toggle-hint" id="analysis-insights-toggle-hint" aria-hidden="true">收起</span>
+              </div>
+            </summary>
+            <div class="insight-body" id="analysis-insights-body">
+              <div class="insight-groups" id="analysis-insights-list"></div>
+              <div class="insight-more" id="analysis-insights-more" hidden></div>
             </div>
-            <span class="insight-meta muted" id="analysis-insights-meta"></span>
-          </div>
-          <div class="insight-groups" id="analysis-insights-list"></div>
-          <div class="insight-more" id="analysis-insights-more" hidden></div>
+          </details>
         </section>
         <section class="chart-card" id="chart-card" aria-labelledby="chart-title">
           <div class="chart-top">

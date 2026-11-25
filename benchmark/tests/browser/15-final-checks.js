@@ -23,7 +23,16 @@
   require((await insights.innerText()).includes('测试账号')&&(await insights.locator('.insight-row').count())>=1,'Anomaly insights did not detect within-channel account cost anomaly');
   await insights.locator('.insight-row[data-insight-record="obs-mask-cjk"]').click();
   await page.locator('.score-cost-tooltip.is-pinned[data-tooltip-record-id="obs-mask-cjk"]').waitFor({state:'visible'});
+  require((await page.locator('#analysis-insights-active').innerText()).includes('已定位对比'),'Active insight badge did not appear');
+  await page.locator('#analysis-insights-summary').click();
+  require(await page.locator('#analysis-insights-body').isHidden(),'Clicking insight summary did not collapse body');
+  require((await page.locator('#analysis-insights-toggle-hint').innerText())==='展开','Collapsed insight hint did not switch to 展开');
+  require(await page.locator('#analysis-insights-active').isVisible(),'Active insight badge disappeared while collapsed');
+  await page.locator('#analysis-insights-summary').click();
+  require(await page.locator('#analysis-insights-body').isVisible(),'Clicking insight summary again did not expand body');
+  require((await page.locator('#analysis-insights-toggle-hint').innerText())==='收起','Expanded insight hint did not switch back to 收起');
   await page.locator('.score-cost-tooltip-close').click();
+  require(await page.locator('#analysis-insights-active').isHidden(),'Closing pinned tooltip did not clear active insight badge');
   const maskBtn=page.locator('#mask-accounts');
   require(await maskBtn.getAttribute('aria-pressed')==='false'&&(await maskBtn.innerText()).includes('账号打码'),'Mask toggle must start unpressed');
   await maskBtn.click();

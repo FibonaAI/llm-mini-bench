@@ -1232,6 +1232,46 @@ test('insightHighlight renders anomaly and reference rings and dims unrelated po
     expect(parseFloat(tooltip.style.left)).toBe(startLeft + dragDx);
     expect(parseFloat(tooltip.style.top)).toBe(startTop + dragDy);
 
+    // High-volume reference pool: all reference points get rings, while dashed links cap at 6 in referenceIds order
+    const manyRefs = Array.from({ length: 10 }, (_, idx) => ({
+        id: `ref-many-${idx}`,
+        source: 'run',
+        run_id: `r-many-${idx}`,
+        model: 'gpt-6.1-sol',
+        modelDisplayName: 'GPT-6.1-Sol',
+        providerId: 'provider:codex',
+        provider: 'codex',
+        providerName: 'codex',
+        accountId: `account:ok${idx}@gmx.com`,
+        accountDisplayId: `ok${idx}@gmx.com`,
+        account: `ok${idx}@gmx.com`,
+        think: 'medium',
+        created_at: `2026-11-2${(idx % 9) + 1}T10:00:00Z`,
+        cost: 0.5 + idx * 0.02,
+        score: 84 + (idx % 3),
+        rounds: 1
+    }));
+    const orderedRefIds = manyRefs.map(r => r.id).reverse();
+    f.chart.render([rows[0], ...manyRefs], {
+        axis: 'cost',
+        log: false,
+        selectedIds: ['anom-1'],
+        insightHighlight: {
+            anomalyIds: ['anom-1'],
+            referenceIds: orderedRefIds,
+            metric: 'cost',
+            valueText: '$0.960',
+            refText: '$0.590',
+            refContext: '同渠道 10 账号',
+            deltaText: '+63%'
+        }
+    });
+    const manyPoints = chartFixtureNodes(f, 'score-cost-point');
+    expect(manyPoints.filter(n => n.attributes['data-insight-role'] === 'reference')).toHaveLength(10);
+    const cappedLinks = chartFixtureNodes(f, 'score-cost-insight-link');
+    expect(cappedLinks).toHaveLength(6);
+    expect(cappedLinks.map(l => l.attributes['data-to-record'])).toEqual(orderedRefIds.slice(0, 6));
+
     f.chart.destroy();
 });
 
