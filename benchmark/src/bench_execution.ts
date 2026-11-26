@@ -51,7 +51,7 @@ export interface ExecutionRoute extends BenchRouteMetadata {
     api_key_env?: string;
     thinking_levels: string[];
     account_concurrency: number;
-    pricing: Pricing;
+    pricing: Pricing | null;
 }
 /** Both configured and gateway routes can resolve without changing scheduler semantics. */
 export interface ExecutionRoutes {
@@ -70,7 +70,7 @@ interface ExecutionTarget extends BenchRouteMetadata {
     model: string;
     thinking: string;
     account_concurrency: number;
-    pricing: Pricing;
+    pricing: Pricing | null;
 }
 interface ExecutionPlan {
     bank_version: string;
@@ -204,7 +204,7 @@ class RunBudget extends AssessmentBudget {
     ) {
         super(limits.max_cost_usd ?? Infinity, limits.max_requests ?? Infinity);
     }
-    override admit(body: Parameters<AssessmentBudget['admit']>[0], pricing: Pricing) {
+    override admit(body: Parameters<AssessmentBudget['admit']>[0], pricing: Pricing | null) {
         return this.cancellation.value ? null : super.admit(body, pricing);
     }
     snapshot(): RecordValue {
@@ -503,11 +503,12 @@ export class BenchExecutionService {
                     );
                     const target = run.plan.targets.find(item => item.id === sample.target_id);
                     const pricing = target?.pricing;
-                    const cost = known.every(item => item.cost !== null)
-                        ? known.reduce((acc, item) => acc + (item.cost ?? 0), 0)
-                        : pricing
-                          ? usage.input_tokens * pricing.prompt + usage.output_tokens * pricing.completion
-                          : null;
+                    const cost =
+                        known.length > 0 && known.every(item => item.cost !== null)
+                            ? known.reduce((acc, item) => acc + (item.cost ?? 0), 0)
+                            : pricing
+                              ? usage.input_tokens * pricing.prompt + usage.output_tokens * pricing.completion
+                              : null;
                     const patch = overlay.samples[sample.sample_id] ?? {};
                     if (!object(sample.usage)) {
                         sample.usage = usage;
@@ -968,10 +969,13 @@ export class BenchExecutionService {
             );
             const pricing = route.pricing;
             if (
-                !object(pricing) ||
-                [pricing.prompt, pricing.completion].some(value => typeof value !== 'number' || !Number.isFinite(value) || value < 0)
+                pricing !== null &&
+                (!object(pricing) ||
+                    [pricing.prompt, pricing.completion].some(value => typeof value !== 'number' || !Number.isFinite(value) || value < 0))
             )
                 throw new TypeError('Route token pricing must be finite and nonnegative');
+            if (pricing === null && limits.max_cost_usd !== null)
+                throw new TypeError('Route without known pricing cannot enforce max_cost_usd');
             targets.push({
                 id,
                 route_id,
@@ -986,7 +990,7 @@ export class BenchExecutionService {
                 model: route.model,
                 thinking,
                 account_concurrency: account_limit,
-                pricing: { prompt: pricing.prompt, completion: pricing.completion }
+                pricing: pricing === null ? null : { prompt: pricing.prompt, completion: pricing.completion }
             });
             bindings.set(id, { ...route, account_concurrency: account_limit });
         }
@@ -1798,10 +1802,11 @@ export class BenchExecutionService {
             if (error) throw error;
             if (!observation) throw new TypeError('Missing sample observation');
             if (is_timeout_sample(observation) && !object(observation.usage)) {
+                const route = runtime.bindings.get(sample.target_id);
                 observation = {
                     ...observation,
                     usage: { input_tokens: 0, output_tokens: 0 },
-                    estimated_uncached_cost_usd: 0
+                    estimated_uncached_cost_usd: route?.pricing === null ? null : 0
                 };
             }
             Object.assign(sample, observation, {

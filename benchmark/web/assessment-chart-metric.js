@@ -66,7 +66,26 @@ function unknownAttempts(record, axis) {
   return Number.isInteger(count) && count > 0 ? count : null;
 }
 
+export function isUnpricedOnlyCostGap(record, axis = 'cost') {
+  if (axis !== 'cost') return false;
+  const accounting = record?.usage_accounting;
+  return Boolean(
+    accounting &&
+    Number.isInteger(accounting.unknown_usage_attempts) &&
+    accounting.unknown_usage_attempts >= 0 &&
+    Number.isInteger(accounting.unknown_cost_attempts) &&
+    accounting.unknown_cost_attempts > accounting.unknown_usage_attempts &&
+    accounting.estimated_cost_usd_lower_bound === 0
+  );
+}
+
 function usageGapReason(record, axis) {
+  if (isUnpricedOnlyCostGap(record, axis)) {
+    const unknownUsage = record?.usage_accounting?.unknown_usage_attempts;
+    return Number.isInteger(unknownUsage) && unknownUsage > 0
+      ? `累计估算费用未知：目录未提供单价（且有 ${unknownUsage} 次请求尝试未返回用量）`
+      : '累计估算费用未知：目录未提供单价';
+  }
   const count = unknownAttempts(record, axis);
   const what = axis === 'tokens' ? '累计 tokens' : '累计估算费用';
   return count ? `${what}不完整：${count} 次请求尝试未返回用量（多为超时或上游错误）` : `${what}未记录或无效`;
@@ -77,6 +96,7 @@ function usageGapReason(record, axis) {
  * evidence only: never a complete total, never used by the frontier or baselines.
  */
 function usageLowerBound(record, axis) {
+  if (isUnpricedOnlyCostGap(record, axis)) return null;
   const accounting = record?.usage_accounting,
     count = unknownAttempts(record, axis);
   if (!accounting || !count) return null;
@@ -123,8 +143,16 @@ export function observationQualitySummary(record, { includeUsage = true } = {}) 
   if (byOutcome('ungradable')) parts.push(`${byOutcome('ungradable')} 个样本答案无法解析`);
   const otherUnscored = unscored.length - byOutcome('ambiguous') - byOutcome('ungradable');
   if (otherUnscored > 0) parts.push(`${otherUnscored} 个样本评分缺失`);
-  const unknown = record?.usage_accounting?.unknown_cost_attempts;
-  if (includeUsage && Number.isInteger(unknown) && unknown > 0) parts.push(`${unknown} 次尝试未返回用量`);
+  const unknownUsage = record?.usage_accounting?.unknown_usage_attempts;
+  const unknownCost = record?.usage_accounting?.unknown_cost_attempts;
+  if (includeUsage) {
+    if (isUnpricedOnlyCostGap(record, 'cost')) {
+      if (Number.isInteger(unknownUsage) && unknownUsage > 0) parts.push(`${unknownUsage} 次尝试未返回用量`);
+      parts.push('累计估算费用未知（目录未提供单价）');
+    } else if (Number.isInteger(unknownCost) && unknownCost > 0) {
+      parts.push(`${unknownCost} 次尝试未返回用量`);
+    }
+  }
   return {
     failed: failed.length,
     timedOut: timedOut.length,

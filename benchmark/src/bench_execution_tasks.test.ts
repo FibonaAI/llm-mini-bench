@@ -123,8 +123,8 @@ test('remote namespace snapshots preserve outer owner and exact model while isol
     const id = await service.start_task(request(1));
     await gateway.waitCalls(6);
     source.remote_route.namespace = 'changed-after-admission';
-    source.pricing.prompt = 100;
-    source.pricing.completion = 100;
+    source.pricing!.prompt = 100;
+    source.pricing!.completion = 100;
     source.thinking_levels.length = 0;
     source.model = 'changed-wire-model';
     source.provider_id = 'changed-owner';

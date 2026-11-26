@@ -24,7 +24,7 @@ export interface BenchPublicRoute extends BenchRouteMetadata {
     account_ref: string;
     model: string;
     thinking_levels: string[];
-    pricing: AssessmentPricing;
+    pricing: AssessmentPricing | null;
     account_concurrency: number;
     account_evidence?: string;
 }
@@ -34,7 +34,14 @@ export interface BenchResolvedRoute extends BenchPublicRoute {
     api_key: string;
     api_key_env?: string;
 }
-interface ConfiguredRoute extends BenchPublicRoute {
+/** Explicit route file entries always carry numeric per-token pricing. */
+export interface ConfiguredPublicRoute extends BenchPublicRoute {
+    pricing: AssessmentPricing;
+}
+export interface ConfiguredResolvedRoute extends BenchResolvedRoute {
+    pricing: AssessmentPricing;
+}
+interface ConfiguredRoute extends ConfiguredPublicRoute {
     base_url: string;
     api_key_env: string;
 }
@@ -181,10 +188,10 @@ export class BenchRouteRegistry {
             });
         }
     }
-    public_routes(): BenchPublicRoute[] {
+    public_routes(): ConfiguredPublicRoute[] {
         return [...this.routes.values()].map(({ base_url: _url, api_key_env: _env, ...row }) => structuredClone(row));
     }
-    resolve(route_id: string): BenchResolvedRoute {
+    resolve(route_id: string): ConfiguredResolvedRoute {
         const row = this.routes.get(route_id);
         if (!row) throw new TypeError('Bench route is not configured');
         const credential = process.env[row.api_key_env];

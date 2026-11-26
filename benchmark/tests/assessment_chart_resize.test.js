@@ -3,6 +3,7 @@ import { readFileSync } from 'node:fs';
 import vm from 'node:vm';
 import { placeChartLabels, placeThinkingLabels } from '../web/chart-layout.js';
 import { buildAnalysisHistoryStates } from '../web/analysis-history.js';
+import { isUnpricedOnlyCostGap } from '../web/assessment-chart-metric.js';
 import { compareRecordToBaseline, findMatchingBaselines, findPromotedBaseline } from '../web/baseline-comparison.js';
 import { chartCategory, createChartColorRegistry } from '../web/chart-colors.js';
 import { buildChartLegendGroups } from '../web/chart-legend.js';
@@ -113,6 +114,7 @@ function chartResizeFixture() {
         placeChartLabels,
         placeThinkingLabels,
         buildAnalysisHistoryStates,
+        isUnpricedOnlyCostGap,
         compareRecordToBaseline,
         findMatchingBaselines,
         findPromotedBaseline,

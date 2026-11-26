@@ -1,5 +1,6 @@
 import { describe, expect, test } from 'bun:test';
 import {
+  discoverMagpieAccountCatalog,
   discoverMagpieAccounts,
   discoverMagpieLocalAccounts,
   MagpieAccountClient,
@@ -160,7 +161,7 @@ describe('Magpie account adapter', () => {
       port: 0,
       fetch(request) {
         const url = new URL(request.url);
-        requests.push(url.pathname);
+        requests.push(url.pathname + url.search);
         if (url.pathname === '/v1/models') {
           return Response.json({
             data: [
@@ -227,7 +228,7 @@ describe('Magpie account adapter', () => {
         { provider_id: 'codex', account: 'first@example.invalid', account_ref: 'codex-primary' }
       ]);
       const routes = await adapter.routes.public_routes();
-      expect(requests).toEqual(['/v1/models', '/v1/magpie/accounts']);
+      expect(requests).toEqual(['/v1/models', '/v1/magpie/accounts?models=full']);
       expect(routes.map(row => [row.model, row.account_ref, row.account_evidence])).toEqual([
         ['openai/gpt-6-luna', 'gateway-default', 'gateway_binding'],
         ['openai/gpt-6-luna', 'openai-manual-a', 'configured_binding'],
@@ -285,7 +286,7 @@ describe('Magpie account adapter', () => {
           ]
         };
       }
-      if (path === '/magpie/accounts') throw new TypeError('gateway HTTP error 404');
+      if (path === '/magpie/accounts?models=full') throw new TypeError('gateway HTTP error 404');
       if (path === '/magpie/quotas/cards') {
         if (failQuotas) throw new TypeError('gateway HTTP error 403');
         return { data: cards };
@@ -342,5 +343,316 @@ describe('Magpie account adapter', () => {
     } finally {
       server.stop(true);
     }
+  });
+  test('adapter reads full per-account model metadata from /v1/magpie/accounts?models=full, preserves pricing/thinking/display_name, filters non-chat & bad pricing, and stays compatible with string IDs', async () => {
+    const adapter = new MagpieBenchAdapter('http://127.0.0.1:3425/v1', 'gateway-key', 18, [
+      { provider_id: 'openai', account: 'openai/key1', account_ref: 'openai-manual-a' }
+    ]);
+    adapter.gateway = async path => {
+      if (path === '/models') {
+        return {
+          data: [
+            {
+              id: 'openai/gpt-6-luna',
+              owned_by: 'openai',
+              display_name: 'GPT-6 Luna',
+              reasoning_levels: ['low', 'high'],
+              pricing: { prompt: '0.000001', completion: '0.000002' }
+            },
+            {
+              id: 'openai/unpriced-chat',
+              owned_by: 'openai',
+              display_name: 'Unpriced Chat',
+              reasoning_levels: ['medium']
+            },
+            {
+              id: 'openai/bad-pricing',
+              owned_by: 'openai',
+              pricing: { prompt: -1, completion: 0 }
+            },
+            {
+              id: 'openai/gpt-image-2',
+              owned_by: 'openai',
+              kind: 'image'
+            },
+            {
+              id: 'office/openai/gpt-6-luna',
+              owned_by: 'office',
+              magpie_via: ['remote-hop', 'local-hop'],
+              pricing: { prompt: '0.000001', completion: '0.000002' }
+            }
+          ]
+        };
+      }
+      if (path === '/magpie/accounts?models=full') {
+        return {
+          object: 'list',
+          data: [
+            {
+              provider: 'openai',
+              id: 'key1',
+              pin: 'openai/key1',
+              kind: 'key',
+              label: 'a',
+              on: true,
+              models: [
+                {
+                  id: 'openai/gpt-6-luna',
+                  owned_by: 'openai',
+                  display_name: 'GPT-6 Luna',
+                  reasoning_levels: ['low', 'high'],
+                  pricing: { prompt: '0.000001', completion: '0.000002' }
+                },
+                {
+                  id: 'openai/gpt-5',
+                  owned_by: 'openai',
+                  display_name: 'GPT-5',
+                  reasoning_levels: ['minimal', 'low', 'medium', 'high'],
+                  pricing: { prompt: '0.00000125', completion: '0.00001' }
+                },
+                {
+                  id: 'openai/gpt-5-mini',
+                  owned_by: 'openai',
+                  display_name: 'GPT-5 Mini',
+                  reasoning_levels: ['low', 'high']
+                },
+                {
+                  id: 'openai/hidden-bad-pricing',
+                  owned_by: 'openai',
+                  pricing: { prompt: -0.5, completion: 0 }
+                },
+                {
+                  id: 'openai/hidden-audio',
+                  owned_by: 'openai',
+                  kind: 'audio',
+                  pricing: { prompt: '0.000001', completion: '0.000002' }
+                },
+                {
+                  id: 'other/cross-provider-spoof',
+                  owned_by: 'other',
+                  pricing: { prompt: '0.000001', completion: '0.000002' }
+                },
+                { id: 'openai/unpriced-chat', owned_by: 'openai', display_name: 'Unpriced Chat', reasoning_levels: ['medium'] },
+                { id: 'openai/bad-pricing', owned_by: 'openai', pricing: { prompt: -1, completion: 0 } },
+                { id: 'openai/gpt-image-2', owned_by: 'openai', kind: 'image' }
+              ]
+            },
+            {
+              provider: 'openai',
+              id: 'key2',
+              pin: 'openai/key2',
+              kind: 'key',
+              label: 'b',
+              on: true,
+              models: [
+                {
+                  id: 'openai/gpt-6-luna',
+                  owned_by: 'openai',
+                  display_name: 'GPT-6 Luna',
+                  reasoning_levels: ['low', 'high'],
+                  pricing: { prompt: '0.000001', completion: '0.000002' }
+                },
+                {
+                  id: 'openai/gpt-5',
+                  owned_by: 'openai',
+                  display_name: 'GPT-5',
+                  reasoning_levels: ['minimal', 'low', 'medium', 'high'],
+                  pricing: { prompt: '0.00000125', completion: '0.00001' }
+                }
+              ]
+            },
+            {
+              provider: 'openai',
+              id: 'key3',
+              pin: 'openai/key3',
+              kind: 'key',
+              label: 'empty',
+              on: true,
+              models: []
+            },
+            {
+              provider: 'office',
+              id: 'peerkey',
+              pin: 'office/peerkey',
+              kind: 'key',
+              label: 'sk-peer',
+              on: true,
+              models: [
+                {
+                  id: 'office/openai/gpt-6-luna',
+                  owned_by: 'office',
+                  pricing: { prompt: '0.000001', completion: '0.000002' }
+                },
+                {
+                  id: 'office/openai/hidden-remote-model',
+                  owned_by: 'office',
+                  display_name: 'Hidden Remote',
+                  reasoning_levels: ['medium'],
+                  pricing: { prompt: '0.000003', completion: '0.000006' }
+                },
+                'bare-remote-alias'
+              ]
+            }
+          ]
+        };
+      }
+      throw new TypeError('unexpected path ' + path);
+    };
+    const routes = await adapter.routes.public_routes();
+    const byModel = (modelId: string) => routes.filter(row => row.model === modelId);
+
+    // Non-chat models (catalog or hidden), malformed/negative pricing, and cross-provider spoofed IDs are never exposed.
+    expect(byModel('openai/gpt-image-2')).toEqual([]);
+    expect(byModel('openai/hidden-audio')).toEqual([]);
+    expect(byModel('openai/bad-pricing')).toEqual([]);
+    expect(byModel('openai/hidden-bad-pricing')).toEqual([]);
+    expect(byModel('other/cross-provider-spoof')).toEqual([]);
+
+    // Catalog-priced model keeps full metadata, manual override, and omits key3 (empty models list).
+    expect(byModel('openai/gpt-6-luna').map(r => [r.account_ref, r.account_evidence, r.pricing, r.thinking_levels])).toEqual([
+      ['gateway-default', 'gateway_binding', { prompt: 0.000001, completion: 0.000002 }, ['low', 'high']],
+      ['openai-manual-a', 'configured_binding', { prompt: 0.000001, completion: 0.000002 }, ['low', 'high']],
+      ['b', 'gateway_account_binding', { prompt: 0.000001, completion: 0.000002 }, ['low', 'high']]
+    ]);
+
+    // Unpriced /v1/models chat model listed in account.models keeps catalog display_name & thinking_levels with pricing: null.
+    const unpricedChat = byModel('openai/unpriced-chat');
+    expect(unpricedChat.map(r => [r.account_ref, r.pricing, r.model_display_name, r.thinking_levels, r.provider_evidence])).toEqual([
+      ['gateway-default', null, 'Unpriced Chat', ['medium'], 'gateway_catalog'],
+      ['openai-manual-a', null, 'Unpriced Chat', ['medium'], 'gateway_catalog']
+    ]);
+
+    // Hidden provider model (not in /v1/models) retains full pricing, display_name, and thinking_levels from models=full.
+    expect(
+      byModel('openai/gpt-5').map(r => [
+        r.account_ref,
+        r.account_evidence,
+        r.pricing,
+        r.model_display_name,
+        r.thinking_levels,
+        r.provider_evidence
+      ])
+    ).toEqual([
+      [
+        'gateway-default',
+        'gateway_binding',
+        { prompt: 0.00000125, completion: 0.00001 },
+        'GPT-5',
+        ['minimal', 'low', 'medium', 'high'],
+        'gateway_accounts'
+      ],
+      [
+        'openai-manual-a',
+        'configured_binding',
+        { prompt: 0.00000125, completion: 0.00001 },
+        'GPT-5',
+        ['minimal', 'low', 'medium', 'high'],
+        'gateway_accounts'
+      ],
+      [
+        'b',
+        'gateway_account_binding',
+        { prompt: 0.00000125, completion: 0.00001 },
+        'GPT-5',
+        ['minimal', 'low', 'medium', 'high'],
+        'gateway_accounts'
+      ]
+    ]);
+
+    // Hidden model without pricing keeps display_name and thinking_levels with pricing: null, and respects per-account exclusions.
+    expect(
+      byModel('openai/gpt-5-mini').map(r => [r.account_ref, r.account_evidence, r.pricing, r.model_display_name, r.thinking_levels])
+    ).toEqual([
+      ['gateway-default', 'gateway_binding', null, 'GPT-5 Mini', ['low', 'high']],
+      ['openai-manual-a', 'configured_binding', null, 'GPT-5 Mini', ['low', 'high']]
+    ]);
+
+    // Resolving a hidden pinned model preserves pricing and creates a MagpieAccountClient with X-Magpie-Account intact.
+    const pinnedGpt5 = byModel('openai/gpt-5').find(r => r.account_ref === 'b')!;
+    const resolvedGpt5 = await adapter.routes.resolve(pinnedGpt5.id);
+    expect(resolvedGpt5.pricing).toEqual({ prompt: 0.00000125, completion: 0.00001 });
+    expect(adapter.routes.create_client(resolvedGpt5)._headers()['X-Magpie-Account']).toBe(encodeURIComponent('openai/key2'));
+
+    // Remote peer hidden models retain full metadata + remote_route namespace and never get local account pins.
+    const remoteHidden = byModel('office/openai/hidden-remote-model');
+    expect(remoteHidden).toHaveLength(1);
+    expect(remoteHidden[0]!.account_evidence).toBe('gateway_binding');
+    expect(remoteHidden[0]!.pricing).toEqual({ prompt: 0.000003, completion: 0.000006 });
+    expect(remoteHidden[0]!.model_display_name).toBe('Hidden Remote');
+    expect(remoteHidden[0]!.thinking_levels).toEqual(['medium']);
+    expect(remoteHidden[0]!.remote_route).toEqual({ namespace: 'openai', evidence: 'magpie_via_catalog' });
+    // Bare string IDs (legacy models=1 format) remain supported with pricing: null and no local pins on remote peers.
+    const remoteBare = byModel('office/bare-remote-alias');
+    expect(remoteBare).toHaveLength(1);
+    expect(remoteBare[0]!.account_evidence).toBe('gateway_binding');
+    expect(remoteBare[0]!.pricing).toBeNull();
+
+    // Direct unit check on discoverMagpieAccountCatalog deduplication and non-chat exclusion from account.models.
+    const parsed = discoverMagpieAccountCatalog({
+      object: 'list',
+      data: [
+        {
+          provider: 'openai',
+          id: 'k1',
+          pin: 'openai/k1',
+          label: 'k1',
+          on: true,
+          models: [
+            {
+              id: 'openai/gpt-5',
+              display_name: 'GPT-5',
+              reasoning_levels: ['high'],
+              pricing: { prompt: '0.000001', completion: '0.000002' }
+            },
+            { id: 'openai/gpt-image-2', kind: 'image' },
+            'gpt-legacy'
+          ]
+        },
+        {
+          provider: 'openai',
+          id: 'k2',
+          pin: 'openai/k2',
+          label: 'k2',
+          on: true,
+          models: [{ id: 'openai/gpt-5', display_name: 'GPT-5' }]
+        }
+      ]
+    });
+    expect(parsed.accounts.map(a => [a.account, a.models])).toEqual([
+      ['openai/k1', ['openai/gpt-5', 'openai/gpt-legacy']],
+      ['openai/k2', ['openai/gpt-5']]
+    ]);
+    expect(parsed.models).toHaveLength(2);
+
+    // Duplicate non-chat entries of the same ID must never clobber a valid chat model (matching /v1/models).
+    const mixed = discoverMagpieAccountCatalog({
+      object: 'list',
+      data: [
+        {
+          provider: 'openai',
+          id: 'k1',
+          pin: 'openai/k1',
+          label: 'k1',
+          on: true,
+          models: [
+            { id: 'openai/dual-a', kind: 'chat', display_name: 'Dual A', pricing: { prompt: '0.000001', completion: '0.000002' } },
+            { id: 'openai/dual-a', kind: 'image' },
+            { id: 'openai/dual-b', kind: 'image' }
+          ]
+        },
+        {
+          provider: 'openai',
+          id: 'k2',
+          pin: 'openai/k2',
+          label: 'k2',
+          on: true,
+          models: [{ id: 'openai/dual-b', display_name: 'Dual B', pricing: { prompt: '0.000003', completion: '0.000004' } }]
+        }
+      ]
+    });
+    expect(mixed.models.map(m => [m.id, m.kind ?? 'chat', m.display_name])).toEqual([
+      ['openai/dual-a', 'chat', 'Dual A'],
+      ['openai/dual-b', 'chat', 'Dual B']
+    ]);
   });
 });
