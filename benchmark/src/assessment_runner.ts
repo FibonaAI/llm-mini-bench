@@ -70,11 +70,11 @@ export interface AssessmentJournalWriter {
 }
 /** Budget adapters use synchronous event-loop-atomic reservations and settlements. */
 export interface AssessmentBudgetController {
-    admit(body: Record<string, unknown>, pricing: AssessmentPricing): number | null;
+    admit(body: Record<string, unknown>, pricing: AssessmentPricing | null): number | null;
     settle(
         reservation: number,
         payload: unknown,
-        pricing: AssessmentPricing,
+        pricing: AssessmentPricing | null,
         cap: number | undefined,
         transport_failed?: boolean,
         retain_unknown?: boolean
@@ -158,7 +158,20 @@ export class AssessmentBudget implements AssessmentBudgetController {
         readonly uncapped_output_reservation_tokens = ASSESSMENT_UNCAPPED_OUTPUT_RESERVATION_TOKENS,
         readonly continue_on_sample_failure = false
     ) {}
-    admit(body: Record<string, unknown>, pricing: AssessmentPricing): number | null {
+    admit(body: Record<string, unknown>, pricing: AssessmentPricing | null): number | null {
+        if (this.stop_reason) return null;
+        if (this.request_limit !== null && this.requests >= this.request_limit) {
+            this.stop_reason = 'request_limit';
+            return null;
+        }
+        if (pricing === null) {
+            if (this.cost_limit !== null && Number.isFinite(this.cost_limit)) {
+                this.stop_reason = 'missing_usage_cost';
+                return null;
+            }
+            this.requests++;
+            return 0;
+        }
         // Python's historical serializer included a space after commas and colons.
         // Retaining that byte count keeps cost-reservation admission conservative and comparable.
         const serialized = canonicalAssessmentJson(body);
@@ -181,11 +194,6 @@ export class AssessmentBudget implements AssessmentBudgetController {
             (Buffer.byteLength(serialized) + separators + 2000) * pricing.prompt +
             (typeof body.max_output_tokens === 'number' ? body.max_output_tokens : this.uncapped_output_reservation_tokens) *
                 pricing.completion;
-        if (this.stop_reason) return null;
-        if (this.request_limit !== null && this.requests >= this.request_limit) {
-            this.stop_reason = 'request_limit';
-            return null;
-        }
         if (this.cost_limit !== null && this.spent + this.reserved + this.uncertain_cost + reservation > this.cost_limit) {
             this.stop_reason = 'cost_reservation_limit';
             return null;
@@ -197,18 +205,20 @@ export class AssessmentBudget implements AssessmentBudgetController {
     settle(
         reservation: number,
         payload: unknown,
-        pricing: AssessmentPricing,
+        pricing: AssessmentPricing | null,
         cap: number | undefined,
         transport_failed = false,
         retain_unknown = false
     ): number | null {
         const usage = assessment_usage(payload);
-        const cost = usage ? usage.input_tokens * pricing.prompt + usage.output_tokens * pricing.completion : null;
+        const cost = usage && pricing !== null ? usage.input_tokens * pricing.prompt + usage.output_tokens * pricing.completion : null;
         this.reserved -= reservation;
         if (cost === null) {
             this.missing_cost++;
             if (retain_unknown) this.uncertain_cost += reservation;
-            else if (!this.continue_on_sample_failure) this.stop_reason = 'missing_usage_cost';
+            else if (!this.continue_on_sample_failure && (usage === null || (this.cost_limit !== null && Number.isFinite(this.cost_limit))))
+                this.stop_reason = 'missing_usage_cost';
+            if (cap !== undefined && usage && usage.output_tokens > cap) this.stop_reason = 'upstream_output_cap_exceeded';
         } else {
             this.spent += cost;
             if (cap !== undefined && usage!.output_tokens > cap) this.stop_reason = 'upstream_output_cap_exceeded';
@@ -266,7 +276,7 @@ export async function run_assessment_sample(
     target: AssessmentTarget,
     round_number: number,
     config: RunnerConfig,
-    pricing: AssessmentPricing,
+    pricing: AssessmentPricing | null,
     budget: AssessmentBudgetController,
     journal: AssessmentJournalWriter,
     cancelled?: () => boolean,
@@ -436,7 +446,7 @@ export async function run_assessment_sample(
         }
         const cost = turnCost;
         const usage = assessment_usage(payload);
-        if (cost !== null && usage !== null) {
+        if (usage !== null) {
             costs.push(cost);
             usages.push(usage);
         }
@@ -457,8 +467,12 @@ export async function run_assessment_sample(
             outcome = retryPolicy ? 'incomplete' : 'response_incomplete_or_error';
             break;
         }
-        if (cost === null || usage === null || (outputCap !== undefined && usage.output_tokens > outputCap)) {
-            outcome = retryPolicy ? (cost === null || usage === null ? 'api_failure' : 'incomplete') : 'usage_or_cap_failure';
+        if (usage === null || (pricing !== null && cost === null) || (outputCap !== undefined && usage.output_tokens > outputCap)) {
+            outcome = retryPolicy
+                ? usage === null || (pricing !== null && cost === null)
+                    ? 'api_failure'
+                    : 'incomplete'
+                : 'usage_or_cap_failure';
             break;
         }
         const output = Object.hasOwn(payload, 'output') ? payload.output : [];
@@ -587,7 +601,7 @@ export async function run_assessment_sample(
         }
     }
     const completeUsage = usages.length > 0 && usages.every((value): value is AssessmentUsage => value !== null);
-    const completeCosts = costs.length > 0 && costs.every((value): value is number => value !== null);
+    const completeCosts = pricing !== null && costs.length > 0 && costs.every((value): value is number => value !== null);
     const observation: AssessmentObservation = {
         type: 'observation',
         ...sample,

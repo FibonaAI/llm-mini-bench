@@ -1,5 +1,6 @@
 /* Native SVG chart; metric calculation belongs to the observation adapter. */
 import { buildAnalysisHistoryStates } from './analysis-history.js';
+import { isUnpricedOnlyCostGap } from './assessment-chart-metric.js';
 import { compareRecordToBaseline, findMatchingBaselines, findPromotedBaseline } from './baseline-comparison.js';
 import { chartCategory, createChartColorRegistry } from './chart-colors.js';
 import { buildChartLegendGroups, createChartLegend } from './chart-legend.js';
@@ -57,6 +58,7 @@ function roundMetrics(point) {
     rounds && validNonnegative(original.estimated_cost_usd)
       ? money(original.estimated_cost_usd / rounds)
       : rounds &&
+          !isUnpricedOnlyCostGap(original, 'cost') &&
           Number.isInteger(accounting?.unknown_cost_attempts) &&
           accounting.unknown_cost_attempts > 0 &&
           validNonnegative(accounting?.estimated_cost_usd_lower_bound)

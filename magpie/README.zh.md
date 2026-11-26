@@ -43,7 +43,7 @@ npm 和 GitHub 安装方式见[项目首页](../README.zh.md)。本地开发时�
 
 ## 本地多账号与多 Key 绑定
 
-Magpie 通过 `X-Magpie-Account` 请求头将请求固定到本机供应商的单个订阅账号或 API Key：不路由、不切换，失败时原样返回厂商错误。在 Magpie `v0.1.4621+` 上，适配器会自动读取 `GET /v1/magpie/accounts`（仅含标识符、不含明文密钥，且覆盖无额度信息的 API Key 渠道），将所有已启用的本机账号与 Key 展开在每个模型的默认路由旁作为 `gateway_account_binding` 固定绑定目标，并按网关返回的 `pin`（`<provider>/<id>`）原样固定请求。重名或占位标签会自动附加非敏感 `id` 区分，停用条目和远端路由会被排除，遇到 `401`/`403` 时清空自动发现目标。在尚未提供 `/v1/magpie/accounts` 的旧版 Magpie 上，适配器会自动回退读取 `/v1/magpie/quotas/cards` 中的具名本地卡片，接口不可用时降级为默认路由。
+Magpie 通过 `X-Magpie-Account` 请求头将请求固定到本机供应商的单个订阅账号或 API Key：不路由、不切换，失败时原样返回厂商错误。在 Magpie `v0.1.4621+` 上，适配器会自动读取 `GET /v1/magpie/accounts?models=full`（仅含标识符、不含明文密钥，且覆盖无额度信息的 API Key 渠道），将所有已启用的本机账号与 Key 展开在每个模型的默认路由旁作为 `gateway_account_binding` 固定绑定目标，并按网关返回的 `pin`（`<provider>/<id>`）原样固定请求。在 Magpie `v0.1.4805+` 上，`models=full` 会按 `/v1/models` 格式返回每个账号完整可服务模型的元数据（`display_name`、推理档位、`pricing`、`kind` 等），不再受 `/v1/models` 对外暴露上限限制并按账号实际服务范围过滤；同时兼容 `v0.1.4794+` 的纯模型 ID 列表，未在目录中提供单价的模型仍以 `pricing: null` 允许正常评测（Tokens 与耗时维度正常入图，费用保持 `null`）。重名或占位标签会自动附加非敏感 `id` 区分，停用条目和远端路由不会被当作本机账号固定，遇到 `401`/`403` 时清空自动发现目标。在尚未提供 `/v1/magpie/accounts` 的旧版 Magpie 上，适配器会自动回退读取 `/v1/magpie/quotas/cards` 中的具名本地卡片，接口不可用时降级为默认路由。
 
 也可在插件选项中通过可选的 `accounts` 数组显式绑定（填写 `pin`、账号名或 ID），用于自定义 `account_ref` 或限定模型列表（保留已自动保存的连接设置；同一本机渠道/账号下显式 `accounts` 优先于自动发现）：
 

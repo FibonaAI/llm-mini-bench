@@ -27,8 +27,8 @@ describe('Magpie catalog routes', () => {
     expect((await routes.resolve(a[0]!.id)).api_key).toBe('first');
     key = 'rotated';
     expect((await routes.resolve(a[0]!.id)).api_key).toBe('rotated');
-    a[0]!.pricing.prompt = 100;
-    expect((await routes.public_routes())[0]!.pricing.prompt).toBe(0.000001);
+    a[0]!.pricing!.prompt = 100;
+    expect((await routes.public_routes())[0]!.pricing!.prompt).toBe(0.000001);
     expect(loads).toBe(4);
   });
   test('catalog metadata preserves provider instances without parsing model IDs or exposing other fields', async () => {

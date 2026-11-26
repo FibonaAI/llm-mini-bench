@@ -486,4 +486,58 @@ describe('durable execution and admission (fully offline)', () => {
         const { service } = fixture(undefined, 16);
         expect((await service.plan(request({ concurrency: 16 }))).concurrency).toBe(16);
     });
+    test('unpriced route runs cleanly without max_cost_usd, records token usage with null cost, and rejects finite max_cost_usd', async () => {
+        const { service, routes } = fixture();
+        (routes.configs.a as any).pricing = null;
+        await expect(service.plan(request({ limits: { max_cost_usd: 1 } }))).rejects.toThrow('max_cost_usd');
+        const plan = await service.plan(request({ limits: { max_cost_usd: null } }));
+        expect(plan.targets[0]!.pricing).toBeNull();
+        const id = await service.start_run(request({ limits: { max_cost_usd: null } }));
+        const run = await finish(service, id);
+        expect(run.status).toBe('completed');
+        expect(run.samples).toHaveLength(1);
+        expect(run.samples[0]!.status).toBe('completed');
+        expect(run.samples[0]!.usage).toEqual({ input_tokens: 20, output_tokens: 40 });
+        expect(run.samples[0]!.estimated_uncached_cost_usd).toBeNull();
+    });
+    test('reloading an unpriced timed-out sample from SQLite keeps cost null instead of fabricating zero', async () => {
+        const realNow = Date.now;
+        let offsetMs = 0;
+        Date.now = () => realNow() + offsetMs;
+        const routes = new FakeRoutes();
+        (routes.configs.a as any).pricing = null;
+        const timeoutGateway = new FakeGateway();
+        const factory = () => ({
+            post_responses_stream: async (): Promise<GatewayResponse> => {
+                offsetMs += 31_000;
+                return [-1, 0, {}, { error: 'TimeoutError' }];
+            }
+        });
+        const directory = mkdtempSync(join(tmpdir(), 'mini-bench-execution-'));
+        const service = new BenchExecutionService(directory, routes, 4, factory);
+        fixtures.push({ directory, service, gateway: timeoutGateway });
+        try {
+            const id = await service.start_run(
+                request({
+                    limits: { max_cost_usd: null, timeout: 30, timeout_scope: 'sample', max_api_retries: 0 }
+                })
+            );
+            const run = await finish(service, id);
+            expect(run.status).toBe('completed');
+            expect(run.samples[0]!.runner_error).toBe('SampleTimeout');
+            expect(run.samples[0]!.estimated_uncached_cost_usd).toBeNull();
+            await service.close();
+            const reloaded = new BenchExecutionService(directory, routes, 4, factory);
+            try {
+                const loaded = reloaded.get_run(id);
+                expect(loaded).not.toBeNull();
+                expect(loaded!.samples[0]!.runner_error).toBe('SampleTimeout');
+                expect(loaded!.samples[0]!.estimated_uncached_cost_usd).toBeNull();
+            } finally {
+                await reloaded.close();
+            }
+        } finally {
+            Date.now = realNow;
+        }
+    });
 });

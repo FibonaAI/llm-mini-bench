@@ -8,7 +8,42 @@ export interface MagpieAccountBinding {
   account_ref: string;
   models?: string[];
 }
+/** Account bindings plus deduplicated full model metadata from `/v1/magpie/accounts?models=full`. */
+export interface MagpieAccountsCatalog {
+  accounts: MagpieAccountBinding[];
+  models: Record<string, unknown>[];
+}
 const object = (value: unknown): value is Record<string, unknown> => value !== null && typeof value === 'object' && !Array.isArray(value);
+const DISCOVERED_MODEL_META_KEYS = [
+  'id',
+  'owned_by',
+  'display_name',
+  'kind',
+  'pricing',
+  'reasoning_levels',
+  'supported_reasoning_levels',
+  'magpie_via'
+] as const;
+function pickDiscoveredModelMetadata(raw: Record<string, unknown>): Record<string, unknown> {
+  const picked: Record<string, unknown> = {};
+  for (const key of DISCOVERED_MODEL_META_KEYS) {
+    if (raw[key] !== undefined) picked[key] = structuredClone(raw[key]);
+  }
+  return picked;
+}
+const isChatKind = (kind: unknown): boolean => kind === undefined || kind === 'chat';
+function mergeDiscoveredModelMetadata(existing: Record<string, unknown>, incoming: Record<string, unknown>): Record<string, unknown> {
+  const existingIsChat = isChatKind(existing.kind);
+  const incomingIsChat = isChatKind(incoming.kind);
+  // Chat entries take precedence over duplicate non-chat entries of the same ID, matching /v1/models.
+  if (existingIsChat && !incomingIsChat) return existing;
+  if (!existingIsChat && incomingIsChat) return incoming;
+  const merged = { ...existing };
+  for (const key of DISCOVERED_MODEL_META_KEYS) {
+    if (merged[key] === undefined && incoming[key] !== undefined) merged[key] = incoming[key];
+  }
+  return merged;
+}
 const validAccountHeader = (account: string): boolean => {
   try {
     encodeURIComponent(account);
@@ -41,7 +76,7 @@ export function validateMagpieAccountBindings(value: unknown): MagpieAccountBind
     if (
       row.models !== undefined &&
       (!Array.isArray(row.models) ||
-        row.models.length > 1000 ||
+        row.models.length > 10000 ||
         row.models.some((model: unknown) => !_route_text(model)) ||
         new Set(row.models).size !== row.models.length)
     )
@@ -53,15 +88,17 @@ export function validateMagpieAccountBindings(value: unknown): MagpieAccountBind
   });
 }
 /**
- * Discover local pin-able accounts and API keys from Magpie's `/v1/magpie/accounts` list
- * (Magpie v0.1.4621+, identifier-only, including providers without quota cards).
+ * Discover local pin-able accounts, API keys, and their full served model catalog from Magpie's
+ * `/v1/magpie/accounts?models=full` list (v0.1.4621+ for accounts, v0.1.4794+ for string model IDs,
+ * v0.1.4805+ for full `/v1/models`-shaped model metadata objects).
  * Each enabled local entry is pinned verbatim via its gateway-provided `pin` (`<provider>/<id>`).
  */
-export function discoverMagpieAccounts(payload: unknown): MagpieAccountBinding[] {
-  if (!validAccountsList(payload)) return [];
-  const entries: { provider_id: string; pin: string; id: string | null; label: string }[] = [];
+export function discoverMagpieAccountCatalog(payload: unknown): MagpieAccountsCatalog {
+  if (!validAccountsList(payload)) return { accounts: [], models: [] };
+  const entries: { provider_id: string; pin: string; id: string | null; label: string; models?: string[] }[] = [];
   const seenPins = new Set<string>();
   const labelCounts = new Map<string, number>();
+  const modelsById = new Map<string, Record<string, unknown>>();
   for (const row of payload.data) {
     if (!object(row)) continue;
     if (row.on !== true) continue;
@@ -76,7 +113,32 @@ export function discoverMagpieAccounts(payload: unknown): MagpieAccountBinding[]
     const label = _route_text(row.label) ? row.label : _route_text(row.user) ? row.user : (id ?? row.pin);
     const labelKey = JSON.stringify([row.provider, label.toLowerCase()]);
     labelCounts.set(labelKey, (labelCounts.get(labelKey) ?? 0) + 1);
-    entries.push({ provider_id: row.provider, pin: row.pin, id, label });
+    let models: string[] | undefined;
+    if (Array.isArray(row.models)) {
+      const seenModels = new Set<string>();
+      const prefix = row.provider + '/';
+      models = [];
+      for (const rawModel of row.models) {
+        let fullModel: string | null = null;
+        if (object(rawModel)) {
+          if (!_route_text(rawModel.id) || !rawModel.id.startsWith(prefix) || !_route_text(rawModel.id.slice(prefix.length))) continue;
+          const picked = pickDiscoveredModelMetadata(rawModel);
+          const existing = modelsById.get(rawModel.id);
+          modelsById.set(rawModel.id, existing ? mergeDiscoveredModelMetadata(existing, picked) : picked);
+          if (rawModel.kind !== undefined && rawModel.kind !== 'chat') continue;
+          fullModel = rawModel.id;
+        } else if (_route_text(rawModel)) {
+          const candidate = prefix + rawModel;
+          if (!_route_text(candidate)) continue;
+          fullModel = candidate;
+        }
+        if (!fullModel || seenModels.has(fullModel)) continue;
+        seenModels.add(fullModel);
+        models.push(fullModel);
+        if (models.length >= 10000) break;
+      }
+    }
+    entries.push({ provider_id: row.provider, pin: row.pin, id, label, ...(models !== undefined ? { models } : {}) });
   }
   const seenRefs = new Set<string>();
   const discovered: MagpieAccountBinding[] = [];
@@ -98,11 +160,16 @@ export function discoverMagpieAccounts(payload: unknown): MagpieAccountBinding[]
     discovered.push({
       provider_id: entry.provider_id,
       account: entry.pin,
-      account_ref
+      account_ref,
+      ...(entry.models !== undefined ? { models: entry.models } : {})
     });
     if (discovered.length >= 200) break;
   }
-  return discovered;
+  return { accounts: discovered, models: [...modelsById.values()] };
+}
+/** Discover local pin-able account bindings from `/v1/magpie/accounts`. */
+export function discoverMagpieAccounts(payload: unknown): MagpieAccountBinding[] {
+  return discoverMagpieAccountCatalog(payload).accounts;
 }
 /**
  * Fallback discovery from the receiving Magpie's quota cards for older gateways without
@@ -146,16 +213,16 @@ export function discoverMagpieLocalAccounts(payload: unknown): MagpieAccountBind
   }
   return discovered;
 }
-/** Cache read-only local account and API-key pins from Magpie's `/v1/magpie/accounts` endpoint. */
+/** Cache read-only local account pins and per-account model metadata from Magpie's `/v1/magpie/accounts` endpoint. */
 export class MagpieAccountsReader {
-  private cached: MagpieAccountBinding[] | null = null;
+  private cached: MagpieAccountsCatalog | null = null;
   private expires = 0;
-  private pending: Promise<MagpieAccountBinding[] | null> | null = null;
+  private pending: Promise<MagpieAccountsCatalog | null> | null = null;
   constructor(private readonly load: () => Promise<unknown>) {}
   invalidate(): void {
     this.expires = 0;
   }
-  async read(refresh = false): Promise<MagpieAccountBinding[] | null> {
+  async read(refresh = false): Promise<MagpieAccountsCatalog | null> {
     if (!refresh && performance.now() < this.expires) return this.cached === null ? null : structuredClone(this.cached);
     if (!this.pending) this.pending = this.fetch();
     const pending = this.pending;
@@ -166,13 +233,13 @@ export class MagpieAccountsReader {
       if (this.pending === pending) this.pending = null;
     }
   }
-  private async fetch(): Promise<MagpieAccountBinding[] | null> {
+  private async fetch(): Promise<MagpieAccountsCatalog | null> {
     try {
       const payload = await this.load();
-      this.cached = validAccountsList(payload) ? discoverMagpieAccounts(payload) : null;
+      this.cached = validAccountsList(payload) ? discoverMagpieAccountCatalog(payload) : null;
     } catch (error) {
       const forbidden = error instanceof Error && /^gateway HTTP error (401|403)$/.test(error.message);
-      this.cached = forbidden ? [] : null;
+      this.cached = forbidden ? { accounts: [], models: [] } : null;
     }
     this.expires = performance.now() + 30000;
     return this.cached;

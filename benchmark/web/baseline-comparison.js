@@ -1,3 +1,5 @@
+import { isUnpricedOnlyCostGap } from './assessment-chart-metric.js';
+
 const finite = value => typeof value === 'number' && Number.isFinite(value);
 
 function rawOf(record) {
@@ -52,7 +54,11 @@ function perRoundMetrics(record) {
   if (rounds !== null) {
     if (finite(raw?.estimated_cost_usd) && raw.estimated_cost_usd >= 0) {
       cost = raw.estimated_cost_usd / rounds;
-    } else if (finite(accounting?.estimated_cost_usd_lower_bound) && accounting.estimated_cost_usd_lower_bound >= 0) {
+    } else if (
+      !isUnpricedOnlyCostGap(raw, 'cost') &&
+      finite(accounting?.estimated_cost_usd_lower_bound) &&
+      accounting.estimated_cost_usd_lower_bound >= 0
+    ) {
       costLowerBound = accounting.estimated_cost_usd_lower_bound / rounds;
     }
   }

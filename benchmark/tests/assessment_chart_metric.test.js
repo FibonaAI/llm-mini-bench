@@ -221,3 +221,73 @@ test('unified anomaly helpers detect timeout, ended_after_submission, no_submiss
     expect(combined.summary).toContain('1 个样本未调用 submit_answer 提交（按 0 分计）');
     expect(combined.summary).toContain('用量不完整：2 次请求尝试未返回用量');
 });
+
+test('unpriced completed run plots normally on tokens and duration without bogus $0 lower bound on cost', () => {
+    const unpriced = observation(2);
+    unpriced.usage = { input_tokens: 100, output_tokens: 200 };
+    unpriced.estimated_cost_usd = null;
+    unpriced.elapsed_seconds = 120;
+    unpriced.usage_accounting = {
+        usage_lower_bound: { input_tokens: 100, output_tokens: 200 },
+        estimated_cost_usd_lower_bound: 0,
+        unknown_usage_attempts: 0,
+        unknown_cost_attempts: ids.length * 2,
+        attempts: ids.length * 2
+    };
+    const costMetric = assessmentChartMetric(unpriced, ids, 'cost', '1.0');
+    expect(costMetric.cost).toBeNull();
+    expect(costMetric.usageLowerBound).toBeNull();
+    expect(costMetric.exclusionReason).toBe('累计估算费用未知：目录未提供单价');
+    expect(observationQualitySummary(unpriced).text).toContain('目录未提供单价');
+    expect(assessmentChartMetric(unpriced, ids, 'tokens', '1.0')).toMatchObject({
+        score: 50,
+        cost: 150,
+        exclusionReason: null,
+        usageLowerBound: null
+    });
+    expect(assessmentChartMetric(unpriced, ids, 'duration', '1.0')).toMatchObject({
+        score: 50,
+        cost: 60,
+        exclusionReason: null,
+        usageLowerBound: null
+    });
+
+    // Unpriced run with an extra sentNoRequest prior attempt (attempts > unknown_cost_attempts)
+    // must still be recognized as unpriced rather than inventing a $0 lower bound.
+    const withNoRequestAttempt = {
+        ...unpriced,
+        usage_accounting: {
+            ...unpriced.usage_accounting,
+            attempts: ids.length * 2 + 1
+        }
+    };
+    const noReqCost = assessmentChartMetric(withNoRequestAttempt, ids, 'cost', '1.0');
+    expect(noReqCost.usageLowerBound).toBeNull();
+    expect(noReqCost.exclusionReason).toBe('累计估算费用未知：目录未提供单价');
+
+    // Unpriced run that also has a timed-out attempt with unknown usage must keep tokens lower bound
+    // while never inventing a bogus $0 cost lower bound.
+    const unpricedWithTimeout = {
+        ...unpriced,
+        usage: null,
+        usage_accounting: {
+            usage_lower_bound: { input_tokens: 90, output_tokens: 190 },
+            estimated_cost_usd_lower_bound: 0,
+            unknown_usage_attempts: 1,
+            unknown_cost_attempts: ids.length * 2,
+            attempts: ids.length * 2
+        }
+    };
+    const timeoutCost = assessmentChartMetric(unpricedWithTimeout, ids, 'cost', '1.0');
+    expect(timeoutCost.usageLowerBound).toBeNull();
+    expect(timeoutCost.exclusionReason).toContain('目录未提供单价');
+    expect(timeoutCost.exclusionReason).toContain('1 次请求尝试未返回用量');
+    expect(assessmentChartMetric(unpricedWithTimeout, ids, 'tokens', '1.0')).toMatchObject({
+        score: 50,
+        cost: null,
+        usageLowerBound: { cost: 140, unknownAttempts: 1, attempts: ids.length * 2 }
+    });
+    const qualityText = observationQualitySummary(unpricedWithTimeout).text;
+    expect(qualityText).toContain('1 次尝试未返回用量');
+    expect(qualityText).toContain('目录未提供单价');
+});
