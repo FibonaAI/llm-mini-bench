@@ -211,8 +211,11 @@ import { createTaskSubmission } from './task-submission.js';
         const runsVisible = !element('runs-view')?.hidden;
         if (runsVisible && !state.historyClosed && !state.selectedTaskId && !state.selectedRunId) {
           const first = historyEntries()[0];
-          if (first?.kind === 'task') state.selectedTaskId = first.record.id;
-          else if (first) state.selectedRunId = first.record.id;
+          if (first?.kind === 'task') {
+            state.selectedTaskId = first.record.id;
+            if (first.record.children?.length === 1 && first.record.children[0]?.run_id)
+              state.selectedRunId = first.record.children[0].run_id;
+          } else if (first) state.selectedRunId = first.record.id;
         }
         const taskId = state.selectedTaskId,
           runId = state.selectedRunId,
@@ -312,6 +315,7 @@ import { createTaskSubmission } from './task-submission.js';
     const scrollNow = () => {
       if (state.selectedRunId !== runId || element('runs-view')?.hidden || runSection.hidden) return;
       const target =
+        runSection.closest?.('.task-run-entry') ||
         runSection.closest?.('.task-preview-group') ||
         (!state.selectedTaskId ? runSection.closest?.('.history-entry') : null) ||
         runSection;
@@ -339,6 +343,10 @@ import { createTaskSubmission } from './task-submission.js';
     state.historyClosed = true;
     state.selectedRunId = null;
     state.runDetail = null;
+    if (state.selectedTaskId && state.taskDetail?.children?.length === 1) {
+      state.selectedTaskId = null;
+      state.taskDetail = null;
+    }
     renderDetails();
   }
   const toggleAssessmentTask = taskId => (state.selectedTaskId === taskId ? closeAssessmentTask() : selectAssessmentTask(taskId));
@@ -357,9 +365,11 @@ import { createTaskSubmission } from './task-submission.js';
   });
   element('bench-close-run').addEventListener('click', () => {
     const id = state.selectedRunId;
-    const allRunsOpen = Boolean(element('bench-task-detail').querySelector?.('details.task-all-runs')?.open);
+    const taskId = state.selectedTaskId;
+    const singleRunTask = Boolean(taskId && state.taskDetail?.children?.length === 1);
     closeAssessmentRun();
-    focusHistoryCard(state.selectedTaskId && !allRunsOpen ? 'data-preview-run-id' : 'data-bench-run-id', id);
+    if (singleRunTask) focusHistoryCard('data-bench-task-id', taskId);
+    else focusHistoryCard(state.selectedTaskId ? 'data-preview-run-id' : 'data-bench-run-id', id);
   });
   async function selectAssessmentTask(taskId) {
     pendingRevealRunId = null;
@@ -368,10 +378,35 @@ import { createTaskSubmission } from './task-submission.js';
     state.selectedTaskId = taskId;
     state.selectedRunId = null;
     state.runDetail = null;
+    const openSoleChildIfNeeded = async task => {
+      if (version !== state.selectionVersion || !task || !Array.isArray(task.children) || task.children.length !== 1) return;
+      const soleRunId = task.children[0]?.run_id;
+      if (!soleRunId) return;
+      state.selectedRunId = soleRunId;
+      const cached = cachedRunDetail(soleRunId);
+      if (cached) {
+        state.runDetail = cached;
+        renderDetails();
+        return;
+      }
+      renderDetails();
+      try {
+        const run = await fetchRunDetail(soleRunId);
+        if (version !== state.selectionVersion) return;
+        state.runDetail = run;
+        renderDetails();
+      } catch (error) {
+        if (version === state.selectionVersion) notify(`无法加载运行详情：${error.message}`, true);
+      }
+    };
     const summary = findTaskSummary(taskId);
     if (taskSummaryComplete(summary)) {
       state.taskDetail = summary;
-      renderDetails();
+      if (summary.children?.length === 1) {
+        await openSoleChildIfNeeded(summary);
+      } else {
+        renderDetails();
+      }
       return;
     }
     state.taskDetail = null;
@@ -388,7 +423,11 @@ import { createTaskSubmission } from './task-submission.js';
         return;
       }
       state.taskDetail = task;
-      renderDetails();
+      if (task?.children?.length === 1) {
+        await openSoleChildIfNeeded(task);
+      } else {
+        renderDetails();
+      }
     } catch (error) {
       if (version === state.selectionVersion) notify(`无法加载任务详情：${error.message}`, true);
     }

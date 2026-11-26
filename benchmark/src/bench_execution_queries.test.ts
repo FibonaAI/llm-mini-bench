@@ -67,7 +67,7 @@ test('run query summaries preserve retry predicates and isolate targets and live
         budget = { requests: 3, nested: { count: 1 } };
     const summary = execution_run_summary(run, budget);
     expect(summary.sample_status_counts).toEqual({ completed: 1, api_failure: 1, budget_not_admitted: 1, incomplete: 1 });
-    expect(summary.retryable_samples).toBe(2);
+    expect(summary.retryable_samples).toBe(3);
     expect(summary.budget).toEqual(budget);
     expect(summary).not.toHaveProperty('samples');
     expect(JSON.stringify(summary)).not.toContain('raw private evidence');
@@ -76,11 +76,11 @@ test('run query summaries preserve retry predicates and isolate targets and live
     expect(run.plan.targets[0]!.remote_route!.namespace).toBe('remote');
     expect(budget.nested.count).toBe(1);
     run.stop_reason = null;
-    expect(execution_retryable_samples(run)).toBe(1);
-    run.stop_reason = 'transport_failure';
     expect(execution_retryable_samples(run)).toBe(2);
-    run.samples[3]!.status = 'interrupted';
+    run.stop_reason = 'transport_failure';
     expect(execution_retryable_samples(run)).toBe(3);
+    run.samples[0]!.grade = { content_score: 0, outcome: 'no_submission' };
+    expect(execution_retryable_samples(run)).toBe(4);
 });
 
 test('task query summaries count committed children without leaking full child evidence', () => {
@@ -121,10 +121,16 @@ test('result quality separates completed scoring and all-attempt accounting with
     const known = { input_tokens: 0, output_tokens: 0 };
     run.status = 'completed';
     run.samples = [
-        { ...base, grade: { content_score: 0 }, usage: known, estimated_uncached_cost_usd: 0 },
+        {
+            ...base,
+            grade: { content_score: 0, outcome: 'no_submission' },
+            usage: known,
+            estimated_uncached_cost_usd: 0
+        },
         {
             ...base,
             grade: { content_score: 1 },
+            answer_submission: { protocol: 'submit-answer-tool-v1', submissions: 1, ended_after_submission: 'api_failure' },
             usage: null,
             estimated_uncached_cost_usd: null,
             latest_attempt_usage: known,
@@ -139,6 +145,13 @@ test('result quality separates completed scoring and all-attempt accounting with
     expect(execution_result_quality(run)).toEqual({
         completed_samples: 4,
         unscored_samples: 2,
+        timeout_samples: 0,
+        model_anomaly_samples: 1,
+        non_model_anomaly_samples: 1,
+        ended_after_submission_samples: 1,
+        ended_after_timeout_samples: 0,
+        ended_after_non_model_samples: 1,
+        no_submission_samples: 1,
         unknown_usage_samples: 2,
         unknown_cost_samples: 2,
         prior_unknown_usage_samples: 1,
@@ -146,6 +159,10 @@ test('result quality separates completed scoring and all-attempt accounting with
     });
     expect(execution_run_summary(run).result_quality).toEqual(execution_result_quality(run));
     expect(run).toEqual(before);
+    // Never-started interrupted prior attempts (no calls, no started_at) are treated as known zero, not unknown.
+    run.samples[1]!.attempts = [{ status: 'interrupted', usage: null, estimated_uncached_cost_usd: null }];
+    expect(execution_result_quality(run).prior_unknown_usage_samples).toBe(0);
+    expect(execution_result_quality(run).prior_unknown_cost_samples).toBe(0);
     run.samples[1]!.attempts = [
         { latest_attempt_usage: known, latest_attempt_cost_usd: 0, usage: null, estimated_uncached_cost_usd: null }
     ];

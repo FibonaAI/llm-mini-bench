@@ -693,6 +693,111 @@ test('run call diagnosis is authenticated, read-only and limited to known runs',
     expect((await request('/api/bench/runs/' + RUN_ID + '/calls', 'POST', {})).status).toBe(404);
 });
 
+test('sample session events endpoint is authenticated, read-only, and scoped by sample_id and optional attempt_id', async () => {
+    const { service, request } = fixture();
+    const execution = service.bench_execution();
+    expect(
+        (await request('/api/bench/runs/' + RUN_ID + '/events?sample_id=s1', 'GET', undefined, { 'X-Mini-Bench-Token': '' })).status
+    ).toBe(403);
+    expect((await request('/api/bench/runs/' + RUN_ID + '/events?sample_id=s1')).status).toBe(404);
+    service.db.save_run({
+        id: RUN_ID,
+        status: 'completed',
+        created_at: '2026-11-22T00:00:00.000Z',
+        updated_at: '2026-11-22T00:00:00.000Z',
+        stop_reason: null,
+        plan: {
+            bank_version: '1.0',
+            bank_scope: 'subset',
+            bank_snapshot: {},
+            targets: [],
+            task_ids: [],
+            task_snapshots: [],
+            rounds: 1,
+            limits: { timeout: 60 },
+            source_sha256: {},
+            sample_count: 2
+        },
+        samples: [],
+        budget: {}
+    });
+    service.db.insert_session_events_batch([
+        {
+            run_id: RUN_ID,
+            sample_id: 's1',
+            attempt_id: 'att-1',
+            seq: 1,
+            kind: 'llm_turn',
+            call_id: 'c1',
+            turn: 1,
+            http_status: 200,
+            elapsed_seconds: 1.5,
+            usage_known: true,
+            input_tokens: 100,
+            output_tokens: 40,
+            response_status: 'completed',
+            payload: {
+                reasoning_summary: ['check inputs'],
+                assistant_text: 'Calling tool',
+                tool_calls: [{ call_id: 'tc-1', name: 'submit_answer', arguments: '{"a":1}' }]
+            }
+        },
+        {
+            run_id: RUN_ID,
+            sample_id: 's1',
+            attempt_id: 'att-1',
+            seq: 2,
+            kind: 'tool_result',
+            call_id: 'tc-1',
+            payload: { name: 'submit_answer', result: { accepted: true } }
+        },
+        {
+            run_id: RUN_ID,
+            sample_id: 's1',
+            attempt_id: 'att-2',
+            seq: 1,
+            kind: 'llm_turn',
+            call_id: 'c2',
+            turn: 1,
+            http_status: 429,
+            error_code: 'rate_limit_exceeded',
+            payload: { raw_error_excerpt: 'too many requests' }
+        },
+        {
+            run_id: RUN_ID,
+            sample_id: 's2',
+            attempt_id: 'att-other',
+            seq: 1,
+            kind: 'llm_turn',
+            call_id: 'c3',
+            http_status: 200,
+            payload: { assistant_text: 'other sample' }
+        }
+    ]);
+    execution.has_run = id => id === RUN_ID;
+    expect((await request('/api/bench/runs/' + RUN_ID + '/events')).status).toBe(400);
+    expect((await request('/api/bench/runs/' + RUN_ID + '/events?sample_id=')).status).toBe(400);
+
+    const allS1 = await request('/api/bench/runs/' + RUN_ID + '/events?sample_id=s1');
+    expect(allS1.status).toBe(200);
+    const bodyAll = await allS1.json();
+    expect(bodyAll.sample_id).toBe('s1');
+    expect(bodyAll.events).toHaveLength(3);
+    expect(bodyAll.events.map((e: { kind: string }) => e.kind)).toEqual(['llm_turn', 'tool_result', 'llm_turn']);
+    expect(bodyAll.events[0].payload.reasoning_summary).toEqual(['check inputs']);
+    expect(bodyAll.events[1].payload.result).toEqual({ accepted: true });
+    expect(JSON.stringify(bodyAll)).not.toContain('other sample');
+
+    const att2Only = await request('/api/bench/runs/' + RUN_ID + '/events?sample_id=s1&attempt_id=att-2');
+    expect(att2Only.status).toBe(200);
+    const bodyAtt2 = await att2Only.json();
+    expect(bodyAtt2.events).toHaveLength(1);
+    expect(bodyAtt2.events[0]).toMatchObject({ attempt_id: 'att-2', http_status: 429, error_code: 'rate_limit_exceeded' });
+    expect(bodyAtt2.events[0].payload.raw_error_excerpt).toBe('too many requests');
+
+    expect((await request('/api/bench/runs/' + RUN_ID + '/events?sample_id=s1', 'POST', {})).status).toBe(404);
+});
+
 test('large JSON responses are gzip-encoded and unchanged observations are not resent', async () => {
     const { request } = fixture();
     const plain = await request('/api/bench/banks', 'GET', undefined, { 'Accept-Encoding': 'identity' });

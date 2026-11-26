@@ -20,7 +20,7 @@
     const completed=childRuns[0];
     completed.samples.forEach(sample=>Object.assign(sample,{usage:{input_tokens:1,output_tokens:2},estimated_uncached_cost_usd:.000005}));
     Object.assign(completed.samples[0],{grade:{content_score:null,outcome:'ambiguous'},response:'{"answer":1} explanation {invalid}'});
-    Object.assign(completed.samples[1],{grade:{content_score:0,outcome:'ok'},usage:null,estimated_uncached_cost_usd:null,latest_attempt_usage:{input_tokens:3,output_tokens:4},latest_attempt_cost_usd:.01,attempts:[{status:'api_failure',usage:null,estimated_uncached_cost_usd:null}]});
+    Object.assign(completed.samples[1],{attempt_id:'att-2',grade:{content_score:0,outcome:'ok',content_checks:{result:false}},answer_submission:{protocol:'submit-answer-tool-v1',submitted:true,call_id:'call_sub_1',submission_count:1,answer:{result:'wrong_value'}},usage:null,estimated_uncached_cost_usd:null,latest_attempt_usage:{input_tokens:3,output_tokens:4},latest_attempt_cost_usd:.01,attempts:[{attempt_id:'att-1',status:'api_failure',usage:null,estimated_uncached_cost_usd:null}]});
     completed.result_quality={completed_samples:36,unscored_samples:1,unknown_usage_samples:1,unknown_cost_samples:1,prior_unknown_usage_samples:1,prior_unknown_cost_samples:1};
     const task={id,status:'running',created_at:'2026-11-11T01:00:00Z',updated_at:'2026-11-11T01:00:00Z',plan:taskPlan,children:childRuns.map(run=>({run_id:run.id,target:run.plan.targets[0],status:run.status,sample_count:run.sample_count,sample_status_counts:run.sample_status_counts,result_quality:run.result_quality,budget:run.budget}))};
     runs.push(...childRuns);taskRecords.push(task);return task;
@@ -97,6 +97,16 @@
     const taskPath=path.match(/^\/api\/bench\/tasks\/([^/]+)(\/cancel)?$/);
     if(taskPath){const task=taskRecords.find(task=>task.id===taskPath[1]);require(task,'Unknown task '+path);if(taskPath[2]){task.children.forEach(child=>cancelChildRun(child.run_id));task.status='cancelled';}return json(task);}
     if(/^\/api\/bench\/runs\/[^/]+\/calls$/.test(path))return json({calls:[]});
+    if(/^\/api\/bench\/runs\/[^/]+\/events$/.test(path)){
+      const sid=url.searchParams.get('sample_id')||'';
+      const mockEvents=sid==='mock-task-1-sample-0-1'?[
+        {id:1,run_id:'mock-task-1-run-0',sample_id:sid,attempt_id:'att-1',seq:1,kind:'llm_turn',call_id:'att-1:1:1',turn:1,api_attempt:1,http_status:429,elapsed_seconds:1.4,usage_known:false,input_tokens:null,output_tokens:null,estimated_cost_usd:null,response_status:null,error_code:'rate_limit_exceeded',error_message:'Rate limit reached',local_exception:null,terminal_event:null,termination:null,first_output_seconds:null,last_progress_seconds:1.4,created_at:'2026-11-11T01:00:02Z',payload:{raw_error_excerpt:'{"error":"rate_limit_exceeded"}'}},
+        {id:2,run_id:'mock-task-1-run-0',sample_id:sid,attempt_id:'att-2',seq:1,kind:'llm_turn',call_id:'att-2:1:1',turn:1,api_attempt:1,http_status:200,elapsed_seconds:6.2,usage_known:true,input_tokens:3,output_tokens:4,estimated_cost_usd:.01,response_status:'completed',error_code:null,error_message:null,local_exception:null,terminal_event:'response.completed',termination:'completed',first_output_seconds:1.1,last_progress_seconds:6.2,created_at:'2026-11-11T01:01:02Z',payload:{reasoning_summary:['Checked boundary semantics carefully.'],assistant_text:'Submitting final answer via tool.',tool_calls:[{call_id:'call_sub_1',name:'submit_answer',arguments:{result:'wrong_value'}}]}},
+        {id:3,run_id:'mock-task-1-run-0',sample_id:sid,attempt_id:'att-2',seq:2,kind:'tool_result',call_id:'call_sub_1',turn:1,api_attempt:1,http_status:null,elapsed_seconds:null,usage_known:null,input_tokens:null,output_tokens:null,estimated_cost_usd:null,response_status:null,error_code:null,error_message:null,local_exception:null,terminal_event:null,termination:null,first_output_seconds:null,last_progress_seconds:null,created_at:'2026-11-11T01:01:02Z',payload:{name:'submit_answer',arguments:{result:'wrong_value'},result:{accepted:true}}},
+        {id:4,run_id:'mock-task-1-run-0',sample_id:sid,attempt_id:'att-2',seq:3,kind:'grade',call_id:null,turn:null,api_attempt:null,http_status:null,elapsed_seconds:6.2,usage_known:true,input_tokens:3,output_tokens:4,estimated_cost_usd:.01,response_status:null,error_code:null,error_message:null,local_exception:null,terminal_event:null,termination:null,first_output_seconds:null,last_progress_seconds:null,created_at:'2026-11-11T01:01:02Z',payload:{status:'completed',outcome:'ok',content_score:0}}
+      ]:[];
+      return json({sample_id:sid,events:mockEvents});
+    }
     if(path==='/api/bench/runs')return json({runs:runs.map(({samples,...run})=>run)});
     const runPath=path.match(/^\/api\/bench\/runs\/([^/]+)(\/cancel)?$/);
     if(runPath){const run=runs.find(run=>run.id===runPath[1]);require(run,'Unknown run '+path);if(!runPath[2]&&runResponseGate?.id===run.id){runResponseGate.started();await runResponseGate.wait;}return json(runPath[2]?cancelChildRun(run.id):run);}

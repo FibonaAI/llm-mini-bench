@@ -268,6 +268,7 @@ CREATE TABLE IF NOT EXISTS session_events (
 );
 CREATE INDEX IF NOT EXISTS idx_session_events_run_kind ON session_events(run_id, kind, id);
 CREATE INDEX IF NOT EXISTS idx_session_events_attempt ON session_events(run_id, attempt_id, seq);
+CREATE INDEX IF NOT EXISTS idx_session_events_sample ON session_events(run_id, sample_id, id);
 
 CREATE TABLE IF NOT EXISTS baselines (
     id TEXT PRIMARY KEY,
@@ -1055,15 +1056,8 @@ export class BenchDatabase {
         }));
     }
 
-    read_run_session_events(runId: string, attemptId?: string): StoredSessionEvent[] {
-        const rows = (
-            attemptId
-                ? this.db
-                      .query('SELECT * FROM session_events WHERE run_id = ? AND attempt_id = ? ORDER BY seq ASC, id ASC')
-                      .all(runId, attemptId)
-                : this.db.query('SELECT * FROM session_events WHERE run_id = ? ORDER BY id ASC').all(runId)
-        ) as Array<RecordValue>;
-        return rows.map(row => ({
+    private map_session_event_row(row: RecordValue): StoredSessionEvent {
+        return {
             id: Number(row.id),
             run_id: String(row.run_id),
             sample_id: String(row.sample_id),
@@ -1089,7 +1083,29 @@ export class BenchDatabase {
             last_progress_seconds: finite(row.last_progress_seconds),
             payload: typeof row.payload_json === 'string' ? (JSON.parse(row.payload_json) as RecordValue) : null,
             created_at: String(row.created_at)
-        }));
+        };
+    }
+
+    read_run_session_events(runId: string, attemptId?: string): StoredSessionEvent[] {
+        const rows = (
+            attemptId
+                ? this.db
+                      .query('SELECT * FROM session_events WHERE run_id = ? AND attempt_id = ? ORDER BY seq ASC, id ASC')
+                      .all(runId, attemptId)
+                : this.db.query('SELECT * FROM session_events WHERE run_id = ? ORDER BY id ASC').all(runId)
+        ) as Array<RecordValue>;
+        return rows.map(row => this.map_session_event_row(row));
+    }
+
+    read_sample_session_events(runId: string, sampleId: string, attemptId?: string): StoredSessionEvent[] {
+        const rows = (
+            attemptId
+                ? this.db
+                      .query('SELECT * FROM session_events WHERE run_id = ? AND sample_id = ? AND attempt_id = ? ORDER BY seq ASC, id ASC')
+                      .all(runId, sampleId, attemptId)
+                : this.db.query('SELECT * FROM session_events WHERE run_id = ? AND sample_id = ? ORDER BY id ASC').all(runId, sampleId)
+        ) as Array<RecordValue>;
+        return rows.map(row => this.map_session_event_row(row));
     }
 
     has_session_events(runId: string): boolean {

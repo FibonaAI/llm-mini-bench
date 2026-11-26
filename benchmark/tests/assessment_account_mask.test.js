@@ -570,7 +570,7 @@ describe('Magpie-style account masking', () => {
 
         const previewStats = h.doc.createElement('span');
         previewStats.className = 'task-preview-stats';
-        previewStats.textContent = '0 · 12/12 样本 · 完成 1/1';
+        previewStats.textContent = '0 · 4/7 完成 · 运行中 2';
 
         const historyOption = h.doc.createElement('label');
         historyOption.className = 'analysis-history-option';
@@ -605,7 +605,7 @@ describe('Magpie-style account masking', () => {
         expect(chip.textContent).not.toContain('0');
         expect(chip.textContent.endsWith(' ×')).toBe(true);
         expect(previewStats.textContent).not.toContain('0 · ');
-        expect(previewStats.textContent).toContain('12/12 样本');
+        expect(previewStats.textContent).toContain('4/7 完成');
         expect(historyMeta.textContent.endsWith('/ 0')).toBe(false);
         expect(unverifiedMeta.textContent).not.toContain('· 0 ·');
         expect(tokenDd.textContent).toBe('1,234 / 0');
@@ -613,7 +613,7 @@ describe('Magpie-style account masking', () => {
         masker.set(false);
         expect(legendRow.title).toBe('GPT-6 Luna · OpenAI · 0 / OpenAI / 0，1 个数据点');
         expect(chip.textContent).toBe('0 ×');
-        expect(previewStats.textContent).toBe('0 · 12/12 样本 · 完成 1/1');
+        expect(previewStats.textContent).toBe('0 · 4/7 完成 · 运行中 2');
         expect(historyMeta.textContent).toBe('2026/11/19 12:00 · OpenAI / 0');
         expect(unverifiedMeta.textContent).toBe('openai · 0 · unverified');
         expect(tokenDd.textContent).toBe('1,234 / 0');

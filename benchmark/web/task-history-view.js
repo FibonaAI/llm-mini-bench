@@ -1,15 +1,36 @@
 import { remoteRouteNamespace } from './data-adapter.js';
 import { sortThinkingEfforts, thinkingLabel } from './data-picker.js';
+import { renderInlineSampleInspector, resolveTaskSpec, splitTaskId } from './sample-inspector.js';
 
 /** Render history and movable inline details; coordinator owns selection and polling. */
 export function createTaskHistoryView({ app, state, retryRequests, retrying, baselineBusy = new Set() }) {
   const { byId: lookupElement, escapeHtml, activeStatus, statusText, formatDate, request } = app.services;
   const callSummaries = new Map(); // run id -> { key, calls | null, loading }
+  const sampleEvents = new Map(); // `${runId}\u0000${sampleId}` -> { key, events | null, loading, error }
+  const inspectorByRun = new Map(); // run id -> { sampleId, tab, showAllFields, showPrompt, attemptId, matrixFilter }
+  const taskFilterByTask = new Map(); // task id -> 'all' | 'anomaly'
+  function getInspectorState(runId) {
+    let entry = inspectorByRun.get(runId);
+    if (!entry) {
+      entry = {
+        sampleId: null,
+        tab: null,
+        showAllFields: false,
+        showPrompt: false,
+        attemptId: null,
+        matrixFilter: 'all',
+        anomalyOrder: []
+      };
+      inspectorByRun.set(runId, entry);
+    }
+    return entry;
+  }
   const detailElements = new Map(
     [
       'bench-close-task',
       'bench-close-run',
       'bench-task-section',
+      'bench-task-title',
       'bench-task-detail',
       'bench-baseline-task',
       'bench-unbaseline-task',
@@ -39,7 +60,11 @@ export function createTaskHistoryView({ app, state, retryRequests, retrying, bas
       if (status === 'queued' || status === 'running' || status === 'cancelling') return '运行尚未完成';
       if (status === 'failed') {
         const failed = counts.api_failure ?? 0;
-        return failed > 0 ? `含 ${failed} 个 API 失败样本` : '含 API 失败样本';
+        if (failed > 0) return `含 ${failed} 个 API 失败样本`;
+        const postNonModel =
+          record?.result_quality?.ended_after_non_model_samples ??
+          (Array.isArray(record?.samples) ? record.samples.filter(isPostSubmissionNonModelSample).length : 0);
+        return postNonModel > 0 ? `含 ${postNonModel} 个非模型异常样本` : '含非模型异常样本';
       }
       if (status === 'cancelled') return '运行已取消';
       if (status === 'interrupted') return '运行已中断';
@@ -50,6 +75,8 @@ export function createTaskHistoryView({ app, state, retryRequests, retrying, bas
       }
       return '';
     };
+    if (text.includes('timed-out samples are not eligible')) return '含超时样本';
+    if (text.includes('non-model anomalies are not eligible')) return '含非模型异常样本';
     if (text.includes('retry execution sources differ')) return '重试时源码版本发生变化';
     if (text.includes('retry execution policy differs') || text.includes('retry execution limits differ'))
       return '重试时评测限额或策略发生变化';
@@ -208,11 +235,106 @@ export function createTaskHistoryView({ app, state, retryRequests, retrying, bas
     (sample.status === 'timeout' ||
       sample.grade?.outcome === 'timeout' ||
       (sample.status === 'api_failure' && sample.runner_error === 'SampleTimeout'));
+  const endedAfterSubmissionReason = sample => {
+    if (!sample || sample.status !== 'completed') return null;
+    const raw = sample.answer_submission?.ended_after_submission;
+    return typeof raw === 'string' && raw.trim() ? raw.trim() : null;
+  };
+  const isPostSubmissionTimeoutSample = sample => endedAfterSubmissionReason(sample) === 'SampleTimeout';
+  const isPostSubmissionNonModelSample = sample => {
+    const reason = endedAfterSubmissionReason(sample);
+    return Boolean(reason && reason !== 'SampleTimeout');
+  };
+  const isPreSubmissionNonModelSample = sample =>
+    Boolean(sample && !['completed', 'pending', 'queued', 'running'].includes(sample.status) && !isTimeoutSample(sample));
+  const isNoSubmissionSample = sample => sample?.status === 'completed' && sample?.grade?.outcome === 'no_submission';
+  const hasSubmissionAnomaly = sample => Boolean(endedAfterSubmissionReason(sample) || isNoSubmissionSample(sample));
+  const sentNoRequestAttempt = attempt =>
+    Boolean(
+      attempt &&
+      ((Array.isArray(attempt.calls) && attempt.calls.length === 0) ||
+        (!Array.isArray(attempt.calls) &&
+          !attempt.started_at &&
+          ['interrupted', 'cancelled', 'budget_not_admitted', 'pending'].includes(String(attempt.status))))
+    );
+  const formatEndedAfterReason = reason => {
+    if (reason === 'SampleTimeout') return '超时：提交后整题超时（SampleTimeout）';
+    if (reason === 'api_failure') return '非模型异常：提交后上游 API 失败（api_failure）';
+    if (reason === 'incomplete') return '非模型异常：提交后响应被截断（incomplete）';
+    if (reason === 'turn_limit') return '非模型异常：提交后触及交互轮次上限（turn_limit）';
+    if (reason === 'tool_call_limit') return '非模型异常：提交后触及工具调用上限（tool_call_limit）';
+    return `非模型异常：提交后异常中止（${reason}）`;
+  };
+  const recordAnomalyCounts = record => {
+    const empty = {
+      wholeTimeout: 0,
+      endedAfterTimeout: 0,
+      timeout: 0,
+      modelAnomaly: 0,
+      preNonModel: 0,
+      endedAfterNonModel: 0,
+      nonModelAnomaly: 0,
+      total: 0
+    };
+    if (!record) return empty;
+    if (Array.isArray(record.samples)) {
+      const out = { ...empty };
+      for (const sample of record.samples) {
+        if (isTimeoutSample(sample)) out.wholeTimeout++;
+        else if (isPreSubmissionNonModelSample(sample)) out.preNonModel++;
+        else if (sample.status === 'completed') {
+          if (isPostSubmissionTimeoutSample(sample)) out.endedAfterTimeout++;
+          else if (isPostSubmissionNonModelSample(sample)) out.endedAfterNonModel++;
+          if (isNoSubmissionSample(sample)) out.modelAnomaly++;
+        }
+      }
+      out.timeout = out.wholeTimeout + out.endedAfterTimeout;
+      out.nonModelAnomaly = out.preNonModel + out.endedAfterNonModel;
+      out.total = out.timeout + out.modelAnomaly + out.nonModelAnomaly;
+      return out;
+    }
+    if (Array.isArray(record.children) && record.children.length) {
+      const out = { ...empty };
+      for (const child of record.children) {
+        if (inProgress(child)) continue;
+        const c = recordAnomalyCounts(child);
+        out.wholeTimeout += c.wholeTimeout;
+        out.endedAfterTimeout += c.endedAfterTimeout;
+        out.modelAnomaly += c.modelAnomaly;
+        out.preNonModel += c.preNonModel;
+        out.endedAfterNonModel += c.endedAfterNonModel;
+      }
+      out.timeout = out.wholeTimeout + out.endedAfterTimeout;
+      out.nonModelAnomaly = out.preNonModel + out.endedAfterNonModel;
+      out.total = out.timeout + out.modelAnomaly + out.nonModelAnomaly;
+      return out;
+    }
+    const counts = record.sample_status_counts || {};
+    const q = record.result_quality || {};
+    const wholeTimeout = counts.timeout ?? 0;
+    const endedAfterTimeout = q.ended_after_timeout_samples ?? 0;
+    const endedAfterNonModel = q.ended_after_non_model_samples ?? Math.max(0, (q.ended_after_submission_samples || 0) - endedAfterTimeout);
+    const modelAnomaly = q.model_anomaly_samples ?? q.no_submission_samples ?? 0;
+    const preNonModel = Object.entries(counts)
+      .filter(([status]) => !['completed', 'timeout', 'pending', 'queued', 'running'].includes(status))
+      .reduce((sum, [, count]) => sum + (Number(count) || 0), 0);
+    const timeout = wholeTimeout + endedAfterTimeout;
+    const nonModelAnomaly = preNonModel + endedAfterNonModel;
+    return {
+      wholeTimeout,
+      endedAfterTimeout,
+      timeout,
+      modelAnomaly,
+      preNonModel,
+      endedAfterNonModel,
+      nonModelAnomaly,
+      total: timeout + modelAnomaly + nonModelAnomaly
+    };
+  };
   const hasTimeoutSamples = record => {
     if (!record) return false;
-    if ((record.sample_status_counts?.timeout ?? 0) > 0) return true;
-    if (Array.isArray(record.samples) && record.samples.some(isTimeoutSample)) return true;
-    return Array.isArray(record.children) && record.children.some(hasTimeoutSamples);
+    if (recordAnomalyCounts(record).timeout > 0) return true;
+    return false;
   };
   const statusBadgeClass = record => {
     if (!record) return '';
@@ -242,21 +364,25 @@ export function createTaskHistoryView({ app, state, retryRequests, retrying, bas
   const TIMEOUT_CHIP_ICON =
     '<svg class="chip-state-svg" viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="7" cy="7" r="5.2"/><path d="M7 4.2V7l1.9 1.2"/></svg>';
   const retryCopy = (record, confirming) => {
-    const counts = { api: 0, timeout: 0, interrupted: 0, cancelled: 0 };
+    const counts = { api: 0, timeout: 0, model: 0, interrupted: 0, cancelled: 0 };
     const collect = item => {
       if (!item) return;
       if (Array.isArray(item.samples)) {
         for (const sample of item.samples) {
-          if (isTimeoutSample(sample)) counts.timeout++;
-          else if (sample.status === 'api_failure') counts.api++;
+          if (isTimeoutSample(sample) || isPostSubmissionTimeoutSample(sample)) counts.timeout++;
+          else if (isNoSubmissionSample(sample)) counts.model++;
+          else if (isPostSubmissionNonModelSample(sample)) counts.api++;
           else if (sample.status === 'interrupted') counts.interrupted++;
           else if (sample.status === 'cancelled') counts.cancelled++;
+          else if (isPreSubmissionNonModelSample(sample)) counts.api++;
         }
         return;
       }
       const c = item.sample_status_counts || {};
-      counts.api += c.api_failure || 0;
-      counts.timeout += c.timeout || 0;
+      const anomalies = recordAnomalyCounts(item);
+      counts.api += (c.api_failure || 0) + (c.incomplete || 0) + anomalies.endedAfterNonModel;
+      counts.timeout += anomalies.timeout;
+      counts.model += anomalies.modelAnomaly;
       counts.interrupted += c.interrupted || 0;
       counts.cancelled += c.cancelled || 0;
     };
@@ -268,29 +394,36 @@ export function createTaskHistoryView({ app, state, retryRequests, retrying, bas
       if (kind === 'interrupted') return confirming ? '确认重跑中断样本' : '继续重跑中断样本';
       if (kind === 'cancelled') return confirming ? '确认重跑已取消样本' : '重跑已取消样本';
       if (kind === 'timeout') return confirming ? '确认重试超时样本' : '重试超时样本';
+      if (kind === 'model') return confirming ? '确认重试未提交样本' : '重试未提交样本';
     }
-    if (activeKinds.length > 1) return confirming ? '确认重试未完成样本' : '重试未完成样本';
+    if (activeKinds.length > 1) return confirming ? '确认重试异常样本' : '重试异常样本';
     return confirming ? '确认重试 API 失败' : '重试 API 失败';
   };
   const historicalOutcomeText = sample =>
     isTimeoutSample(sample)
-      ? '超时（按 0 分计）'
-      : sample.attempts?.length
-        ? statusText(sample.status)
-        : {
-            request_timeout: 'API 失败：请求超时',
-            rate_limited: 'API 失败：上游限流',
-            upstream_http_error: 'API 失败：上游服务错误',
-            transport_error: 'API 失败：传输异常',
-            output_token_limit: '未完成：输出 token 超限',
-            response_incomplete: '未完成：响应被截断',
-            tool_call_limit: '未完成：工具调用超限',
-            unsupported_tool_sequence: '未完成：工具调用序列不符合要求',
-            turn_limit: '未完成：交互轮次超限',
-            empty_final_answer: '未完成：未给出最终答案',
-            not_executed_after_api_failure: '未执行：此前 API 失败导致停止',
-            not_executed_execution_limit: '未执行：触及执行上限'
-          }[sample.historical_outcome_classification?.reason] || statusText(sample.status);
+      ? '超时（整题超时 · 按 0 分计）'
+      : isPostSubmissionTimeoutSample(sample)
+        ? '超时（提交后超时 · 按最后提交评分）'
+        : isPostSubmissionNonModelSample(sample)
+          ? '非模型异常（提交后中止 · 按最后提交评分）'
+          : isNoSubmissionSample(sample)
+            ? '模型异常（未提交答案 · 按 0 分计）'
+            : sample.attempts?.length
+              ? statusText(sample.status)
+              : {
+                  request_timeout: 'API 失败：请求超时',
+                  rate_limited: 'API 失败：上游限流',
+                  upstream_http_error: 'API 失败：上游服务错误',
+                  transport_error: 'API 失败：传输异常',
+                  output_token_limit: '未完成：输出 token 超限',
+                  response_incomplete: '未完成：响应被截断',
+                  tool_call_limit: '未完成：工具调用超限',
+                  unsupported_tool_sequence: '未完成：工具调用序列不符合要求',
+                  turn_limit: '未完成：交互轮次超限',
+                  empty_final_answer: '未完成：未给出最终答案',
+                  not_executed_after_api_failure: '未执行：此前 API 失败导致停止',
+                  not_executed_execution_limit: '未执行：触及执行上限'
+                }[sample.historical_outcome_classification?.reason] || statusText(sample.status);
   const STOP_REASON_TEXT = {
     rate_limited: '上游限流或额度不足（HTTP 429），重试后仍失败，已停止该模型后续样本',
     access_denied: '上游拒绝访问（HTTP 401/403），已停止该模型后续样本',
@@ -309,14 +442,15 @@ export function createTaskHistoryView({ app, state, retryRequests, retrying, bas
   };
   const stopReasonText = reason => STOP_REASON_TEXT[reason] || reason;
   const isFastFailStop = reason => ['rate_limited', 'access_denied', 'payment_required', 'model_not_found'].includes(reason);
-  /** Terminal 'failed' means some samples hit API failures, not that the whole run failed. */
+  /** Terminal 'failed' means some samples hit non-model API failures, not that the whole run failed. */
   const recordStatusLabel = record => {
     if (record.status === 'completed') {
-      const timeouts =
-        record.sample_status_counts?.timeout ??
-        (Array.isArray(record.samples) ? record.samples.filter(isTimeoutSample).length : 0) +
-          (Array.isArray(record.children) ? record.children.reduce((sum, c) => sum + (c.sample_status_counts?.timeout ?? 0), 0) : 0);
-      return timeouts > 0 ? `已完成 · ${timeouts} 超时` : statusText(record.status);
+      const { timeout, modelAnomaly, endedAfterNonModel } = recordAnomalyCounts(record);
+      const tags = [];
+      if (timeout > 0) tags.push(`${timeout} 超时`);
+      if (modelAnomaly > 0) tags.push(`${modelAnomaly} 未提交`);
+      if (endedAfterNonModel > 0) tags.push(`${endedAfterNonModel} 非模型异常`);
+      return tags.length ? `已完成 · ${tags.join(' · ')}` : statusText(record.status);
     }
     if (record.status !== 'failed') return statusText(record.status);
     const counts = record.sample_status_counts;
@@ -436,7 +570,10 @@ export function createTaskHistoryView({ app, state, retryRequests, retrying, bas
   }
   function ensureCallSummaries(run) {
     const needs = (run.samples || []).some(
-      sample => (sample.status !== 'completed' && !['pending', 'queued', 'running'].includes(sample.status)) || sample.attempts?.length
+      sample =>
+        (sample.status !== 'completed' && !['pending', 'queued', 'running'].includes(sample.status)) ||
+        sample.attempts?.length ||
+        Boolean(endedAfterSubmissionReason(sample))
     );
     if (!needs || !request) return null;
     const key = `${run.id}:${run.updated_at}`,
@@ -456,26 +593,80 @@ export function createTaskHistoryView({ app, state, retryRequests, retrying, bas
       });
     return entry?.calls ?? null;
   }
-  function sampleScoringLabel(sample) {
-    if (isTimeoutSample(sample)) return '0（超时）';
-    if (validScore(sample) && sample.grade.outcome === 'no_submission') return '未调用 submit_answer 提交答案 · 0';
-    if (validScore(sample)) return Number(sample.grade.content_score.toFixed(3));
-    if (sample.status !== 'completed') return '无评分';
-    return { ambiguous: '答案解析有歧义，无法评分', ungradable: '答案无法解析，无法评分' }[sample.grade?.outcome] || '评分记录缺失或无效';
+  function ensureSampleEvents(run, sampleId) {
+    if (!run?.id || !sampleId || !request) return { events: null, loading: false, error: null };
+    const cacheKey = `${run.id}\u0000${sampleId}`;
+    const versionKey = `${run.id}:${run.updated_at ?? ''}`;
+    const entry = sampleEvents.get(cacheKey);
+    if (entry?.key === versionKey) return { events: entry.events, loading: false, error: entry.error };
+    if (entry?.loading === versionKey) return { events: entry.events ?? null, loading: true, error: null };
+    sampleEvents.set(cacheKey, { key: entry?.key ?? null, events: entry?.events ?? null, loading: versionKey, error: null });
+    request(`./api/bench/runs/${encodeURIComponent(run.id)}/events?sample_id=${encodeURIComponent(sampleId)}`)
+      .then(data => {
+        const list = Array.isArray(data?.events) ? data.events : [];
+        sampleEvents.set(cacheKey, { key: versionKey, events: list, loading: null, error: null });
+      })
+      .catch(err => {
+        sampleEvents.set(cacheKey, {
+          key: versionKey,
+          events: entry?.events ?? null,
+          loading: null,
+          error: err instanceof Error ? err.message : String(err || '加载失败')
+        });
+      })
+      .finally(() => {
+        if (state.selectedRunId === run.id && getInspectorState(run.id).sampleId === sampleId) renderDetails();
+      });
+    return { events: entry?.events ?? null, loading: true, error: null };
   }
-  function sampleResultNotes(sample) {
-    if (sample.status !== 'completed') return '';
-    const notes = [];
-    if (!validScore(sample))
-      notes.push(
-        sample.grade?.outcome === 'ambiguous'
-          ? '严格解析未能确定唯一答案，可能包含不同的 JSON 对象，或额外的损坏 JSON。无法评分不等于内容得 0 分；系统不会自动选取其中一个对象。'
-          : sample.grade?.outcome === 'ungradable'
-            ? '回答未能解析为可评分的答案。这不是等待评分，也不能据此断言内容全部错误。'
-            : '评分记录缺失或得分不在 0–1 范围内；不会补记为 0 分。'
-      );
-    if (!knownUsage(sample.usage) || !knownCost(sample.estimated_uncached_cost_usd)) {
-      const attempts = Array.isArray(sample.attempts) ? sample.attempts : [];
+  function sampleDiagnosticBanner(sample, calls = null, timeout = undefined) {
+    if (!sample) return null;
+    if (isTimeoutSample(sample)) {
+      const diag = attemptFailureText(sample, calls, timeout);
+      return {
+        tone: 'warn',
+        title: '整题超时（按 0 分计）',
+        body: `${diag || `超过单题总超时限制${timeout ? `（${timeout}s）` : ''}`}。该样本不影响任务完成，但不可设为基线，支持手动重试。`
+      };
+    }
+    if (sample.status !== 'completed' && !['pending', 'queued', 'running'].includes(sample.status)) {
+      const diag = attemptFailureText(sample, calls, timeout);
+      return {
+        tone: 'err',
+        title: `${statusText(sample.status)}（非模型异常）`,
+        body: `${diag || sample.runner_error || '上游调用失败或样本未正常结束'}。不计入有效分、不可设为基线，支持手动重试。`
+      };
+    }
+    const endedAfter = endedAfterSubmissionReason(sample);
+    if (endedAfter) {
+      const subCount = Number.isInteger(sample.answer_submission?.submissions) ? sample.answer_submission.submissions : null;
+      const diag = attemptFailureText(sample, calls, timeout);
+      const isTimeoutEnded = endedAfter === 'SampleTimeout';
+      return {
+        tone: isTimeoutEnded ? 'warn' : 'err',
+        title: isTimeoutEnded ? '提交答案后超时' : '提交答案后异常中止',
+        body: `已通过 submit_answer 提交${subCount ? `（共 ${subCount} 次）` : ''}，但后续收尾轮次发生${formatEndedAfterReason(endedAfter)}${diag ? `（${diag}）` : ''}。已按最后一次有效提交评分；${isTimeoutEnded ? '不可设为基线，支持重试。' : '不视为完成、不可设为基线，支持重试。'}`
+      };
+    }
+    if (isNoSubmissionSample(sample)) {
+      return {
+        tone: 'warn',
+        title: '未调用 submit_answer（模型异常 · 0 分）',
+        body: '模型自然结束但未通过 submit_answer 工具提交答案，按 0 分计。请直接查看下方执行轨迹，核对模型是否已在正文中得出结果。'
+      };
+    }
+    if (sample.status === 'completed' && !validScore(sample)) {
+      return {
+        tone: 'warn',
+        title: sampleScoringLabel(sample),
+        body:
+          sample.grade?.outcome === 'ambiguous'
+            ? '严格解析未能确定唯一答案，系统不会自动选取其中一个对象。'
+            : '回答未能解析为可评分的答案，不会补记为 0 分。'
+      };
+    }
+    if (sample.status === 'completed' && (!knownUsage(sample.usage) || !knownCost(sample.estimated_uncached_cost_usd))) {
+      const attempts = (Array.isArray(sample.attempts) ? sample.attempts : []).filter(attempt => !sentNoRequestAttempt(attempt));
       const priorUnknown = attempts.some(
         attempt =>
           !knownUsage(Object.hasOwn(attempt, 'latest_attempt_usage') ? attempt.latest_attempt_usage : attempt.usage) ||
@@ -486,14 +677,26 @@ export function createTaskHistoryView({ app, state, retryRequests, retrying, bas
       const missing = [!knownUsage(sample.usage) && '累计用量', !knownCost(sample.estimated_uncached_cost_usd) && '累计估算费用']
         .filter(Boolean)
         .join('、');
-      notes.push(
-        `${missing}未知。${priorUnknown ? '历次尝试存在缺失记录，即使本次重试成功，累计值仍保留为未知；本次尝试的已知值不代表全部消耗。' : '缺失记录不会按 0 补齐；已完成仅表示执行结束。'}`
-      );
+      return {
+        tone: 'warn',
+        title: `${missing}未知`,
+        body: priorUnknown
+          ? '历次尝试存在缺失记录，即使本次重试成功，累计值仍保留为未知；本次尝试的已知值不代表全部消耗。'
+          : '缺失记录不会按 0 补齐；已完成仅表示执行结束。'
+      };
     }
-    return notes.map(note => `<p class="task-detail-note">${escapeHtml(note)}</p>`).join('');
+    return null;
+  }
+  function sampleScoringLabel(sample) {
+    if (isTimeoutSample(sample)) return '0（超时）';
+    if (validScore(sample) && sample.grade.outcome === 'no_submission') return '未调用 submit_answer 提交答案 · 0';
+    if (validScore(sample)) return Number(sample.grade.content_score.toFixed(3));
+    if (sample.status !== 'completed') return '无评分';
+    return { ambiguous: '答案解析有歧义，无法评分', ungradable: '答案无法解析，无法评分' }[sample.grade?.outcome] || '评分记录缺失或无效';
   }
   function qualityLabel(record) {
     if (inProgress(record)) return '';
+    const anomalies = recordAnomalyCounts(record);
     const qualities = record.result_quality
       ? [record.result_quality]
       : (record.children || [])
@@ -504,6 +707,9 @@ export function createTaskHistoryView({ app, state, retryRequests, retrying, bas
     const unknownUsage = total('unknown_usage_samples'),
       unknownCost = total('unknown_cost_samples');
     return [
+      anomalies.timeout > 0 && `超时 ${anomalies.timeout} 样本`,
+      anomalies.modelAnomaly > 0 && `模型异常 ${anomalies.modelAnomaly}（未提交）`,
+      anomalies.endedAfterNonModel > 0 && `非模型异常 ${anomalies.endedAfterNonModel}（提交后中止）`,
       total('unscored_samples') > 0 && `${total('unscored_samples')} 个已完成样本无法评分`,
       unknownUsage > 0 ? `${unknownUsage} 个累计用量未知` : unknownCost > 0 && `${unknownCost} 个累计费用未知`
     ]
@@ -591,7 +797,9 @@ export function createTaskHistoryView({ app, state, retryRequests, retrying, bas
     }
     const tokens = searchTokens(rawSearch);
     const shown = entries.filter(({ kind, record }) => {
-      if (status !== 'all' && record.status !== status) return false;
+      if (status === 'anomalous') {
+        if (inProgress(record) || recordAnomalyCounts(record).total === 0) return false;
+      } else if (status !== 'all' && record.status !== status) return false;
       if (!tokens.length) return true;
       if (recordHeaderMatchesTokens(record, tokens)) return true;
       if (kind === 'task' && Array.isArray(record.children) && record.children.length)
@@ -703,13 +911,17 @@ export function createTaskHistoryView({ app, state, retryRequests, retrying, bas
     const segments = { completed: 0, running: 0, cancelling: 0, timeout: 0, failed: 0, interrupted: 0, cancelled: 0 };
     let sampleDone = 0;
     let sampleTotal = 0;
+    let timeoutRuns = 0;
     let timeoutSamples = 0;
+    let modelAnomalyRuns = 0;
+    let modelAnomalySamples = 0;
+    let anomalousCompletedRuns = 0;
     for (const child of children) {
       const tone = childPreviewTone(child);
       const progress = sampleProgress(child);
+      const anomalies = recordAnomalyCounts(child);
       sampleDone += progress.done;
       sampleTotal += progress.total;
-      timeoutSamples += child.sample_status_counts?.timeout ?? 0;
       if (child.status === 'running') counts.running++;
       else if (child.status === 'cancelling') counts.cancelling++;
       else if (child.status === 'queued') counts.queued++;
@@ -717,17 +929,42 @@ export function createTaskHistoryView({ app, state, retryRequests, retrying, bas
       else if (child.status === 'interrupted') counts.interrupted++;
       else if (child.status === 'cancelled') counts.cancelled++;
       else if (child.status === 'incomplete') counts.incomplete++;
-      else if (child.status === 'timeout' || (child.status === 'completed' && hasTimeoutSamples(child))) counts.timeout++;
-      else if (child.status === 'completed') counts.completed++;
+      else if (child.status === 'timeout') {
+        counts.timeout++;
+        timeoutRuns++;
+        timeoutSamples += anomalies.timeout;
+      } else if (child.status === 'completed') {
+        counts.completed++;
+        if (anomalies.timeout > 0) {
+          timeoutRuns++;
+          timeoutSamples += anomalies.timeout;
+        }
+        if (anomalies.modelAnomaly > 0) {
+          modelAnomalyRuns++;
+          modelAnomalySamples += anomalies.modelAnomaly;
+        }
+        if (anomalies.timeout > 0 || anomalies.modelAnomaly > 0 || anomalies.endedAfterNonModel > 0) anomalousCompletedRuns++;
+      }
       if (Object.hasOwn(segments, tone) && progress.done > 0) segments[tone] += progress.done;
     }
-    return { counts, segments, sampleDone, sampleTotal, timeoutSamples };
+    return {
+      counts,
+      segments,
+      sampleDone,
+      sampleTotal,
+      timeoutRuns,
+      timeoutSamples,
+      modelAnomalyRuns,
+      modelAnomalySamples,
+      anomalousCompletedRuns
+    };
   }
   function channelHealthTone(children, fallbackTone = 'queued', precomputedSum = null) {
     if (!children.length) return fallbackTone;
-    const { counts } = precomputedSum ?? summarizeChildren(children);
+    const sum = precomputedSum ?? summarizeChildren(children);
+    const { counts } = sum;
     if (counts.failed > 0) return 'failed';
-    if (counts.timeout > 0 || counts.incomplete > 0) return 'timeout';
+    if (counts.timeout > 0 || sum.timeoutRuns > 0 || counts.incomplete > 0) return 'timeout';
     if (counts.interrupted > 0) return 'interrupted';
     if (counts.cancelling > 0) return 'cancelling';
     if (counts.running > 0) return 'running';
@@ -799,7 +1036,7 @@ export function createTaskHistoryView({ app, state, retryRequests, retrying, bas
   function renderTaskCountsBar(record, children, progress) {
     if (!children.length) return '';
     const sum = summarizeChildren(children);
-    const { counts, timeoutSamples } = sum;
+    const { counts, timeoutRuns, timeoutSamples, modelAnomalyRuns, modelAnomalySamples, anomalousCompletedRuns } = sum;
     const pills = [`<span class="task-count-pill is-total">总计 ${children.length}</span>`];
     const pushPill = (tone, label) => {
       pills.push(
@@ -809,18 +1046,30 @@ export function createTaskHistoryView({ app, state, retryRequests, retrying, bas
     if (counts.running) pushPill('running', `运行中 ${counts.running}`);
     if (counts.cancelling) pushPill('cancelling', `取消中 ${counts.cancelling}`);
     if (counts.completed) pushPill('completed', `已完成 ${counts.completed}`);
-    const baselineCount = children.filter(child => Boolean(childBaselineState(child).baselineId)).length;
-    if (baselineCount > 0) {
-      pills.push(
-        `<span class="task-count-pill is-baseline"><i class="task-baseline-sq" aria-hidden="true"></i>基线 ${baselineCount}</span>`
-      );
-    }
     if (counts.queued) pushPill('queued', `排队 ${counts.queued}`);
     if (counts.timeout) pushPill('timeout', `超时 ${counts.timeout}${timeoutSamples ? `（${timeoutSamples} 样本）` : ''}`);
     if (counts.incomplete) pushPill('timeout', `未完成 ${counts.incomplete}`);
     if (counts.failed) pushPill('failed', `API 失败 ${counts.failed}`);
     if (counts.interrupted) pushPill('interrupted', `已中断 ${counts.interrupted}`);
     if (counts.cancelled) pushPill('cancelled', `已取消 ${counts.cancelled}`);
+    const baselineCount = children.filter(child => Boolean(childBaselineState(child).baselineId)).length;
+    if (baselineCount > 0) {
+      pills.push(
+        `<span class="task-count-pill is-baseline"><i class="task-baseline-sq" aria-hidden="true"></i>基线 ${baselineCount}</span>`
+      );
+    }
+    if (anomalousCompletedRuns > 0) {
+      const detail = [];
+      if (timeoutSamples > 0) detail.push(`${timeoutSamples} 超时`);
+      if (modelAnomalySamples > 0) detail.push(`${modelAnomalySamples} 未提交`);
+      const label =
+        timeoutRuns > 0 && modelAnomalyRuns === 0
+          ? `含超时 ${timeoutRuns}${timeoutSamples ? `（${timeoutSamples} 样本）` : ''}`
+          : modelAnomalyRuns > 0 && timeoutRuns === 0
+            ? `模型异常 ${modelAnomalyRuns}${modelAnomalySamples ? `（${modelAnomalySamples} 未提交）` : ''}`
+            : `含异常 ${anomalousCompletedRuns}${detail.length ? `（${detail.join(' · ')}）` : ''}`;
+      pushPill('timeout', label);
+    }
     const total = progress?.total ?? record.plan?.sample_count ?? sum.sampleTotal;
     const done = progress?.done ?? sum.sampleDone;
     const pct = total > 0 ? Math.min(100, Math.round((done / total) * 100)) : 0;
@@ -842,22 +1091,7 @@ export function createTaskHistoryView({ app, state, retryRequests, retrying, bas
     if (child.status === 'completed') return hasTimeoutSamples(child) ? 'timeout' : 'completed';
     return 'queued';
   }
-  function childPreviewStateHtml(child, progress) {
-    if (child.status === 'queued') return '排队';
-    if (child.status === 'cancelling')
-      return progress.done > 0 && progress.total > 0 ? `取消中 ${progress.done}/${progress.total}` : '取消中';
-    if (child.status === 'running') return `${progress.done}/${progress.total}`;
-    if (child.status === 'failed') return '× 失败';
-    if (child.status === 'interrupted') return '‖ 中断';
-    if (child.status === 'cancelled') return '已取消';
-    if (child.status === 'incomplete') return '未完成';
-    if (child.status === 'completed') {
-      const timeouts = child.sample_status_counts?.timeout ?? 0;
-      if (timeouts > 0) return `${TIMEOUT_CHIP_ICON}${timeouts} 超时`;
-      return qualityLabel(child) ? '✓ · 注' : '✓ 完成';
-    }
-    return escapeHtml(statusText(child.status));
-  }
+
   function renderScopeBaselineButtons({ level, scopeId, scopeName, children, focusKeyPrefix, unitLabel }) {
     if (!children.length) return '';
     const { promotable, promoted, ineligible, ineligibleReason } = summarizeBaselineGroup(children);
@@ -885,12 +1119,402 @@ export function createTaskHistoryView({ app, state, retryRequests, retrying, bas
     }
     return buttons.join('');
   }
-  function renderTaskPreview(task, visibleChildren) {
+  const validNonnegative = value => typeof value === 'number' && Number.isFinite(value) && value >= 0;
+  const formatMoney = value => {
+    if (!validNonnegative(value)) return '—';
+    return (
+      '$' +
+      (value === 0
+        ? '0'
+        : value < 0.01
+          ? Number(value.toPrecision(2)).toString()
+          : value < 1
+            ? Number(value.toFixed(3)).toString()
+            : Number(value.toFixed(2)).toString())
+    );
+  };
+  const formatTokens = value => {
+    if (!validNonnegative(value)) return '—';
+    if (value >= 1e6) return Number((value / 1e6).toFixed(2)).toString() + 'M';
+    if (value >= 1e4) return Number((value / 1e3).toFixed(1)).toString() + 'k';
+    return Math.round(value).toLocaleString('zh-CN');
+  };
+  const formatDuration = seconds => {
+    if (!validNonnegative(seconds)) return '—';
+    if (seconds < 60) return Number(seconds.toFixed(seconds < 10 ? 1 : 0)).toString() + 's';
+    const total = Math.round(seconds);
+    const mins = Math.floor(total / 60),
+      secs = total % 60;
+    if (mins < 60) return secs ? `${mins}m ${secs}s` : `${mins}m`;
+    const hrs = Math.floor(mins / 60),
+      remMins = mins % 60;
+    return remMins ? `${hrs}h ${remMins}m` : `${hrs}h`;
+  };
+  function resolveRunMetrics(record, fallbackRounds = null) {
+    if (!record) return null;
+    if (record.metrics && typeof record.metrics === 'object') {
+      const m = record.metrics;
+      return {
+        ...m,
+        rounds: Number.isInteger(m.rounds) && m.rounds > 0 ? m.rounds : (fallbackRounds ?? record.plan?.rounds ?? null)
+      };
+    }
+    if (Array.isArray(record.samples)) {
+      let scored_samples = 0,
+        full_score_samples = 0,
+        partial_score_samples = 0,
+        zero_score_samples = 0,
+        scoreSum = 0,
+        elapsed_sample_count = 0,
+        elapsed_seconds_known = 0,
+        hasActiveSamples = false,
+        inputKnown = 0,
+        outputKnown = 0,
+        costKnown = 0,
+        unknownUsage = 0,
+        unknownCost = 0;
+      const roundSet = new Set();
+      const addAttempt = (attempt, usage, cost) => {
+        if (sentNoRequestAttempt(attempt)) return;
+        if (knownUsage(usage)) {
+          inputKnown += usage.input_tokens;
+          outputKnown += usage.output_tokens;
+        } else unknownUsage++;
+        if (knownCost(cost)) costKnown += cost;
+        else unknownCost++;
+      };
+      for (const sample of record.samples) {
+        if (Number.isInteger(sample.round) && sample.round > 0) roundSet.add(sample.round);
+        if (['pending', 'queued', 'running'].includes(String(sample.status ?? ''))) hasActiveSamples = true;
+        if (isTimeoutSample(sample)) {
+          scored_samples++;
+          zero_score_samples++;
+        } else if (sample.status === 'completed' && validScore(sample)) {
+          const s = sample.grade.content_score;
+          scored_samples++;
+          scoreSum += s;
+          if (s >= 1) full_score_samples++;
+          else if (s > 0) partial_score_samples++;
+          else zero_score_samples++;
+        }
+        if (validNonnegative(sample.elapsed_seconds)) {
+          elapsed_sample_count++;
+          elapsed_seconds_known += sample.elapsed_seconds;
+        }
+        const prior = Array.isArray(sample.attempts) ? sample.attempts.filter(item => item && typeof item === 'object') : [];
+        if (knownUsage(sample.usage) && knownCost(sample.estimated_uncached_cost_usd)) {
+          inputKnown += sample.usage.input_tokens;
+          outputKnown += sample.usage.output_tokens;
+          costKnown += sample.estimated_uncached_cost_usd;
+        } else {
+          const pick = (item, key) =>
+            key === 'usage'
+              ? Object.hasOwn(item, 'latest_attempt_usage')
+                ? item.latest_attempt_usage
+                : item.usage
+              : Object.hasOwn(item, 'latest_attempt_cost_usd')
+                ? item.latest_attempt_cost_usd
+                : item.estimated_uncached_cost_usd;
+          for (const attempt of prior) addAttempt(attempt, pick(attempt, 'usage'), pick(attempt, 'cost'));
+          addAttempt(sample, pick(sample, 'usage'), pick(sample, 'cost'));
+        }
+      }
+      const totalSamples = record.samples.length;
+      const rounds =
+        (Number.isInteger(record.plan?.rounds) && record.plan.rounds > 0 ? record.plan.rounds : null) ??
+        fallbackRounds ??
+        (roundSet.size > 0 ? roundSet.size : null);
+      const usageComplete = totalSamples > 0 && !hasActiveSamples && unknownUsage === 0;
+      const costComplete = totalSamples > 0 && !hasActiveSamples && unknownCost === 0;
+      const totalTokensKnown = inputKnown + outputKnown;
+      return {
+        rounds,
+        scored_samples,
+        full_score_samples,
+        partial_score_samples,
+        zero_score_samples,
+        mean_score: scored_samples > 0 ? (scoreSum / scored_samples) * 100 : null,
+        score_complete: totalSamples > 0 && scored_samples === totalSamples,
+        elapsed_sample_count,
+        elapsed_seconds_known,
+        elapsed_seconds_total: totalSamples > 0 && elapsed_sample_count === totalSamples ? elapsed_seconds_known : null,
+        avg_sample_elapsed_seconds: elapsed_sample_count > 0 ? elapsed_seconds_known / elapsed_sample_count : null,
+        input_tokens: usageComplete ? inputKnown : null,
+        output_tokens: usageComplete ? outputKnown : null,
+        total_tokens: usageComplete ? totalTokensKnown : null,
+        known_input_tokens_lower_bound: !usageComplete && totalTokensKnown > 0 ? inputKnown : null,
+        known_output_tokens_lower_bound: !usageComplete && totalTokensKnown > 0 ? outputKnown : null,
+        known_total_tokens_lower_bound: !usageComplete && totalTokensKnown > 0 ? totalTokensKnown : null,
+        estimated_cost_usd: costComplete ? costKnown : null,
+        known_cost_lower_bound_usd: !costComplete && costKnown > 0 ? costKnown : null,
+        unknown_usage_attempts: unknownUsage,
+        unknown_cost_attempts: unknownCost
+      };
+    }
+    const rounds = Number.isInteger(fallbackRounds) && fallbackRounds > 0 ? fallbackRounds : (record.plan?.rounds ?? null);
+    const budget = record.budget || {};
+    const estCost = validNonnegative(budget.estimated_uncached_cost_usd) ? budget.estimated_uncached_cost_usd : null;
+    const lowerCost =
+      estCost === null && validNonnegative(budget.known_cost_lower_bound_usd) && budget.known_cost_lower_bound_usd > 0
+        ? budget.known_cost_lower_bound_usd
+        : null;
+    return {
+      rounds,
+      scored_samples: 0,
+      full_score_samples: 0,
+      partial_score_samples: 0,
+      zero_score_samples: 0,
+      mean_score: null,
+      score_complete: false,
+      elapsed_sample_count: 0,
+      elapsed_seconds_known: 0,
+      elapsed_seconds_total: null,
+      avg_sample_elapsed_seconds: null,
+      input_tokens: null,
+      output_tokens: null,
+      total_tokens: null,
+      known_input_tokens_lower_bound: null,
+      known_output_tokens_lower_bound: null,
+      known_total_tokens_lower_bound: null,
+      estimated_cost_usd: estCost,
+      known_cost_lower_bound_usd: lowerCost,
+      unknown_usage_attempts: 0,
+      unknown_cost_attempts: 0
+    };
+  }
+  const perRoundValue = (value, rounds) =>
+    validNonnegative(value) ? (Number.isInteger(rounds) && rounds > 0 ? value / rounds : value) : null;
+  function formatRunScore(metrics) {
+    if (!metrics || !validNonnegative(metrics.mean_score)) return { text: '—', sub: '', title: '尚无已评分样本', complete: false };
+    const text = `${metrics.mean_score.toFixed(1)}${metrics.score_complete ? '' : '*'}`;
+    const sub = `${metrics.full_score_samples} 满 · ${metrics.partial_score_samples} 部 · ${metrics.zero_score_samples} 零`;
+    const title = `均分 ${metrics.mean_score.toFixed(1)}（已评 ${metrics.scored_samples} 题：${metrics.full_score_samples} 满分 / ${metrics.partial_score_samples} 部分 / ${metrics.zero_score_samples} 零分${metrics.score_complete ? '' : '；含未计分样本'}）`;
+    return { text, sub, title, complete: Boolean(metrics.score_complete) };
+  }
+  function formatRunElapsed(metrics) {
+    if (!metrics || !validNonnegative(metrics.avg_sample_elapsed_seconds)) return { text: '—', sub: '', title: '耗时未记录' };
+    const text = formatDuration(metrics.avg_sample_elapsed_seconds);
+    const perRound =
+      validNonnegative(metrics.elapsed_seconds_total) && Number.isInteger(metrics.rounds) && metrics.rounds > 0
+        ? formatDuration(metrics.elapsed_seconds_total / metrics.rounds)
+        : null;
+    const sub = perRound ? `每轮 ${perRound}` : `${metrics.elapsed_sample_count} 题均值`;
+    const title = `平均单题耗时 ${text}（${metrics.elapsed_sample_count} 题合计 ${formatDuration(metrics.elapsed_seconds_known)}${perRound ? ` · 每轮 ${perRound}` : ''}）`;
+    return { text, sub, title };
+  }
+  function formatRunCost(metrics, record) {
+    if (!metrics) return { text: '—', sub: '', title: '费用未定价或缺失', isLowerBound: false };
+    const rounds = metrics.rounds;
+    const isIdleZero =
+      record &&
+      (record.status === 'queued' || (activeStatus(record.status) && metrics.estimated_cost_usd === 0 && !(record.budget?.requests > 0)));
+    if (validNonnegative(metrics.estimated_cost_usd) && !isIdleZero) {
+      const perRound = perRoundValue(metrics.estimated_cost_usd, rounds);
+      const text = formatMoney(perRound);
+      const sub = rounds > 1 ? `${rounds} 轮总计 ${formatMoney(metrics.estimated_cost_usd)}` : '每轮估算';
+      const title = `每轮估算费用 ${text}${rounds > 1 ? `（${rounds} 轮总计 ${formatMoney(metrics.estimated_cost_usd)}）` : ''}`;
+      return { text, sub, title, isLowerBound: false };
+    }
+    if (validNonnegative(metrics.known_cost_lower_bound_usd)) {
+      const perRound = perRoundValue(metrics.known_cost_lower_bound_usd, rounds);
+      const text = `≥ ${formatMoney(perRound)}`;
+      const sub =
+        rounds > 1
+          ? `总 ≥ ${formatMoney(metrics.known_cost_lower_bound_usd)}`
+          : metrics.unknown_cost_attempts > 0
+            ? `含 ${metrics.unknown_cost_attempts} 次未知`
+            : '已知下限';
+      const title = `每轮已知费用下限 ${text}${rounds > 1 ? `（${rounds} 轮已知总计 ≥ ${formatMoney(metrics.known_cost_lower_bound_usd)}）` : ''}${metrics.unknown_cost_attempts > 0 ? `；含 ${metrics.unknown_cost_attempts} 次未知费用尝试` : ''}`;
+      return { text, sub, title, isLowerBound: true };
+    }
+    return { text: '—', sub: '未定价 / 缺失', title: '费用未定价或缺失', isLowerBound: false };
+  }
+  function formatRunTokens(metrics) {
+    if (!metrics) return { text: '—', sub: '', title: 'Token 用量未记录', isLowerBound: false };
+    const rounds = metrics.rounds;
+    if (validNonnegative(metrics.total_tokens)) {
+      const perRound = perRoundValue(metrics.total_tokens, rounds);
+      const inPer = perRoundValue(metrics.input_tokens, rounds);
+      const outPer = perRoundValue(metrics.output_tokens, rounds);
+      const text = formatTokens(perRound);
+      const sub = inPer !== null && outPer !== null ? `入 ${formatTokens(inPer)} / 出 ${formatTokens(outPer)}` : '';
+      const title = `每轮 Tokens ${text}${sub ? `（${sub}）` : ''}${rounds > 1 ? ` · ${rounds} 轮总计 ${formatTokens(metrics.total_tokens)}` : ''}`;
+      return { text, sub, title, isLowerBound: false };
+    }
+    if (validNonnegative(metrics.known_total_tokens_lower_bound)) {
+      const perRound = perRoundValue(metrics.known_total_tokens_lower_bound, rounds);
+      const text = `≥ ${formatTokens(perRound)}`;
+      const sub = metrics.unknown_usage_attempts > 0 ? `含 ${metrics.unknown_usage_attempts} 次未知` : '已知下限';
+      const title = `每轮已知 Tokens 下限 ${text}${rounds > 1 ? `（${rounds} 轮已知总计 ≥ ${formatTokens(metrics.known_total_tokens_lower_bound)}）` : ''}${metrics.unknown_usage_attempts > 0 ? `；含 ${metrics.unknown_usage_attempts} 次未返回用量` : ''}`;
+      return { text, sub, title, isLowerBound: true };
+    }
+    return { text: '—', sub: '未记录', title: 'Token 用量未记录', isLowerBound: false };
+  }
+  function isAnomalousChild(child) {
+    if (!child) return false;
+    if (['failed', 'incomplete', 'timeout', 'interrupted', 'cancelled'].includes(child.status)) return true;
+    const a = recordAnomalyCounts(child);
+    return a.timeout > 0 || a.modelAnomaly > 0 || a.nonModelAnomaly > 0;
+  }
+
+  function resolvePillStatus(child, progress) {
+    const a = recordAnomalyCounts(child);
+    const frac = progress.total > 0 ? `${progress.done}/${progress.total}` : '';
+    const partial = progress.total > 0 && progress.done > 0 && progress.done < progress.total;
+    const timeoutBit = n => `<span class="task-pill-note is-timeout">${TIMEOUT_CHIP_ICON}${n} 超时</span>`;
+    if (child.status === 'queued') return { html: '○ 排队中', tone: 'queued' };
+    if (child.status === 'cancelling') return { html: partial ? `取消中 ${frac}` : '取消中', tone: 'cancelling' };
+    if (child.status === 'running')
+      return {
+        html: `<i class="task-dot is-running is-pulse" aria-hidden="true"></i><span class="visually-hidden">运行中 </span>${frac}`,
+        tone: 'running'
+      };
+    if (child.status === 'failed') {
+      const doneCompleted = child.sample_status_counts?.completed || 0;
+      const label = doneCompleted > 0 ? '× 部分失败' : '× 失败';
+      return {
+        html: `${label}${a.nonModelAnomaly > 0 ? ` <span class="task-pill-note">${a.nonModelAnomaly} 异常</span>` : ''}`,
+        tone: 'failed'
+      };
+    }
+    if (child.status === 'interrupted')
+      return { html: `‖ 中断${partial ? ` ${frac}` : ''}${a.timeout > 0 ? ` · ${timeoutBit(a.timeout)}` : ''}`, tone: 'interrupted' };
+    if (child.status === 'cancelled') return { html: partial ? `已取消 ${frac}` : '已取消', tone: 'cancelled' };
+    if (child.status === 'incomplete') return { html: partial ? `未完成 ${frac}` : '未完成', tone: 'timeout' };
+    if (child.status === 'completed') {
+      const parts = [];
+      if (a.timeout > 0) parts.push(timeoutBit(a.timeout));
+      if (a.endedAfterNonModel > 0) parts.push(`<span class="task-pill-note is-timeout">${a.endedAfterNonModel} 异常</span>`);
+      if (a.modelAnomaly > 0) parts.push(`<span class="task-pill-note is-model">${a.modelAnomaly} 未提交</span>`);
+      if (!parts.length) return { html: '✓<span class="visually-hidden"> 已完成</span>', tone: 'completed' };
+      const tone = a.timeout > 0 || a.endedAfterNonModel > 0 ? 'timeout' : 'model';
+      return { html: `${parts.join(' · ')}<span class="visually-hidden"> 已完成</span>`, tone };
+    }
+    return { html: escapeHtml(statusText(child.status)), tone: childPreviewTone(child) };
+  }
+  function renderTaskOverview(task, children, plan, filterMode) {
+    let elapsedKnownSum = 0,
+      elapsedCountSum = 0,
+      costTotal = 0,
+      costKnownAny = false,
+      costHasUnknown = false,
+      tokensTotal = 0,
+      tokensKnownAny = false,
+      tokensHasUnknown = false,
+      timeoutSamples = 0,
+      modelSamples = 0,
+      nonModelSamples = 0,
+      anomalousRuns = 0;
+    for (const child of children) {
+      const m = resolveRunMetrics(child, plan.rounds);
+      if (m && m.elapsed_sample_count > 0) {
+        elapsedKnownSum += m.elapsed_seconds_known;
+        elapsedCountSum += m.elapsed_sample_count;
+      }
+      if (m && validNonnegative(m.estimated_cost_usd)) {
+        costTotal += m.estimated_cost_usd;
+        if (m.estimated_cost_usd > 0 || child.status === 'completed') costKnownAny = true;
+      } else if (m && validNonnegative(m.known_cost_lower_bound_usd)) {
+        costTotal += m.known_cost_lower_bound_usd;
+        costKnownAny = true;
+        costHasUnknown = true;
+      } else if (!inProgress(child) && child.status !== 'queued') {
+        costHasUnknown = true;
+      }
+      if (m && validNonnegative(m.total_tokens)) {
+        tokensTotal += m.total_tokens;
+        if (m.total_tokens > 0 || child.status === 'completed') tokensKnownAny = true;
+      } else if (m && validNonnegative(m.known_total_tokens_lower_bound)) {
+        tokensTotal += m.known_total_tokens_lower_bound;
+        tokensKnownAny = true;
+        tokensHasUnknown = true;
+      } else if (!inProgress(child) && child.status !== 'queued') {
+        tokensHasUnknown = true;
+      }
+      const a = recordAnomalyCounts(child);
+      timeoutSamples += a.timeout;
+      modelSamples += a.modelAnomaly;
+      nonModelSamples += a.nonModelAnomaly;
+      if (isAnomalousChild(child)) anomalousRuns++;
+    }
+    const avgElapsed = elapsedCountSum > 0 ? formatDuration(elapsedKnownSum / elapsedCountSum) : '—';
+    const elapsedTip = elapsedCountSum > 0 ? `${elapsedCountSum} 题样本均值` : '尚无耗时';
+    const costBound = costHasUnknown && costKnownAny;
+    const costValue = costKnownAny ? `${costBound ? '≥ ' : ''}${formatMoney(costTotal)}` : '—';
+    const costTip = costKnownAny ? (costHasUnknown ? '含未知费用运行，显示已知下限' : `${children.length} 个运行合计`) : '未定价 / 缺失';
+    const tokensBound = tokensHasUnknown && tokensKnownAny;
+    const tokensValue = tokensKnownAny ? `${tokensBound ? '≥ ' : ''}${formatTokens(tokensTotal)}` : '—';
+    const tokensTip = tokensKnownAny
+      ? tokensHasUnknown
+        ? '含未返回用量运行，显示已知下限'
+        : `${children.length} 个运行合计`
+      : '用量未记录';
+    const meta = `<div class="task-inline-meta" aria-label="任务指标概览"><span class="task-inline-item" title="${escapeHtml(elapsedTip)}">单题均耗 <b>${escapeHtml(avgElapsed)}</b></span><span class="task-inline-sep" aria-hidden="true">·</span><span class="task-inline-item" title="${escapeHtml(`任务总费用：${costTip}`)}">总费用 <b${costBound ? ' class="is-bound"' : ''}>${escapeHtml(costValue)}</b></span><span class="task-inline-sep" aria-hidden="true">·</span><span class="task-inline-item" title="${escapeHtml(`任务总 Tokens：${tokensTip}`)}">总 Tokens <b${tokensBound ? ' class="is-bound"' : ''}>${escapeHtml(tokensValue)}</b></span></div>`;
+    let filterHtml = '';
+    if (anomalousRuns > 0) {
+      const anomalyTip = [
+        `异常运行 ${anomalousRuns}/${children.length}`,
+        timeoutSamples > 0 ? `超时 ${timeoutSamples}` : '',
+        modelSamples > 0 ? `模型异常 ${modelSamples}` : '',
+        nonModelSamples > 0 ? `非模型异常 ${nonModelSamples}` : ''
+      ]
+        .filter(Boolean)
+        .join(' · ');
+      filterHtml = `<div class="task-seg-group" role="group" aria-label="按异常筛选运行" title="${escapeHtml(anomalyTip)}"><button type="button" class="task-filter-btn${filterMode === 'all' ? ' is-active' : ''}" data-task-run-filter="all" data-history-focus="task-filter:all" aria-pressed="${filterMode === 'all'}">全部 ${children.length}</button><button type="button" class="task-filter-btn is-anom${filterMode === 'anomaly' ? ' is-active' : ''}" data-task-run-filter="anomaly" data-history-focus="task-filter:anomaly" aria-pressed="${filterMode === 'anomaly'}">仅看异常 ${anomalousRuns}</button></div>`;
+    }
+    return `<div class="task-inline-bar">${meta}${filterHtml}</div>`;
+  }
+  function renderRunPill(child, label, { slotId, describedBy = '', isAccount = false, isAutoAcc = false, plan }) {
+    const target = child.target || {};
+    const progress = sampleProgress(child);
+    const tone = childPreviewTone(child);
+    const baseState = childBaselineState(child);
+    const isBaseline = Boolean(baseState.baselineId);
+    const selected = child.run_id === state.selectedRunId;
+    const metrics = resolveRunMetrics(child, plan.rounds);
+    const score = formatRunScore(metrics);
+    const elapsed = formatRunElapsed(metrics);
+    const cost = formatRunCost(metrics, child);
+    const tokens = formatRunTokens(metrics);
+    const pct = progress.total > 0 ? Math.min(100, Math.round((progress.done / progress.total) * 100)) : 0;
+    const baselineDecor = isBaseline
+      ? '<span class="task-run-baseline" title="已设为基线"><i class="task-baseline-sq" aria-hidden="true"></i><span class="visually-hidden">已设基线</span></span>'
+      : '';
+    const { html: statusHtml, tone: statusTone } = resolvePillStatus(child, progress);
+    const hasChildAnomaly = child.status === 'completed' && statusTone !== 'completed';
+    const canPromote = !inProgress(child) && baseState.eligible && !isBaseline && Boolean(target.id);
+    const ineligibleReason =
+      !isBaseline && !canPromote
+        ? formatBaselineReason(inProgress(child) ? 'Assessment baseline: run must be completed' : baseState.reason, child)
+        : '';
+    const baselineTip = isBaseline ? '已设为基线' : canPromote ? '可设为基线' : ineligibleReason ? `不可设为基线：${ineligibleReason}` : '';
+    const cardTooltip = [
+      targetLabel(target),
+      targetIdentity(target),
+      statusText(child.status),
+      `${progress.done}/${progress.total} 样本`,
+      score.text !== '—' ? score.title : '',
+      elapsed.text !== '—' ? elapsed.title : '',
+      cost.text !== '—' ? cost.title : '',
+      tokens.text !== '—' ? tokens.title : '',
+      baselineTip,
+      child.stop_reason && child.stop_reason !== 'api_failure' ? `停止原因：${stopReasonText(child.stop_reason)}` : '',
+      child.retryable_samples > 0 && !inProgress(child) ? `${child.retryable_samples} 个可重试` : ''
+    ]
+      .filter(Boolean)
+      .join(' · ');
+    const progressTrack =
+      tone === 'running' ? `<span class="task-run-pill-track" aria-hidden="true"><span style="width:${pct}%"></span></span>` : '';
+    const cancelBtnHtml = inProgress(child)
+      ? `<button class="btn task-run-pill-cancel" type="button" data-history-focus="cancel:${escapeHtml(child.run_id)}" data-cancel-child="${escapeHtml(child.run_id)}" ${!canCancel(child) || state.cancelling.has(`run:${child.run_id}`) ? 'disabled' : ''}>取消</button>`
+      : '';
+    const labelClass = isAccount ? `task-run-pill-label is-account task-run-account${isAutoAcc ? ' is-auto' : ''}` : 'task-run-pill-label';
+    return `<div class="task-run-pill is-${tone}${child.status === 'cancelled' ? ' is-muted-pill' : ''}${hasChildAnomaly ? ' has-anomaly' : ''}${statusTone === 'model' ? ' is-model-anom' : ''}${isBaseline ? ' is-baseline' : ''}${selected ? ' is-selected' : ''}${cancelBtnHtml ? ' has-cancel' : ''}" data-child-run-id="${escapeHtml(child.run_id)}"><button type="button" class="task-run-pill-btn" data-preview-run-id="${escapeHtml(child.run_id)}" data-history-focus="preview-run:${escapeHtml(child.run_id)}" aria-expanded="${selected}" aria-controls="${escapeHtml(slotId)}"${describedBy ? ` aria-describedby="${escapeHtml(describedBy)}"` : ''} title="${escapeHtml(cardTooltip)}">${progressTrack}${baselineDecor}<span class="${labelClass}">${escapeHtml(label)}</span><span class="task-run-pill-status is-${statusTone}">${statusHtml}</span></button>${cancelBtnHtml}</div>`;
+  }
+  function renderTaskComparison(task, visibleChildren, plan) {
     if (!visibleChildren.length) return '<div class="empty">没有匹配的子运行。</div>';
     const channelPods = groupByChannel(visibleChildren);
-    const presentTones = new Set(visibleChildren.map(childPreviewTone));
-    const hasAnyBaseline = visibleChildren.some(child => Boolean(childBaselineState(child).baselineId));
-    let slotIndex = 0;
+    let slotSeq = 0;
     const podsHtml = channelPods
       .map((pod, podIndex) => {
         const podSum = summarizeChildren(pod.children);
@@ -909,7 +1533,8 @@ export function createTaskHistoryView({ app, state, retryRequests, retrying, bas
           podSum.counts.running ? `运行中 ${podSum.counts.running}` : '',
           podSum.counts.cancelling ? `取消中 ${podSum.counts.cancelling}` : '',
           podSum.counts.completed ? `完成 ${podSum.counts.completed}` : '',
-          podSum.counts.timeout ? `超时 ${podSum.counts.timeout}` : '',
+          podSum.timeoutRuns ? `含超时 ${podSum.timeoutRuns}` : '',
+          podSum.modelAnomalyRuns ? `模型异常 ${podSum.modelAnomalyRuns}` : '',
           podSum.counts.incomplete ? `未完成 ${podSum.counts.incomplete}` : '',
           podSum.counts.failed ? `失败 ${podSum.counts.failed}` : '',
           podSum.counts.interrupted ? `中断 ${podSum.counts.interrupted}` : '',
@@ -929,55 +1554,9 @@ export function createTaskHistoryView({ app, state, retryRequests, retrying, bas
           }
           byModel.get(modelName).children.push(child);
         }
-        const renderPreviewChip = (child, label, slotId, describedById = '') => {
-          const target = child.target || {},
-            progress = sampleProgress(child),
-            tone = childPreviewTone(child),
-            baseState = childBaselineState(child),
-            isBaseline = Boolean(baseState.baselineId),
-            canPromote = !inProgress(child) && baseState.eligible && !isBaseline && Boolean(target.id),
-            ineligibleReason =
-              !isBaseline && !canPromote
-                ? formatBaselineReason(inProgress(child) ? 'Assessment baseline: run must be completed' : baseState.reason, child)
-                : '',
-            selected = child.run_id === state.selectedRunId,
-            budget = budgetLabel(child.budget, child.status),
-            quality = qualityLabel(child);
-          const stateHtml = childPreviewStateHtml(child, progress);
-          const pct = progress.total > 0 ? Math.min(100, Math.round((progress.done / progress.total) * 100)) : 0;
-          const baselineTip = isBaseline
-            ? '已设为基线'
-            : canPromote
-              ? '可设为基线（点击展开设置）'
-              : ineligibleReason
-                ? `不可设为基线：${ineligibleReason}`
-                : '';
-          const tooltip = [
-            targetLabel(target),
-            targetIdentity(target),
-            recordStatusLabel(child),
-            baselineTip,
-            `${progress.done}/${progress.total} 样本`,
-            budget,
-            quality,
-            child.retryable_samples > 0 && !inProgress(child) ? `${child.retryable_samples} 个可重试` : ''
-          ]
-            .filter(Boolean)
-            .join(' · ');
-          const runningDecor =
-            tone === 'running'
-              ? '<span class="task-preview-chip-fill" aria-hidden="true"></span><span class="task-preview-chip-track" aria-hidden="true"></span><i class="task-dot is-running is-pulse" aria-hidden="true"></i>'
-              : tone === 'cancelling'
-                ? '<i class="task-dot is-cancelling" aria-hidden="true"></i>'
-                : '';
-          const baselineDecor = isBaseline
-            ? '<span class="task-preview-chip-baseline"><i class="task-baseline-sq" aria-hidden="true"></i><span class="visually-hidden">已设基线</span></span>'
-            : '';
-          return `<button type="button" class="task-preview-chip is-${tone}${isBaseline ? ' is-baseline' : ''}${selected ? ' is-selected' : ''}"${tone === 'running' ? ` style="--pct:${pct}%"` : ''} data-preview-run-id="${escapeHtml(child.run_id)}" data-history-focus="preview-run:${escapeHtml(child.run_id)}" aria-expanded="${selected}" aria-controls="${escapeHtml(slotId)}"${describedById ? ` aria-describedby="${escapeHtml(describedById)}"` : ''} title="${escapeHtml(tooltip)}">${runningDecor}${baselineDecor}<span class="task-preview-chip-label">${escapeHtml(label)}</span><span class="task-preview-chip-state">${stateHtml}</span></button>`;
-        };
-        const modelRows = modelGroups
+        const groupsHtml = modelGroups
           .map((group, modelIndex) => {
-            const currentSlot = slotIndex++;
+            const currentSlot = slotSeq++;
             const slotId = `history-preview-run-${task.id}-${currentSlot}`;
             const accounts = [...new Set(group.children.map(child => shortAccount(child.target)))];
             const multiAccount = accounts.length > 1;
@@ -985,11 +1564,10 @@ export function createTaskHistoryView({ app, state, retryRequests, retrying, bas
             const doneRuns = group.children.filter(child => child.status === 'completed').length;
             const contextParts = [
               !multiAccount && podAccounts.length > 1 && accounts[0] ? accounts[0] : '',
-              `${groupSum.sampleDone}/${groupSum.sampleTotal} 样本`,
-              `完成 ${doneRuns}/${group.children.length}`,
+              `${doneRuns}/${group.children.length} 完成`,
               groupSum.counts.running ? `运行中 ${groupSum.counts.running}` : '',
               groupSum.counts.cancelling ? `取消中 ${groupSum.counts.cancelling}` : '',
-              groupSum.counts.timeout ? `超时 ${groupSum.counts.timeout}` : '',
+              groupSum.timeoutRuns ? `含超时 ${groupSum.timeoutRuns}` : '',
               groupSum.counts.failed ? `失败 ${groupSum.counts.failed}` : '',
               groupSum.counts.interrupted ? `中断 ${groupSum.counts.interrupted}` : ''
             ].filter(Boolean);
@@ -1018,10 +1596,19 @@ export function createTaskHistoryView({ app, state, retryRequests, retrying, bas
                   const laneChildren = byThinking.get(thinkKey) || [];
                   const laneDone = laneChildren.filter(child => child.status === 'completed').length;
                   const laneRailId = `history-preview-lane-${task.id}-${currentSlot}-${laneIdx}`;
-                  const chips = laneChildren
-                    .map(child => renderPreviewChip(child, shortAccount(child.target), slotId, laneRailId))
+                  const pills = laneChildren
+                    .map(child => {
+                      const isAutoAcc = child.target?.account_evidence === 'gateway_binding' || !child.target?.account_ref;
+                      return renderRunPill(child, shortAccount(child.target), {
+                        slotId,
+                        describedBy: laneRailId,
+                        isAccount: true,
+                        isAutoAcc,
+                        plan
+                      });
+                    })
                     .join('');
-                  return `<div class="task-thinking-lane" data-thinking-lane="${escapeHtml(thinkKey)}"><div class="task-thinking-rail" id="${escapeHtml(laneRailId)}"><span class="task-thinking-rail-kicker">思考</span><code class="task-thinking-rail-value">${escapeHtml(thinkingLabel(thinkKey))}</code><span class="task-thinking-rail-stat">${laneDone}/${laneChildren.length} 完成</span></div><div class="task-preview-runs">${chips}</div></div>`;
+                  return `<div class="task-thinking-lane" data-thinking-lane="${escapeHtml(thinkKey)}"><div class="task-thinking-rail" id="${escapeHtml(laneRailId)}"><code class="task-thinking-rail-value">${escapeHtml(thinkingLabel(thinkKey))}</code><span class="task-thinking-rail-stat">${laneDone}/${laneChildren.length}</span></div><div class="task-ribbon-pills">${pills}</div></div>`;
                 })
                 .join('');
               runsMarkup = `<div class="task-thinking-lanes">${lanesHtml}</div>`;
@@ -1030,56 +1617,19 @@ export function createTaskHistoryView({ app, state, retryRequests, retrying, bas
               const sortedChildren = [...group.children].sort(
                 (a, b) => (keyRank.get(rawThinkingKey(a.target)) ?? 99) - (keyRank.get(rawThinkingKey(b.target)) ?? 99)
               );
-              const chips = sortedChildren.map(child => renderPreviewChip(child, shortThink(child.target), slotId)).join('');
-              runsMarkup = `<div class="task-preview-runs is-single-account"><span class="task-thinking-inline-label">思考档位</span>${chips}</div>`;
+              const pills = sortedChildren.map(child => renderRunPill(child, shortThink(child.target), { slotId, plan })).join('');
+              runsMarkup = `<div class="task-ribbon-pills">${pills}</div>`;
             }
-            return `<div class="task-preview-group"><div class="task-preview-head"><strong>${escapeHtml(group.modelName)}</strong><div class="task-preview-head-meta"><span class="task-preview-stats">${escapeHtml(contextParts.join(' · '))}</span>${modelBaselineHtml ? `<span class="task-preview-head-actions">${modelBaselineHtml}</span>` : ''}</div></div>${runsMarkup}<div id="${escapeHtml(slotId)}" class="task-preview-slot" data-preview-model-slot="${currentSlot}" data-preview-run-ids="${escapeHtml(group.children.map(child => child.run_id).join(','))}"></div></div>`;
+            const selectedInGroup = group.children.find(child => child.run_id === state.selectedRunId);
+            const runIdsAttr = escapeHtml(group.children.map(child => child.run_id).join(','));
+            const statsTitle = `${groupSum.sampleDone}/${groupSum.sampleTotal} 样本`;
+            return `<div class="task-preview-group task-ribbon-group${multiAccount ? ' is-multi-account' : ''}"><div class="task-ribbon-row"><div class="task-ribbon-model"><strong class="task-ribbon-name" title="${escapeHtml(group.modelName)}">${escapeHtml(group.modelName)}</strong><div class="task-ribbon-sub"><span class="task-preview-stats" title="${escapeHtml(statsTitle)}">${escapeHtml(contextParts.join(' · '))}</span>${modelBaselineHtml ? `<span class="task-ribbon-actions">${modelBaselineHtml}</span>` : ''}</div></div><div class="task-ribbon-content">${runsMarkup}</div></div><div id="${escapeHtml(slotId)}" class="task-preview-slot" data-preview-model-slot="${currentSlot}" data-preview-run-ids="${runIdsAttr}"${selectedInGroup ? ` data-inline-run="${escapeHtml(selectedInGroup.run_id)}"` : ''}></div></div>`;
           })
           .join('');
-        return `<section class="channel-pod is-${podTone}" aria-label="${escapeHtml(`渠道 ${pod.name}`)}"><header class="channel-pod-head"><div class="channel-pod-identity"><span class="channel-pod-icon">${isRemote ? CHANNEL_REMOTE_ICON : CHANNEL_LOCAL_ICON}</span><strong class="channel-pod-name">${escapeHtml(pod.name)}</strong>${podBadge ? `<span class="channel-pod-tag">${escapeHtml(podBadge)}</span>` : ''}${isRemote ? '<span class="channel-pod-tag is-remote">远端路由</span>' : ''}</div><div class="channel-pod-summary">${statusBits ? `<span class="channel-pod-status is-${podTone}"><i class="task-dot is-${podTone}" aria-hidden="true"></i>${escapeHtml(statusBits)}</span>` : ''}${podBaselineHtml}${podSum.sampleTotal > 0 ? `<span class="channel-pod-progress">${renderProgressBar(podSum.segments, podSum.sampleTotal, true)}<span class="channel-pod-count">${podSum.sampleDone}/${podSum.sampleTotal}</span></span>` : ''}</div></header><div class="channel-pod-body">${modelRows}</div></section>`;
+        return `<section class="channel-pod is-${podTone}" aria-label="${escapeHtml(`渠道 ${pod.name}`)}"><header class="channel-pod-head"><div class="channel-pod-identity"><span class="channel-pod-icon">${isRemote ? CHANNEL_REMOTE_ICON : CHANNEL_LOCAL_ICON}</span><strong class="channel-pod-name">${escapeHtml(pod.name)}</strong>${podBadge ? `<span class="channel-pod-tag">${escapeHtml(podBadge)}</span>` : ''}${isRemote ? '<span class="channel-pod-tag is-remote">远端路由</span>' : ''}</div><div class="channel-pod-summary">${statusBits ? `<span class="channel-pod-status is-${podTone}"><i class="task-dot is-${podTone}" aria-hidden="true"></i>${escapeHtml(statusBits)}</span>` : ''}${podBaselineHtml}${podSum.sampleTotal > 0 ? `<span class="channel-pod-progress">${renderProgressBar(podSum.segments, podSum.sampleTotal, true)}<span class="channel-pod-count">${podSum.sampleDone}/${podSum.sampleTotal}</span></span>` : ''}</div></header><div class="channel-pod-body">${groupsHtml}</div></section>`;
       })
       .join('');
-    const legend = [
-      ['completed', '已完成'],
-      ['running', '运行中'],
-      ['cancelling', '取消中'],
-      ['queued', '排队中'],
-      ['timeout', '超时 / 未完成'],
-      ['failed', 'API 失败'],
-      ['interrupted', '已中断'],
-      ['cancelled', '已取消']
-    ]
-      .filter(([tone]) => presentTones.has(tone))
-      .map(
-        ([tone, label]) => `<span class="task-preview-legend-item"><i class="task-dot is-${tone}" aria-hidden="true"></i>${label}</span>`
-      )
-      .concat(
-        hasAnyBaseline
-          ? ['<span class="task-preview-legend-item"><i class="task-baseline-sq is-legend" aria-hidden="true"></i>已设基线</span>']
-          : []
-      )
-      .join('');
-    return `<div class="task-preview" aria-label="任务按渠道与模型预览">${podsHtml}</div><p class="task-preview-legend">${legend}<span class="muted">点击运行标签查看样本详情</span></p>`;
-  }
-  function taskCostLabel(children) {
-    let total = 0,
-      hasKnown = false,
-      hasUnknown = false;
-    for (const child of children) {
-      const cost = child.budget?.estimated_uncached_cost_usd;
-      if (Number.isFinite(cost) && cost >= 0) {
-        total += cost;
-        if (cost > 0 || child.status === 'completed') hasKnown = true;
-      } else if (Number.isFinite(child.budget?.known_cost_lower_bound_usd) && child.budget.known_cost_lower_bound_usd > 0) {
-        total += child.budget.known_cost_lower_bound_usd;
-        hasKnown = true;
-        hasUnknown = true;
-      } else if (!inProgress(child) && child.status !== 'queued') {
-        hasUnknown = true;
-      }
-    }
-    if (!hasKnown) return '';
-    return `${hasUnknown ? '≥ ' : ''}$${total.toFixed(4)}`;
+    return `<div class="task-preview" aria-label="任务按渠道与模型分组">${podsHtml}</div>`;
   }
   function renderTaskDetail() {
     const task =
@@ -1090,6 +1640,7 @@ export function createTaskHistoryView({ app, state, retryRequests, retrying, bas
     const taskBaselineBtn = element('bench-baseline-task');
     const taskUnbaselineBtn = element('bench-unbaseline-task');
     if (!task) {
+      taskSection.classList?.toggle('is-single-run-task', false);
       if (taskBaselineBtn) taskBaselineBtn.hidden = true;
       if (taskUnbaselineBtn) taskUnbaselineBtn.hidden = true;
       replaceHistoryMarkup(element('bench-task-detail'), '<div class="empty">正在读取任务详情…</div>');
@@ -1150,29 +1701,35 @@ export function createTaskHistoryView({ app, state, retryRequests, retrying, bas
     const rawQuery = element('history-search').value.trim(),
       tokens = searchTokens(rawQuery);
     const filterChildren = tokens.length > 0 && !recordHeaderMatchesTokens(task, tokens);
-    const visibleChildren = filterChildren ? children.filter(child => childMatchesTokens(child, tokens)) : children;
+    const searchMatchedChildren = filterChildren ? children.filter(child => childMatchesTokens(child, tokens)) : children;
     const taskConfirmLabel = retryCopy(task, true);
     element('bench-retry-task').hidden = inProgress(task) || !children.some(child => child.retryable_samples > 0);
     element('bench-retry-task').disabled = retrying.has(`tasks:${task.id}`);
     element('bench-retry-task').textContent = retrying.has(`tasks:${task.id}`)
       ? '正在提交重试…'
       : retryCopy(task, retryRequests.has(`tasks:${task.id}`));
-    const totalCost = taskCostLabel(children);
-    const allRunsKey = escapeHtml(`${task.id}:all-runs`);
+
+    const isSingleRunTask = children.length === 1 && !filterChildren && state.selectedRunId === children[0].run_id;
+    taskSection.classList?.toggle('is-single-run-task', isSingleRunTask);
+    if (isSingleRunTask) {
+      const sole = children[0];
+      replaceHistoryMarkup(
+        element('bench-task-detail'),
+        `${retryRequests.has(`tasks:${task.id}`) && !retrying.has(`tasks:${task.id}`) ? `<p class="task-detail-note">待确认：仅重试异常、超时或失败样本，保留正常已完成结果；再次点击右上角“${escapeHtml(taskConfirmLabel)}”后开始。</p>` : ''}<div id="history-run-${escapeHtml(sole.run_id)}" class="task-single-run-slot" data-inline-run="${escapeHtml(sole.run_id)}"></div>`
+      );
+      return;
+    }
+
+    const hasAnyAnomaly = searchMatchedChildren.some(isAnomalousChild);
+    const rawFilterMode = taskFilterByTask.get(task.id) === 'anomaly' ? 'anomaly' : 'all';
+    const filterMode = hasAnyAnomaly ? rawFilterMode : 'all';
+    const visibleChildren = filterMode === 'anomaly' ? searchMatchedChildren.filter(isAnomalousChild) : searchMatchedChildren;
+    const techKey = escapeHtml(`${task.id}:tech-meta`);
+    const timeoutSec = plan.limits?.timeout;
+    const techMetaHtml = `<details class="raw-block task-tech-meta" data-history-disclosure="${techKey}"><summary data-history-focus="${techKey}">技术元信息 · 任务 ${escapeHtml(shortId(task.id))}${plan.rounds ? ` · ${escapeHtml(plan.rounds)} 轮` : ''}${plan.run_concurrency ? ` · 并发 ${escapeHtml(plan.run_concurrency)}×${escapeHtml(plan.sample_concurrency ?? '—')}` : ''}</summary><dl class="tech-meta-grid"><div><dt>任务 ID</dt><dd><code>${escapeHtml(task.id)}</code></dd></div><div><dt>题库版本</dt><dd>${escapeHtml(task.bank_version || plan.bank_version || '—')}</dd></div><div><dt>轮数 / 并发</dt><dd>${escapeHtml(plan.rounds ?? '—')} 轮 · ${escapeHtml(plan.run_concurrency ?? '未记录')} 运行 × ${escapeHtml(plan.sample_concurrency ?? '未记录')} 样本</dd></div><div><dt>单题超时</dt><dd>${Number.isFinite(timeoutSec) ? `${escapeHtml(timeoutSec)} 秒` : '默认'}</dd></div><div><dt>创建时间</dt><dd>${escapeHtml(formatDate(task.created_at))}</dd></div><div><dt>更新时间</dt><dd>${escapeHtml(formatDate(task.updated_at))}</dd></div></dl><p class="tech-meta-note">每个运行固定路由、模型和 Thinking，账号绑定以路由证据为准；独立保存样本与用量记录，取消单个运行不会影响其他运行。</p></details>`;
     replaceHistoryMarkup(
       element('bench-task-detail'),
-      `${retryRequests.has(`tasks:${task.id}`) && !retrying.has(`tasks:${task.id}`) ? `<p class="task-detail-note">待确认：仅重试失败、超时、中断或已取消样本，保留已完成结果；再次点击右上角“${escapeHtml(taskConfirmLabel)}”后开始。</p>` : ''}<div class="run-detail-meta">${plan.rounds ? `<span>轮数 <strong>${escapeHtml(plan.rounds)}</strong></span>` : ''}<span>并发 <strong>${escapeHtml(plan.run_concurrency ?? '未记录')} 运行 × ${escapeHtml(plan.sample_concurrency ?? '未记录')} 样本</strong></span>${totalCost ? `<span>估算费用 <strong>${escapeHtml(totalCost)}</strong></span>` : ''}<span>任务 ID <code class="task-meta-id">${escapeHtml(task.id)}</code></span></div>${filterChildren && visibleChildren.length < children.length ? `<p class="task-detail-note">已按搜索“${escapeHtml(rawQuery)}”筛选：仅显示 ${visibleChildren.length} / ${children.length} 个匹配子运行。</p>` : ''}${renderTaskPreview(task, visibleChildren)}<details class="raw-block task-all-runs" data-history-disclosure="${allRunsKey}"><summary data-history-focus="${allRunsKey}">全部 ${visibleChildren.length} 个独立运行列表${filterChildren && visibleChildren.length < children.length ? `（共 ${children.length} 个）` : ''}</summary><div class="task-child-list">${visibleChildren
-        .map(child => {
-          const target = child.target || {},
-            progress = sampleProgress(child),
-            baseState = childBaselineState(child),
-            budget = budgetLabel(child.budget, child.status),
-            quality = qualityLabel(child);
-          return `<div class="task-child-row ${child.run_id === state.selectedRunId ? 'is-selected' : ''}" data-child-run-id="${escapeHtml(child.run_id)}"><button class="task-child-open" type="button" aria-expanded="${child.run_id === state.selectedRunId}" aria-controls="history-run-${escapeHtml(child.run_id)}" data-history-focus="run:${escapeHtml(child.run_id)}" data-bench-run-id="${escapeHtml(child.run_id)}"><strong>${escapeHtml(targetLabel(target))}${baseState.baselineId ? '<span class="task-baseline-inline"><i class="task-baseline-sq" aria-hidden="true"></i>基线</span>' : ''}</strong><span>${escapeHtml(targetIdentity(target))}</span><small>运行 ${escapeHtml(child.run_id)} · ${progress.done}/${progress.total} 样本已结束${baseState.baselineId ? ' · 已设为基线' : ''}${budget ? ` · ${escapeHtml(budget)}` : ''}${quality ? ` · ${escapeHtml(quality)}` : ''}${child.stop_reason && child.stop_reason !== 'api_failure' ? ` · 停止原因 ${escapeHtml(stopReasonText(child.stop_reason))}` : ''}${child.retryable_samples > 0 && !inProgress(child) ? ` · ${child.retryable_samples} 个可重试` : ''}</small></button><span class="run-list-status ${statusBadgeClass(child)}"><i class="task-dot is-${statusTone(child)}${statusTone(child) === 'running' ? ' is-pulse' : ''}" aria-hidden="true"></i>${escapeHtml(recordStatusLabel(child))}</span><button class="btn" type="button" data-history-focus="cancel:${escapeHtml(child.run_id)}" data-cancel-child="${escapeHtml(child.run_id)}" ${!canCancel(child) || state.cancelling.has(`run:${child.run_id}`) ? 'disabled' : ''}>取消运行</button></div><div id="history-run-${escapeHtml(child.run_id)}" data-inline-run="${escapeHtml(child.run_id)}"></div>`;
-        })
-        .join(
-          ''
-        )}</div></details><p class="task-detail-note">每个运行固定路由、模型和 Thinking，账号绑定以路由证据为准；独立保存样本与预算状态。取消某个运行不会取消其他运行。</p>`
+      `${retryRequests.has(`tasks:${task.id}`) && !retrying.has(`tasks:${task.id}`) ? `<p class="task-detail-note">待确认：仅重试异常、超时或失败样本，保留正常已完成结果；再次点击右上角“${escapeHtml(taskConfirmLabel)}”后开始。</p>` : ''}${renderTaskOverview(task, searchMatchedChildren, plan, filterMode)}${filterChildren && searchMatchedChildren.length < children.length ? `<p class="task-detail-note">已按搜索“${escapeHtml(rawQuery)}”筛选：仅显示 ${searchMatchedChildren.length} / ${children.length} 个匹配子运行。</p>` : ''}${renderTaskComparison(task, visibleChildren, plan)}${techMetaHtml}`
     );
   }
   const lazyJsonPayloads = new Map();
@@ -1209,7 +1766,8 @@ export function createTaskHistoryView({ app, state, retryRequests, retrying, bas
   function renderRunDetail() {
     const run = state.runDetail?.id === state.selectedRunId ? state.runDetail : null;
     const container = element('bench-run-detail');
-    element('bench-run-title').textContent = state.selectedTaskId ? '子运行样本' : '旧运行详情';
+    const headerTitle = state.selectedTaskId ? '运行详情' : '旧运行详情';
+    element('bench-run-title').textContent = headerTitle;
     element('bench-cancel-run').hidden = !inProgress(run);
     element('bench-cancel-run').disabled = !canCancel(run) || state.cancelling.has(`run:${run?.id}`);
     const runBaselineBtn = element('bench-baseline-run');
@@ -1299,6 +1857,10 @@ export function createTaskHistoryView({ app, state, retryRequests, retrying, bas
       runUnbaselineBtn.title = '取消该运行已保存的基线标记（保留原始运行记录）';
     }
     const calls = ensureCallSummaries(run);
+    const inspector = getInspectorState(run.id);
+    const activeSampleObj = inspector.sampleId ? (run.samples || []).find(s => s.sample_id === inspector.sampleId) || null : null;
+    if (inspector.sampleId && !activeSampleObj) inspector.sampleId = null;
+    const activeEventState = activeSampleObj ? ensureSampleEvents(run, activeSampleObj.sample_id) : null;
     const runDetailInputs = [
       run,
       run.samples,
@@ -1307,8 +1869,18 @@ export function createTaskHistoryView({ app, state, retryRequests, retrying, bas
       run.updated_at,
       state.selectedRunId,
       state.selectedTaskId,
+      state.banks,
       calls,
       Boolean(callSummaries.get(run.id)?.loading),
+      inspector.sampleId,
+      inspector.tab,
+      inspector.showAllFields,
+      inspector.showPrompt,
+      inspector.attemptId,
+      inspector.matrixFilter,
+      activeEventState?.events ?? null,
+      Boolean(activeEventState?.loading),
+      activeEventState?.error ?? null,
       retryRequests.has(`runs:${run.id}`),
       retrying.has(`runs:${run.id}`),
       state.cancelling.has(`run:${run.id}`),
@@ -1339,8 +1911,8 @@ export function createTaskHistoryView({ app, state, retryRequests, retrying, bas
     };
     const retryNotePrefix =
       runConfirmLabel === '确认重试 API 失败'
-        ? '待确认：仅重试 API 失败及因其停止的未执行样本，保留成功结果'
-        : '待确认：仅重试失败、超时、中断或已取消样本，保留已完成结果';
+        ? '待确认：仅重试 API 失败及非模型异常样本，保留正常结果'
+        : '待确认：仅重试异常、超时或失败样本，保留正常已完成结果';
     const runTargets = fixedTargets(run);
     const runProgress = sampleProgress(run);
     const sampleTotal = samples.length || runProgress.total;
@@ -1352,21 +1924,21 @@ export function createTaskHistoryView({ app, state, retryRequests, retrying, bas
           )
           .join(
             ''
-          )}</div><div class="run-target-badges">${promotedTargets.length > 0 ? '<span class="run-baseline-pill"><i class="task-baseline-sq" aria-hidden="true"></i>已设为基线</span>' : ''}<span class="run-list-status ${statusBadgeClass(run)}"><i class="task-dot is-${statusTone(run)}${statusTone(run) === 'running' ? ' is-pulse' : ''}" aria-hidden="true"></i>${escapeHtml(recordStatusLabel(run))}${sampleTotal ? ` · ${runProgress.done}/${sampleTotal} 样本` : ''}</span></div></div>`
+          )}</div><div class="run-target-badges">${promotedTargets.length > 0 ? '<span class="run-baseline-pill"><i class="task-baseline-sq" aria-hidden="true"></i>已设为基线</span>' : ''}${!run.task_id ? '<span class="channel-pod-tag">旧运行</span>' : ''}<span class="run-list-status ${statusBadgeClass(run)}"><i class="task-dot is-${statusTone(run)}${statusTone(run) === 'running' ? ' is-pulse' : ''}" aria-hidden="true"></i>${escapeHtml(recordStatusLabel(run))}${sampleTotal ? ` · ${runProgress.done}/${sampleTotal} 样本` : ''}</span></div></div>`
       : '';
-    const provenanceBits = [
-      `运行 <code class="task-meta-id">${escapeHtml(run.id)}</code>`,
-      !runTargets.length ? `状态 <strong>${escapeHtml(recordStatusLabel(run))}</strong>` : '',
-      !runTargets.length ? `已结束 <strong>${runProgress.done}/${sampleTotal}</strong>` : '',
-      promotedTargets.length > 0 && !runTargets.length ? '<strong>已设为基线</strong>' : '',
-      retryBatches.length
-        ? `手动重试 <strong>${retryBatches.length} 次${latestRetry?.created_at ? `（最近 ${escapeHtml(formatDate(latestRetry.created_at))}）` : ''}</strong>`
-        : '',
-      run.budget?.stop_reason ? `停止原因 <strong>${escapeHtml(stopReasonText(run.budget.stop_reason))}</strong>` : '',
-      runTargets.length ? escapeHtml(runTargets.map(target => `${targetLabel(target)} · ${targetIdentity(target)}`).join('；')) : '',
-      !run.task_id ? '旧运行记录，未迁移为新任务。' : ''
-    ].filter(Boolean);
-    const summary = `${retryRequests.has(`runs:${run.id}`) && !retrying.has(`runs:${run.id}`) ? `<p class="task-detail-note">${retryNotePrefix}；再次点击右上角“${escapeHtml(runConfirmLabel)}”后开始。</p>` : ''}${targetBanner}<p class="task-detail-note run-detail-provenance">${provenanceBits.join(' · ')}</p>`;
+
+    const runMetrics = resolveRunMetrics(run, run.plan?.rounds);
+    const scoreMetric = formatRunScore(runMetrics);
+    const elapsedMetric = formatRunElapsed(runMetrics);
+    const costMetric = formatRunCost(runMetrics, run);
+    const tokensMetric = formatRunTokens(runMetrics);
+    const runKpiStrip = `<div class="run-kpi-strip" aria-label="运行核心指标">
+      <div class="run-kpi-tile" title="${escapeHtml(scoreMetric.title)}"><span class="run-kpi-label">均分</span><strong class="run-kpi-value is-score">${escapeHtml(scoreMetric.text)}</strong>${scoreMetric.sub ? `<span class="run-kpi-sub">${escapeHtml(scoreMetric.sub)}</span>` : ''}</div>
+      <div class="run-kpi-tile" title="${escapeHtml(elapsedMetric.title)}"><span class="run-kpi-label">平均单题耗时</span><strong class="run-kpi-value">${escapeHtml(elapsedMetric.text)}</strong>${elapsedMetric.sub ? `<span class="run-kpi-sub">${escapeHtml(elapsedMetric.sub)}</span>` : ''}</div>
+      <div class="run-kpi-tile" title="${escapeHtml(costMetric.title)}"><span class="run-kpi-label">费用 / 轮</span><strong class="run-kpi-value${costMetric.isLowerBound ? ' is-bound' : ''}">${escapeHtml(costMetric.text)}</strong>${costMetric.sub ? `<span class="run-kpi-sub">${escapeHtml(costMetric.sub)}</span>` : ''}</div>
+      <div class="run-kpi-tile" title="${escapeHtml(tokensMetric.title)}"><span class="run-kpi-label">Tokens / 轮</span><strong class="run-kpi-value${tokensMetric.isLowerBound ? ' is-bound' : ''}">${escapeHtml(tokensMetric.text)}</strong>${tokensMetric.sub ? `<span class="run-kpi-sub">${escapeHtml(tokensMetric.sub)}</span>` : ''}</div>
+    </div>`;
+
     const sampleTone = sample =>
       isTimeoutSample(sample)
         ? 'timeout'
@@ -1390,89 +1962,173 @@ export function createTaskHistoryView({ app, state, retryRequests, retrying, bas
     const cellText = sample =>
       isTimeoutSample(sample)
         ? '超时'
-        : validScore(sample)
-          ? String(Number(sample.grade.content_score.toFixed(2)))
-          : sample.status === 'completed'
-            ? sample.grade?.outcome === 'ambiguous'
-              ? '歧义'
-              : '无分'
-            : ['pending', 'queued'].includes(sample.status)
-              ? '…'
-              : sample.status === 'running'
-                ? '运行'
-                : sample.status === 'cancelled'
-                  ? '取消'
-                  : sample.status === 'interrupted'
-                    ? '中断'
-                    : '失败';
-    const taskIds = [...new Set(samples.map(sample => sample.task))],
-      rounds = [...new Set(samples.map(sample => sample.round))].sort((a, b) => a - b);
-    const byCell = new Map(samples.map(sample => [`${sample.task}\u0000${sample.round}`, sample]));
+        : isNoSubmissionSample(sample)
+          ? '未提交'
+          : validScore(sample)
+            ? String(Number(sample.grade.content_score.toFixed(2)))
+            : sample.status === 'completed'
+              ? sample.grade?.outcome === 'ambiguous'
+                ? '歧义'
+                : '无分'
+              : ['pending', 'queued'].includes(sample.status)
+                ? '…'
+                : sample.status === 'running'
+                  ? '运行'
+                  : sample.status === 'cancelled'
+                    ? '取消'
+                    : sample.status === 'interrupted'
+                      ? '中断'
+                      : '失败';
+    const isAnomalousCell = sample =>
+      Boolean(
+        sample &&
+        ((sample.status !== 'completed' && !['pending', 'queued', 'running'].includes(sample.status)) ||
+          (sample.status === 'completed' && (!validScore(sample) || hasSubmissionAnomaly(sample))))
+      );
+    const rawTaskKey = sample => sample.task || sample.sample_id || 'unknown';
+    const sampleRoundKey = sample => (Number.isInteger(sample.round) && sample.round > 0 ? sample.round : 1);
+    const uniqueForKey = keyFn => {
+      const seen = new Set();
+      for (const sample of samples) {
+        const cellKey = `${keyFn(sample)}\u0000${sampleRoundKey(sample)}`;
+        if (seen.has(cellKey)) return false;
+        seen.add(cellKey);
+      }
+      return true;
+    };
+    const byTargetKey = sample => `${rawTaskKey(sample)} (${sample.target_id || sample.sample_id})`;
+    const sampleTaskKey = uniqueForKey(rawTaskKey)
+      ? rawTaskKey
+      : uniqueForKey(byTargetKey)
+        ? byTargetKey
+        : sample => `${rawTaskKey(sample)} (${sample.sample_id})`;
+    const taskIds = [...new Set(samples.map(sampleTaskKey))],
+      rounds = [...new Set(samples.map(sampleRoundKey))].sort((a, b) => a - b);
+    const byCell = new Map(samples.map(sample => [`${sampleTaskKey(sample)}\u0000${sampleRoundKey(sample)}`, sample]));
+    const anomalyOrder = [];
+    for (const task of taskIds) {
+      for (const round of rounds) {
+        const sample = byCell.get(`${task}\u0000${round}`);
+        if (sample && isAnomalousCell(sample)) anomalyOrder.push(sample);
+      }
+    }
+    const activeAnomalyIdx = activeSampleObj ? anomalyOrder.findIndex(s => s.sample_id === activeSampleObj.sample_id) : -1;
+    // Step navigation reuses the exact target-aware order the matrix rendered.
+    inspector.anomalyOrder = anomalyOrder.map(s => s.sample_id);
+
+    const runAnomalies = recordAnomalyCounts(run);
+    const diagTags = [];
+    const diagNotes = [];
+    if (runAnomalies.wholeTimeout > 0) {
+      diagTags.push(`<span class="run-anom-tag is-timeout">超时 ${runAnomalies.wholeTimeout}</span>`);
+      diagNotes.push(`${runAnomalies.wholeTimeout} 题整题超时（按 0 分计，不可设基线）`);
+    }
+    if (runAnomalies.endedAfterTimeout > 0) {
+      diagTags.push(`<span class="run-anom-tag is-timeout">提交后超时 ${runAnomalies.endedAfterTimeout}</span>`);
+      diagNotes.push(`${runAnomalies.endedAfterTimeout} 题提交后超时（按最后提交评分，不可设基线）`);
+    }
+    if (runAnomalies.endedAfterNonModel > 0) {
+      diagTags.push(`<span class="run-anom-tag is-non-model">提交后中止 ${runAnomalies.endedAfterNonModel}</span>`);
+      diagNotes.push(`${runAnomalies.endedAfterNonModel} 题提交后异常中止（不视为完成）`);
+    }
+    if (runAnomalies.preSubmissionNonModel > 0) {
+      diagTags.push(`<span class="run-anom-tag is-non-model">非模型异常 ${runAnomalies.preSubmissionNonModel}</span>`);
+      diagNotes.push(`${runAnomalies.preSubmissionNonModel} 题执行失败或中断`);
+    }
+    if (runAnomalies.modelAnomaly > 0) {
+      diagTags.push(`<span class="run-anom-tag is-model">模型异常 ${runAnomalies.modelAnomaly}</span>`);
+      diagNotes.push(`${runAnomalies.modelAnomaly} 题未提交答案（按 0 分计，可设基线）`);
+    }
+    if (run.stop_reason && run.stop_reason !== 'api_failure') diagNotes.push(`停止原因：${stopReasonText(run.stop_reason)}`);
+    const hasDiag = diagTags.length > 0 || diagNotes.length > 0;
+    const diagBarHtml = hasDiag
+      ? `<div class="run-diag-bar${runAnomalies.nonModelAnomaly > 0 ? ' is-error' : runAnomalies.timeout > 0 || runAnomalies.modelAnomaly > 0 ? ' is-warn' : ' is-muted'}" role="note"><div class="run-diag-main">${diagTags.length ? `<span class="run-diag-tags">${diagTags.join('')}</span>` : ''}<span class="run-diag-text">${escapeHtml(diagNotes.join('；'))}</span></div>${anomalyOrder.length ? '<button type="button" class="run-diag-jump" data-matrix-step="next">定位异常样本 →</button>' : ''}</div>`
+      : '';
+
+    const inspectorHelpers = {
+      validScore,
+      isNoSubmissionSample,
+      endedAfterSubmissionReason,
+      shortCellLabel: sample => {
+        const base = cellText(sample);
+        const endedAfter = endedAfterSubmissionReason(sample);
+        if (endedAfter && validScore(sample)) return `${base} ${endedAfter === 'SampleTimeout' ? '后超时' : '后中止'}`;
+        return base;
+      },
+      sampleDiagnosticBanner
+    };
+    const matrixToolbar =
+      samples.length && anomalyOrder.length
+        ? `<div class="sample-matrix-toolbar"><div class="sample-matrix-filters"><button type="button" class="si-pill${inspector.matrixFilter === 'all' ? ' is-active' : ''}" data-matrix-filter="all">全部 ${samples.length}</button><button type="button" class="si-pill is-anom-filter${inspector.matrixFilter === 'anomaly' ? ' is-active' : ''}" data-matrix-filter="anomaly"><i class="si-anom-dot" aria-hidden="true"></i>仅高亮异常 ${anomalyOrder.length}</button></div><div class="sample-matrix-stepper"><span class="si-stepper-count">异常巡检 ${activeAnomalyIdx >= 0 ? activeAnomalyIdx + 1 : 0}/${anomalyOrder.length}</span><button type="button" class="si-step-btn" data-matrix-step="prev" aria-label="上一个异常样本">‹ 上一异常</button><button type="button" class="si-step-btn" data-matrix-step="next" aria-label="下一个异常样本">下一异常 ›</button></div></div>`
+        : '';
     const matrix = samples.length
-      ? `<div class="sample-matrix" role="table" aria-label="逐题逐轮结果" style="--rounds:${rounds.length}"><div class="sample-matrix-row is-head" role="row"><span role="columnheader">题目</span>${rounds.map(round => `<span role="columnheader">第 ${escapeHtml(round)} 轮</span>`).join('')}</div>${taskIds
-          .map(
-            task =>
-              `<div class="sample-matrix-row" role="row"><span role="rowheader" title="${escapeHtml(task)}">${escapeHtml(task)}</span>${rounds
-                .map(round => {
-                  const sample = byCell.get(`${task}\u0000${round}`);
-                  if (!sample) return '<span role="cell" class="sample-cell is-missing">—</span>';
-                  const why =
-                    failureText(sample) || (!validScore(sample) && sample.status === 'completed' ? sampleScoringLabel(sample) : '');
-                  return `<span role="cell"><button type="button" class="sample-cell is-${sampleTone(sample)}" data-open-sample="${escapeHtml(sample.sample_id)}" title="${escapeHtml(`${task} 第 ${round} 轮 · ${historicalOutcomeText(sample)}${why ? ' · ' + why : ''}`)}">${escapeHtml(cellText(sample))}</button></span>`;
-                })
-                .join('')}</div>`
-          )
+      ? `${matrixToolbar}<div class="sample-matrix" role="table" aria-label="逐题逐轮结果" style="--rounds:${rounds.length}"><div class="sample-matrix-row is-head" role="row"><span role="columnheader">题目</span>${rounds.map(round => `<span role="columnheader">第 ${escapeHtml(round)} 轮</span>`).join('')}<span role="columnheader" class="sample-matrix-avg-head">均分</span><span role="columnheader" class="sample-matrix-time-head">单题均耗</span></div>${taskIds
+          .map(task => {
+            const roundSamples = rounds.map(r => byCell.get(`${task}\u0000${r}`)).filter(Boolean);
+            const scoredValues = roundSamples
+              .filter(s => validScore(s) || isTimeoutSample(s))
+              .map(s => (isTimeoutSample(s) ? 0 : s.grade.content_score));
+            const avgText = scoredValues.length ? (scoredValues.reduce((acc, v) => acc + v, 0) / scoredValues.length).toFixed(2) : '—';
+            const elapsedValues = roundSamples.map(s => s.elapsed_seconds).filter(validNonnegative);
+            const avgTimeText = elapsedValues.length
+              ? formatDuration(elapsedValues.reduce((acc, v) => acc + v, 0) / elapsedValues.length)
+              : '—';
+            const parsedTask = splitTaskId(task);
+            const isActiveRow = Boolean(activeSampleObj && sampleTaskKey(activeSampleObj) === task);
+            const rowHtml = `<div class="sample-matrix-row${isActiveRow ? ' is-expanded-row' : ''}" role="row"><span role="rowheader" title="${escapeHtml(task)}">${parsedTask.code ? `<span class="sample-task-code">${escapeHtml(parsedTask.code)}</span>` : ''}<span class="sample-task-name">${escapeHtml(parsedTask.name)}</span></span>${rounds
+              .map(round => {
+                const sample = byCell.get(`${task}\u0000${round}`);
+                if (!sample) return '<span role="cell" class="sample-cell is-missing">—</span>';
+                const endedAfter = endedAfterSubmissionReason(sample);
+                const isAnom = isAnomalousCell(sample);
+                const isSelected = inspector.sampleId === sample.sample_id;
+                const isDimmed = inspector.matrixFilter === 'anomaly' && !isAnom && !isSelected;
+                const anomalyClass = hasSubmissionAnomaly(sample) ? ' has-anomaly' : '';
+                const extraClasses = `${isSelected ? ' is-selected' : ''}${isDimmed ? ' is-dimmed' : ''}${isAnom && inspector.matrixFilter === 'anomaly' ? ' is-highlighted' : ''}`;
+                const why =
+                  failureText(sample) ||
+                  (endedAfter ? formatEndedAfterReason(endedAfter) : '') ||
+                  (isNoSubmissionSample(sample) ? sampleScoringLabel(sample) : '') ||
+                  (!validScore(sample) && sample.status === 'completed' ? sampleScoringLabel(sample) : '');
+                const subTag =
+                  endedAfter && validScore(sample)
+                    ? `<span class="sample-cell-sub ${endedAfter === 'SampleTimeout' ? 'is-warn' : 'is-err'}">${endedAfter === 'SampleTimeout' ? '后超时' : '后中止'}</span>`
+                    : '';
+                return `<span role="cell"><button type="button" class="sample-cell is-${sampleTone(sample)}${anomalyClass}${extraClasses}" data-open-sample="${escapeHtml(sample.sample_id)}" aria-expanded="${isSelected ? 'true' : 'false'}" title="${escapeHtml(`${task} 第 ${round} 轮 · ${historicalOutcomeText(sample)}${why ? ' · ' + why : ''}`)}"><span>${escapeHtml(cellText(sample))}</span>${subTag}</button></span>`;
+              })
+              .join(
+                ''
+              )}<span role="cell" class="sample-matrix-avg">${escapeHtml(avgText)}</span><span role="cell" class="sample-matrix-time">${escapeHtml(avgTimeText)}</span></div>`;
+            if (!isActiveRow || !activeSampleObj) return rowHtml;
+            const taskSpec = resolveTaskSpec(rawTaskKey(activeSampleObj), run, state.banks || []);
+            const inspectorHtml = renderInlineSampleInspector({
+              run,
+              sample: activeSampleObj,
+              roundSamples,
+              taskSpec,
+              calls,
+              eventState: activeEventState,
+              uiState: inspector,
+              esc: escapeHtml,
+              helpers: inspectorHelpers,
+              formatDate,
+              registerLazyJson: (label, value) => jsonBlock(label, value, `${run.id}:si:${activeSampleObj.sample_id}`)
+            });
+            return `${rowHtml}${inspectorHtml}`;
+          })
           .join('')}</div>`
       : '';
-    const sampleRow = sample => {
-      const score = sampleScoringLabel(sample),
-        scope = `${run.id}:${sample.sample_id}`;
-      const evidence = (title, value) => jsonBlock(title, value, scope);
-      const why = failureText(sample);
-      const attempts = Array.isArray(sample.attempts) ? sample.attempts : [];
-      const attemptLines = attempts.length
-        ? `<ol class="attempt-list">${attempts.map((attempt, index) => `<li>第 ${index + 1} 次尝试 · ${escapeHtml(statusText(attempt.status))}${attempt.status === 'completed' ? '' : ' · ' + escapeHtml(attemptFailureText(attempt, calls, timeout) ?? '原因读取中')}</li>`).join('')}<li>当前结果 · ${escapeHtml(historicalOutcomeText(sample))}${why ? ' · ' + escapeHtml(why) : ''}</li></ol>`
+    const techKey = escapeHtml(`${run.id}:tech-meta`);
+    const targetIdentityText = runTargets.map(target => `${targetLabel(target)} · ${targetIdentity(target)}`).join('；');
+    const techMetaHtml = `<details class="raw-block run-tech-meta" data-history-disclosure="${techKey}"><summary data-history-focus="${techKey}">技术元信息 · 运行 ${escapeHtml(shortId(run.id))}${retryBatches.length ? ` · 重试 ${retryBatches.length} 次` : ''}</summary><dl class="tech-meta-grid"><div><dt>运行 ID</dt><dd><code>${escapeHtml(run.id)}</code></dd></div>${targetIdentityText ? `<div><dt>目标与路由</dt><dd>${escapeHtml(targetIdentityText)}</dd></div>` : ''}<div><dt>轮数 / 超时</dt><dd>${escapeHtml(run.plan?.rounds ?? runMetrics?.rounds ?? '—')} 轮 · ${Number.isFinite(timeout) ? `单题 ${escapeHtml(timeout)} 秒` : '默认超时'}</dd></div>${retryBatches.length ? `<div><dt>手动重试</dt><dd>${retryBatches.length} 次${latestRetry?.created_at ? `（最近 ${escapeHtml(formatDate(latestRetry.created_at))}）` : ''}</dd></div>` : ''}${run.stop_reason || run.budget?.stop_reason ? `<div><dt>停止原因</dt><dd>${escapeHtml(run.stop_reason || run.budget?.stop_reason)}</dd></div>` : ''}<div><dt>创建 / 更新</dt><dd>${escapeHtml(formatDate(run.created_at))} → ${escapeHtml(formatDate(run.updated_at))}</dd></div></dl>${jsonBlock('预算与用量原始记录 (JSON)', run.budget)}</details>`;
+    const retryBannerHtml =
+      retryRequests.has(`runs:${run.id}`) && !retrying.has(`runs:${run.id}`)
+        ? `<p class="task-detail-note">${retryNotePrefix}；再次点击右上角“${escapeHtml(runConfirmLabel)}”后开始。</p>`
         : '';
-      return `<details class="run-item" data-sample-id="${escapeHtml(sample.sample_id)}" data-history-disclosure="${escapeHtml(scope)}"><summary data-history-focus="${escapeHtml(scope)}"><span>${escapeHtml(sample.task)} · 第 ${escapeHtml(sample.round)} 轮</span><span class="run-item-summary-status">${escapeHtml(historicalOutcomeText(sample))} · ${escapeHtml(why || score)}</span></summary><div class="run-item-body">
-        ${why ? `<p class="item-error">${escapeHtml(why)}</p>` : sample.runner_error ? `<p class="item-error">${escapeHtml(sample.runner_error)}</p>` : ''}
-        ${sampleResultNotes(sample)}${attemptLines}
-        <dl class="evidence-grid"><div><dt>内容得分</dt><dd>${escapeHtml(score)}</dd></div><div><dt>执行耗时</dt><dd>${escapeHtml(sample.elapsed_seconds ?? '未记录')} 秒</dd></div><div><dt>请求次数</dt><dd>${escapeHtml(sample.api_request_count ?? sample.calls?.length ?? '未记录')}</dd></div><div><dt>开始 / 结束</dt><dd>${escapeHtml(formatDate(sample.started_at))} → ${escapeHtml(formatDate(sample.finished_at))}</dd></div><div><dt>账号绑定</dt><dd>${escapeHtml(sample.account_ref || '未记录')} · ${escapeHtml(sample.account_evidence || '未记录绑定证据')}</dd></div><div><dt>样本 ID</dt><dd>${escapeHtml(sample.sample_id)}</dd></div></dl>
-        ${evidence('原始回答', sample.text || sample.response || sample.raw_response)}${evidence('评分结果', sample.grade)}${evidence('Tool trace', sample.tool_trace)}${evidence('用量记录（包含重试）', sample.usage)}${evidence('本次尝试用量 / 费用', sample.latest_attempt_usage || sample.latest_attempt_cost_usd !== undefined ? { usage: sample.latest_attempt_usage ?? null, estimated_cost_usd: sample.latest_attempt_cost_usd ?? null } : null)}${evidence('历次尝试（原始记录）', sample.attempts)}${evidence('完整样本证据', sample)}
-      </div></details>`;
-    };
-    const attention = samples.filter(
-      sample =>
-        (sample.status !== 'completed' && !['pending', 'queued', 'running'].includes(sample.status)) ||
-        (sample.status === 'completed' && !validScore(sample))
-    );
-    const openSamples = new Set([...(container.querySelectorAll?.('[data-sample-id][open]') || [])].map(node => node.dataset.sampleId));
-    const allKey = escapeHtml(`${run.id}:all-samples`);
     replaceHistoryMarkup(
       container,
-      `${summary}${run.stop_reason && run.stop_reason !== 'api_failure' ? `<p class="item-error">停止原因：${escapeHtml(stopReasonText(run.stop_reason))}</p>` : ''}${matrix}${
-        matrix
-          ? `<p class="sample-matrix-legend">${[
-              ['full', '1', '满分'],
-              ['partial', '0.5', '部分得分'],
-              ['zero', '0', '零分'],
-              ['timeout', '超时', '超时（0分/可重试）'],
-              ['unscored', '无分', '答案不可评分'],
-              ['failed', '失败', 'API 失败'],
-              ['interrupted', '中断', '已中断'],
-              ['cancelled', '取消', '已取消'],
-              ['running', '运行', '运行中'],
-              ['pending', '…', '待执行']
-            ]
-              .filter(([tone]) => samples.some(sample => sampleTone(sample) === tone))
-              .map(([tone, cell, label]) => `<span class="sample-cell is-${tone}">${cell}</span>${label}`)
-              .join('')} · 点击格子查看样本</p>`
-          : ''
-      }${attention.length ? `<h3 class="sample-section-title">需要关注的样本（${attention.length}）</h3>${attention.map(sampleRow).join('')}` : ''}<details class="raw-block sample-all" data-history-disclosure="${allKey}"><summary data-history-focus="${allKey}">全部 ${samples.length} 个样本详情</summary>${samples
-        .filter(sample => !attention.includes(sample))
-        .map(sampleRow)
-        .join('')}</details>${jsonBlock('预算状态（估算而非账单）', run.budget)}`
+      `${retryBannerHtml}${targetBanner}${runKpiStrip}${diagBarHtml}${matrix}${matrix ? '<p class="sample-matrix-tip">点击任意格子展开评分详情、完整对话轨迹与跨轮对比</p>' : ''}${techMetaHtml}`
     );
-    for (const node of container.querySelectorAll?.('[data-sample-id]') || []) if (openSamples.has(node.dataset.sampleId)) node.open = true;
   }
   function placeRunSection() {
     if (!state.selectedRunId) {
@@ -1481,18 +2137,19 @@ export function createTaskHistoryView({ app, state, retryRequests, retrying, bas
     }
     const list = element('bench-run-list');
     const taskDetail = element('bench-task-detail');
-    const allRuns = taskDetail.querySelector?.('details.task-all-runs');
-    const previewSlot =
-      allRuns && !allRuns.open
-        ? [...(taskDetail.querySelectorAll?.('[data-preview-model-slot]') || [])].find(slot =>
-            (slot.dataset?.previewRunIds || '').split(',').includes(state.selectedRunId)
-          )
-        : null;
+    const previewSlot = [...(taskDetail.querySelectorAll?.('[data-preview-run-ids]') || [])].find(slot =>
+      String(slot.dataset?.previewRunIds || '')
+        .split(',')
+        .includes(state.selectedRunId)
+    );
     const runSlot =
-      previewSlot ||
       taskDetail.querySelector?.('[data-inline-run="' + state.selectedRunId + '"]') ||
+      previewSlot ||
       list.querySelector?.('[data-inline-run="' + state.selectedRunId + '"]');
-    if (allRuns && !allRuns.open && !previewSlot && runSlot && allRuns.contains?.(runSlot)) allRuns.open = true;
+    if (!runSlot) {
+      runSection.hidden = true;
+      return;
+    }
     moveHistorySection(runSlot, runSection);
     runSection.hidden = false;
   }
@@ -1530,13 +2187,13 @@ export function createTaskHistoryView({ app, state, retryRequests, retrying, bas
     }
   }
 
-  element('bench-task-detail').addEventListener(
-    'toggle',
-    event => {
-      if (event.target?.classList?.contains?.('task-all-runs') && state.selectedRunId) placeRunSection();
-    },
-    true
-  );
+  element('bench-task-detail').addEventListener('click', event => {
+    const filterBtn = event.target?.closest?.('[data-task-run-filter]');
+    if (!filterBtn || !state.selectedTaskId) return;
+    event.stopPropagation?.();
+    taskFilterByTask.set(state.selectedTaskId, filterBtn.dataset.taskRunFilter === 'anomaly' ? 'anomaly' : 'all');
+    renderDetails();
+  });
 
   element('bench-run-detail').addEventListener(
     'toggle',
@@ -1547,17 +2204,89 @@ export function createTaskHistoryView({ app, state, retryRequests, retrying, bas
   );
 
   element('bench-run-detail').addEventListener('click', event => {
+    const run = state.runDetail;
+    if (!run?.id) return;
+    const inspector = getInspectorState(run.id);
     const cell = event.target.closest?.('[data-open-sample]');
-    if (!cell) return;
-    const target = [...element('bench-run-detail').querySelectorAll('details[data-sample-id]')].find(
-      node => node.dataset.sampleId === cell.dataset.openSample
-    );
-    if (!target) return;
-    const parent = target.parentElement?.closest('details');
-    if (parent) parent.open = true;
-    target.open = true;
-    target.scrollIntoView?.({ block: 'nearest' });
-    target.querySelector('summary')?.focus({ preventScroll: true });
+    if (cell) {
+      const sampleId = cell.dataset.openSample;
+      if (inspector.sampleId === sampleId) {
+        inspector.sampleId = null;
+        inspector.tab = null;
+        inspector.attemptId = null;
+      } else {
+        inspector.sampleId = sampleId;
+        inspector.tab = null;
+        inspector.showAllFields = false;
+        inspector.showPrompt = false;
+        inspector.attemptId = null;
+      }
+      renderDetails();
+      const panel = element('bench-run-detail').querySelector?.('.sample-inline-inspector');
+      panel?.scrollIntoView?.({ block: 'nearest' });
+      return;
+    }
+    if (event.target.closest?.('[data-si-close]')) {
+      inspector.sampleId = null;
+      inspector.tab = null;
+      inspector.attemptId = null;
+      renderDetails();
+      return;
+    }
+    const switchBtn = event.target.closest?.('[data-si-switch-sample]');
+    if (switchBtn) {
+      const nextId = switchBtn.dataset.siSwitchSample;
+      inspector.sampleId = nextId;
+      if (inspector.tab === 'compare') inspector.tab = null;
+      inspector.showAllFields = false;
+      inspector.attemptId = null;
+      renderDetails();
+      return;
+    }
+    const tabBtn = event.target.closest?.('[data-si-tab]');
+    if (tabBtn) {
+      inspector.tab = tabBtn.dataset.siTab;
+      renderDetails();
+      return;
+    }
+    const fieldsBtn = event.target.closest?.('[data-si-fields]');
+    if (fieldsBtn) {
+      inspector.showAllFields = fieldsBtn.dataset.siFields === 'all';
+      renderDetails();
+      return;
+    }
+    if (event.target.closest?.('[data-si-toggle-prompt]')) {
+      inspector.showPrompt = !inspector.showPrompt;
+      renderDetails();
+      return;
+    }
+    const attemptBtn = event.target.closest?.('[data-si-attempt]');
+    if (attemptBtn) {
+      inspector.attemptId = attemptBtn.dataset.siAttempt;
+      renderDetails();
+      return;
+    }
+    const filterBtn = event.target.closest?.('[data-matrix-filter]');
+    if (filterBtn) {
+      inspector.matrixFilter = filterBtn.dataset.matrixFilter === 'anomaly' ? 'anomaly' : 'all';
+      renderDetails();
+      return;
+    }
+    const stepBtn = event.target.closest?.('[data-matrix-step]');
+    if (stepBtn) {
+      const anomalies = Array.isArray(inspector.anomalyOrder) ? inspector.anomalyOrder : [];
+      if (!anomalies.length) return;
+      const curIdx = anomalies.indexOf(inspector.sampleId);
+      const dir = stepBtn.dataset.matrixStep === 'prev' ? -1 : 1;
+      const nextIdx = curIdx < 0 ? (dir > 0 ? 0 : anomalies.length - 1) : (curIdx + dir + anomalies.length) % anomalies.length;
+      inspector.sampleId = anomalies[nextIdx];
+      inspector.tab = null;
+      inspector.showAllFields = false;
+      inspector.attemptId = null;
+      renderDetails();
+      const panel = element('bench-run-detail').querySelector?.('.sample-inline-inspector');
+      panel?.scrollIntoView?.({ block: 'nearest' });
+    }
   });
   element('bench-run-list').addEventListener('click', event => {
     const more = event.target?.closest?.('[data-history-show-more]');

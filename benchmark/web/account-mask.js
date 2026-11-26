@@ -83,7 +83,7 @@ const PURE_ACCOUNT_SELECTOR = [
   '.dp-acc-cell > .dp-acc-cell-name',
   '.dp-acc-pill:not(.dp-acc-auto) > .dp-acc-id',
   '.dp-acc-cell > .dp-acc-id',
-  '.task-thinking-lane .task-preview-chip-label',
+  '.task-run-account:not(.is-auto)',
   '.af-facet[data-facet="account"] .af-option-primary',
   '.insight-account'
 ].join(', ');
@@ -345,7 +345,7 @@ export function createAccountMasker({
       if (chip) return isSystemAccountText(chip[1]) ? [] : [[0, chip[1].length]];
     }
     if (element.matches('.task-preview-stats')) {
-      const lead = /^(.+?)(?=\s·\s\d+\/\d+\s*样本)/.exec(text);
+      const lead = /^(.+?)(?=\s·\s\d+\/\d+\s*完成)/.exec(text);
       return lead && !isSystemAccountText(lead[1]) ? [[0, lead[1].length]] : [];
     }
     if (element.matches('.analysis-history-option > span > span')) {

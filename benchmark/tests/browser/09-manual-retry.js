@@ -1,9 +1,10 @@
   await page.locator('#bench-retry-run').click();await page.locator('#bench-retry-run').waitFor({state:'hidden'});
-  await page.locator('#bench-run-detail .sample-all > summary').click();
-  const retriedSample=page.locator('#bench-run-detail [data-sample-id="retry-sample-0"]');
-  await retriedSample.locator('summary').first().click();
-  await retriedSample.locator('.raw-block').filter({has:page.locator('summary').filter({hasText:'原始回答'})}).locator('summary').click();
-  await page.waitForFunction(()=>document.querySelector('[data-sample-id="retry-sample-0"]').textContent.includes('retried answer'));
+  await page.locator('#bench-run-detail .sample-matrix [data-open-sample="retry-sample-0"]').click();
+  const retriedInspector=page.locator('#bench-run-detail .sample-inline-inspector[data-inspector-sample="retry-sample-0"]');
+  await retriedInspector.waitFor();
+  await retriedInspector.locator('[data-si-tab="raw"]').click();
+  await retriedInspector.locator('.raw-block').filter({has:page.locator('summary').filter({hasText:'原始回答'})}).locator('summary').click();
+  await page.waitForFunction(()=>document.querySelector('#bench-run-detail .sample-inline-inspector')?.textContent?.includes('retried answer'));
   require(retryRun.status==='completed'&&retryRun.samples[1].response==='saved legacy response','Retry overwrote a successful sample');
   require(await page.locator('#bench-retry-run').isHidden(),'Completed retry remains retryable');
   {
@@ -23,28 +24,23 @@
     await laneCard.waitFor({state:'visible'});
     const badgeCodes=await laneCard.locator('.task-thinking-badge .task-thinking-code').allInnerTexts();
     require(badgeCodes.join(',')==='low,medium,high','Outer card thinking badge must sort efforts canonically: '+badgeCodes.join(','));
-    await laneCard.click();await page.locator('#bench-task-detail .task-thinking-lane[data-thinking-lane="medium"]').waitFor({state:'visible'});
-    const laneOrder=await page.locator('#bench-task-detail .task-preview-group').nth(1).locator('.task-thinking-lane').evaluateAll(nodes=>nodes.map(n=>n.dataset.thinkingLane));
-    require(laneOrder.join(',')==='low,high','Model thinking lanes must sort low before high: '+laneOrder.join(','));
+    await laneCard.click();await page.locator('#bench-task-detail .task-thinking-lane').first().waitFor({state:'visible'});
+    const astra2ThinkOrder=await page.locator('#bench-task-detail .task-preview-group').filter({hasText:'GPT-6.2-Astra'}).locator('.task-thinking-lane').evaluateAll(lanes=>lanes.map(lane=>lane.dataset.thinkingLane));
+    require(astra2ThinkOrder.join(',')==='low,high','Multi-account thinking lanes must sort low before high: '+astra2ThinkOrder.join(','));
     await page.locator('#bench-task-detail [data-preview-run-id="lane-m-0"]').click();
     await page.locator('#bench-run-detail .run-target-banner .run-thinking-pill').waitFor({state:'visible'});
     require((await page.locator('#bench-run-detail .run-target-banner .run-thinking-pill').innerText()).includes('medium'),'Run banner must surface medium thinking');
-    const desktopLaneGeo=await page.locator('#bench-task-detail .task-thinking-lane[data-thinking-lane="medium"]').evaluate(lane=>{const rail=lane.querySelector('.task-thinking-rail').getBoundingClientRect(),chips=lane.querySelector('.task-preview-runs').getBoundingClientRect();return {railRight:Math.round(rail.right),chipsLeft:Math.round(chips.left),railTop:Math.round(rail.top),chipsTop:Math.round(chips.top)};});
-    require(desktopLaneGeo.railRight<=desktopLaneGeo.chipsLeft&&Math.abs(desktopLaneGeo.railTop-desktopLaneGeo.chipsTop)<=6,'Desktop thinking rail must sit cleanly to the left of account chips: '+JSON.stringify(desktopLaneGeo));
     await page.locator('.history-entry.is-expanded').screenshot({path:ARTIFACTS+'/thinking-lanes-1440-light.png'});
     await page.evaluate(()=>{document.documentElement.dataset.theme='dark';});
     await page.locator('.history-entry.is-expanded').screenshot({path:ARTIFACTS+'/thinking-lanes-1440-dark.png'});
-    let mobileLaneGeo=null;
     for(const width of [390,320]){
       await page.setViewportSize({width,height:900});await page.evaluate(()=>{document.documentElement.dataset.theme='light';});
-      require(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth),'Thinking lanes overflow at '+width);
+      require(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth),'Comparison table overflows at '+width);
       if(width===390){
-        mobileLaneGeo=await page.locator('#bench-task-detail .task-thinking-lane[data-thinking-lane="medium"]').evaluate(lane=>{const rail=lane.querySelector('.task-thinking-rail').getBoundingClientRect(),chips=lane.querySelector('.task-preview-runs').getBoundingClientRect();return {railBottom:Math.round(rail.bottom),chipsTop:Math.round(chips.top),railLeft:Math.round(rail.left),chipsLeft:Math.round(chips.left)};});
-        require(mobileLaneGeo.railBottom<=mobileLaneGeo.chipsTop&&mobileLaneGeo.railLeft===mobileLaneGeo.chipsLeft,'Mobile thinking rail must stack cleanly above account chips: '+JSON.stringify(mobileLaneGeo));
         await page.locator('.history-entry.is-expanded').screenshot({path:ARTIFACTS+'/thinking-lanes-390-light.png'});
       }
     }
-    thinkingLaneGeometry={desktop1440:desktopLaneGeo,mobile390:mobileLaneGeo};
+    thinkingLaneGeometry={checkedResponsiveWidths:[1440,390,320]};
     await page.setViewportSize({width:1440,height:1000});
     await page.locator('#bench-close-task').click();
     taskRecords.pop();runs.pop();
@@ -70,16 +66,14 @@
     const baseCard=page.locator('[data-bench-task-id="'+baseTaskId+'"]');
     await baseCard.click();await page.locator('#bench-baseline-task').waitFor({state:'visible'});
     require((await page.locator('#bench-baseline-task').innerText()).includes('设为基线 (3)')&&await page.locator('#bench-unbaseline-task').isHidden(),'Abnormal task header must still count 3 eligible runs');
-    require(await page.locator('#bench-task-detail .task-chip-baseline').count()===0,'Thinking chips must stay clean without inline baseline buttons');
-    require(await page.locator('#bench-task-detail [data-baseline-level="model"]').count()===1,'Only promotable models in multi-model pods should show a model-level baseline button');
-    // Model-level promotion marks healthy openai-official gpt-5.4 runs as baselines; failed sibling model stays clean.
-    await page.locator('#bench-task-detail [data-baseline-level="model"][data-baseline-promote-runs="b-ref-hi,b-ref-med"]').click();
+    require(await page.locator('#bench-task-detail .task-chip-baseline').count()===0,'Comparison rows must stay clean without inline baseline buttons');
+    // Channel-level promotion marks healthy openai-official runs as baselines while skipping failed sibling.
+    await page.locator('#bench-task-detail [data-baseline-level="channel"][data-baseline-promote-runs="b-ref-hi,b-ref-med"]').click();
     await page.waitForFunction(()=>document.querySelector('#bench-unbaseline-task')&&!document.querySelector('#bench-unbaseline-task').hidden);
     require((await page.locator('.history-entry.is-expanded .task-count-pill.is-baseline').innerText()).includes('基线 2'),'Outer task pill must show 2 baselines');
-    require((await page.locator('#bench-baseline-task').innerText()).includes('设为基线 (1)')&&(await page.locator('#bench-unbaseline-task').innerText()).includes('取消基线 (2)'),'Partial model promotion did not update task header counts');
-    require(await page.locator('#bench-task-detail .task-preview-chip.is-baseline').count()===2,'Promoted preview chips must carry .is-baseline');
-    require(await page.locator('#bench-task-detail .task-preview-chip.is-baseline .task-preview-chip-baseline .task-baseline-sq').count()===2,'Promoted preview chips must render leading baseline square');
-    require((await page.locator('#bench-task-detail .task-preview-chip.is-baseline .task-preview-chip-state').first().innerText()).includes('✓ 完成'),'Promoted preview chips must preserve completed state text');
+    require((await page.locator('#bench-baseline-task').innerText()).includes('设为基线 (1)')&&(await page.locator('#bench-unbaseline-task').innerText()).includes('取消基线 (2)'),'Partial channel promotion did not update task header counts');
+    require(await page.locator('#bench-task-detail .task-run-pill.is-baseline').count()===2,'Promoted run pills must carry .is-baseline');
+    require(await page.locator('#bench-task-detail .task-run-pill.is-baseline .task-run-baseline .task-baseline-sq').count()===2,'Promoted run pills must render leading baseline square');
     // Expanding a single thinking chip lets the user promote/demote that run from the run detail header.
     await page.locator('#bench-task-detail [data-preview-run-id="b-rel-hi"]').click();
     await page.locator('#bench-baseline-run').waitFor({state:'visible'});

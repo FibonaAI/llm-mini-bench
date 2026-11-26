@@ -661,7 +661,7 @@ export function make_handler(service: BenchService, web_dir?: string): (request:
                 }
                 if (request.method === 'POST' && path === '/api/bench/runs')
                     return json(202, { id: await execution.start_run(await requestBody(request)) });
-                const match = path.match(/^\/api\/bench\/runs\/([0-9a-f]{32})(\/cancel|\/retry|\/baseline|\/calls)?$/);
+                const match = path.match(/^\/api\/bench\/runs\/([0-9a-f]{32})(\/cancel|\/retry|\/baseline|\/calls|\/events)?$/);
                 if (match) {
                     const id = match[1]!;
                     if (request.method === 'GET' && match[2] === '/calls') {
@@ -671,6 +671,22 @@ export function make_handler(service: BenchService, web_dir?: string): (request:
                             (execution.get_run !== BenchExecutionService.prototype.get_run && Boolean(execution.get_run(id)));
                         if (!exists) return json(404, { error: 'run not found' });
                         return json(200, { calls: execution.read_run_call_summaries(id) ?? [] });
+                    }
+                    if (request.method === 'GET' && match[2] === '/events') {
+                        const execution = service.bench_execution();
+                        const exists =
+                            execution.has_run(id) ||
+                            (execution.get_run !== BenchExecutionService.prototype.get_run && Boolean(execution.get_run(id)));
+                        if (!exists) return json(404, { error: 'run not found' });
+                        const params = new URL(request.url).searchParams;
+                        const sampleId = params.get('sample_id')?.trim() ?? '';
+                        if (!sampleId) return json(400, { error: 'sample_id is required' });
+                        const attemptId = params.get('attempt_id')?.trim() || undefined;
+                        const events =
+                            typeof execution.read_sample_session_events === 'function'
+                                ? (execution.read_sample_session_events(id, sampleId, attemptId) ?? [])
+                                : (execution.read_run_session_events(id, attemptId)?.filter(event => event.sample_id === sampleId) ?? []);
+                        return json(200, { sample_id: sampleId, events });
                     }
                     if (request.method === 'GET' && !match[2]) {
                         const omitProvenance = new URL(request.url).searchParams.get('omit_provenance') === '1';
