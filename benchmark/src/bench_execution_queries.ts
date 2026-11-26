@@ -1,4 +1,6 @@
 import type { ExecutionRun, ExecutionTaskState } from './bench_execution.ts';
+import { RATE_LIMIT_ERROR_CODES } from './assessment_runner.ts';
+import { sent_no_request_attempt } from './assessment_observations.ts';
 
 type RecordValue = Record<string, unknown>;
 const clone = <T>(value: T): T => structuredClone(value);
@@ -11,19 +13,63 @@ export function is_timeout_sample(sample: RecordValue): boolean {
     return sample.status === 'api_failure' && sample.runner_error === 'SampleTimeout';
 }
 
+/**
+ * Fast-fail stop reasons: after a sample exhausts its API retries on one of these HTTP statuses (or a
+ * streamed `response.failed` with a rate-limit/quota code, treated as 429), every remaining sample of
+ * the same route (model + account binding) is left unsent rather than repeating a rejection that the
+ * route is almost certainly going to return again.
+ */
+export const FAST_FAIL_HTTP_STATUS_REASONS: Readonly<Record<number, string>> = {
+    401: 'access_denied',
+    402: 'payment_required',
+    403: 'access_denied',
+    404: 'model_not_found',
+    429: 'rate_limited'
+};
+export const FAST_FAIL_STOP_REASONS: ReadonlySet<string> = new Set(Object.values(FAST_FAIL_HTTP_STATUS_REASONS));
+const RETRYABLE_NOT_ADMITTED_STOP_REASONS = new Set(['transport_failure', 'missing_usage_cost', 'cancelled', ...FAST_FAIL_STOP_REASONS]);
+
+/**
+ * Classify one finished sample observation. Only an exhausted API failure (or an upstream abort after a
+ * valid submission) whose last response is a route-level rejection triggers fast-fail; whole-sample
+ * timeouts, 5xx and transport errors never do.
+ */
+export function fast_fail_stop_reason(observation: RecordValue): string | null {
+    const status = observation.last_http_status,
+        code = observation.last_error_code;
+    const reason =
+        typeof status === 'number' && Object.hasOwn(FAST_FAIL_HTTP_STATUS_REASONS, status)
+            ? FAST_FAIL_HTTP_STATUS_REASONS[status]!
+            : typeof code === 'string' && RATE_LIMIT_ERROR_CODES.has(code)
+              ? 'rate_limited'
+              : null;
+    if (reason === null || observation.runner_error === 'SampleTimeout') return null;
+    const submission = observation.answer_submission as RecordValue | null | undefined;
+    const failedAfterSubmission =
+        observation.status === 'completed' &&
+        typeof submission === 'object' &&
+        submission !== null &&
+        submission.ended_after_submission === 'api_failure';
+    if (observation.status !== 'api_failure' && !failedAfterSubmission) return null;
+    return reason;
+}
+
+/** Ordinary manual retry covers API failures, timeouts, interruptions, cancellations and samples left unsent by a retryable stop. */
+export function is_retryable_sample(sample: RecordValue, run_stop_reason: string | null | undefined): boolean {
+    return (
+        sample.status === 'api_failure' ||
+        is_timeout_sample(sample) ||
+        sample.status === 'interrupted' ||
+        sample.status === 'cancelled' ||
+        (sample.status === 'budget_not_admitted' && RETRYABLE_NOT_ADMITTED_STOP_REASONS.has(run_stop_reason ?? ''))
+    );
+}
+
 /** Retry eligibility is a projection only; coordinator admission still rechecks every condition. */
 export function execution_retryable_samples(run: ExecutionRun): number {
     // Imported calibration journals have no route identity and are never retried.
     if (run.execution_kind === 'calibration-import-v1') return 0;
-    return run.samples.filter(
-        sample =>
-            sample.status === 'api_failure' ||
-            is_timeout_sample(sample) ||
-            sample.status === 'interrupted' ||
-            sample.status === 'cancelled' ||
-            (sample.status === 'budget_not_admitted' &&
-                ['transport_failure', 'missing_usage_cost', 'cancelled'].includes(run.stop_reason ?? ''))
-    ).length;
+    return run.samples.filter(sample => is_retryable_sample(sample, run.stop_reason)).length;
 }
 
 /** Result quality is a read-only projection, never a replacement for grading or cumulative usage. */
@@ -48,9 +94,9 @@ export function execution_result_quality(run: ExecutionRun) {
         if (!knownCost(score) || score > 1) quality.unscored_samples++;
         if (!knownUsage(sample.usage)) quality.unknown_usage_samples++;
         if (!knownCost(sample.estimated_uncached_cost_usd)) quality.unknown_cost_samples++;
-        // Attempts that sent no request (empty calls) consumed nothing and are never unknown.
+        // Attempts that sent no request consumed nothing and are never unknown (same rule as observation accounting).
         const attempts = ((Array.isArray(sample.attempts) ? sample.attempts : []) as RecordValue[]).filter(
-            attempt => !(Array.isArray(attempt.calls) && attempt.calls.length === 0)
+            attempt => !sent_no_request_attempt(attempt)
         );
         if (
             attempts.some(

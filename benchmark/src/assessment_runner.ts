@@ -255,14 +255,23 @@ export class AssessmentJournal implements AssessmentJournalWriter {
 export function retryable_api_status(status: number): boolean {
     return status === -1 || status === 408 || status === 429 || (status >= 500 && status <= 599);
 }
+/** Streamed `response.failed` error codes that mean the route is rate limited or out of quota; handled like HTTP 429. */
+export const RATE_LIMIT_ERROR_CODES: ReadonlySet<string> = new Set(['rate_limit_exceeded', 'insufficient_quota']);
+/** Upstream error code from a failed response payload, bounded for evidence; null when absent. */
+export function upstream_error_code(payload: Record<string, unknown>): string | null {
+    const error = payload.error;
+    return record(error) && typeof error.code === 'string' && error.code.length ? error.code.slice(0, 80) : null;
+}
 /**
  * A streamed HTTP 200 can still end in `response.failed`. Upstream `server_error` (e.g. a gateway
- * losing its connection mid-reply) is transient like a 5xx; other failure codes are not retried.
+ * losing its connection mid-reply) is transient like a 5xx, and rate-limit/quota codes are retried
+ * like HTTP 429; other failure codes are not retried.
  */
 export function retryable_api_response(status: number, payload: Record<string, unknown>): boolean {
     if (retryable_api_status(status)) return true;
-    const error = payload.error;
-    return status === 200 && payload.status === 'failed' && record(error) && error.code === 'server_error';
+    if (status !== 200 || payload.status !== 'failed') return false;
+    const code = upstream_error_code(payload);
+    return code === 'server_error' || (code !== null && RATE_LIMIT_ERROR_CODES.has(code));
 }
 /** Backoff remains cancellable without resending any request after cancellation. */
 async function wait_api_retry(milliseconds: number, cancelled?: () => boolean): Promise<void> {
@@ -317,7 +326,8 @@ export async function run_assessment_sample(
         grade: RunnerGrade | null = null,
         outcome = 'turn_limit',
         local_error: string | null = null;
-    let last_http_status: number | null = null;
+    let last_http_status: number | null = null,
+        last_error_code: string | null = null;
     const seen = new Set<string>();
     sampleTurns: for (let turn = 1; turn <= (config.max_turns ?? Infinity); turn++) {
         if (expired()) {
@@ -397,6 +407,7 @@ export async function run_assessment_sample(
             apiFailed = status !== 200;
             last_http_status = status;
             payload = record(raw) ? raw : { error: 'non-object response', received: raw ?? null };
+            last_error_code = upstream_error_code(payload);
             const cost = budget.settle(reservation, payload, pricing, outputCap, status === -1, retryPolicy);
             turnCost = cost;
             journal.write({
@@ -637,7 +648,12 @@ export async function run_assessment_sample(
             submissions,
             ended_after_submission
         };
-    if (config.max_api_retries !== undefined) Object.assign(observation, { api_request_count: calls.length, last_http_status });
+    if (config.max_api_retries !== undefined)
+        Object.assign(observation, {
+            api_request_count: calls.length,
+            last_http_status,
+            ...(last_error_code !== null ? { last_error_code } : {})
+        });
     journal.write(observation);
     console.log(task.id, target.model, target.thinking, round_number, outcome, grade?.content_score ?? null);
     return observation;

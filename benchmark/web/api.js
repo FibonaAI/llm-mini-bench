@@ -96,7 +96,7 @@
       cancelling: '取消中',
       cancelled: '已取消',
       interrupted: '已中断',
-      budget_not_admitted: '预算未准入',
+      budget_not_admitted: '未执行',
       storage_error: '存储错误',
       failed: 'API 失败',
       api_failure: 'API 失败',

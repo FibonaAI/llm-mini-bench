@@ -18,6 +18,8 @@ import {
     execution_retryable_samples,
     execution_run_summary,
     execution_task_summary,
+    fast_fail_stop_reason,
+    is_retryable_sample,
     is_timeout_sample
 } from './bench_execution_queries.ts';
 export { EXECUTION_SOURCE_PATHS } from './assessment_provenance.ts';
@@ -141,6 +143,8 @@ interface RunRuntime {
     journal: SessionJournal;
     dirty: boolean;
     dirty_samples: Set<string>;
+    /** Route ID -> fast-fail stop reason observed by this run; its blocked samples were left unsent. */
+    fast_fail: Map<string, string>;
 }
 interface SampleDispatch {
     run_id: string;
@@ -299,6 +303,8 @@ export class BenchExecutionService {
     private readonly task_last_admitted_run = new Map<string, string>();
     readonly _account_active = new Map<string, number>();
     readonly _account_limits = new Map<string, number>();
+    /** Service-wide fast-fail blocks (route ID -> stop reason); in memory only, so a restart clears them. */
+    private readonly route_blocks = new Map<string, string>();
     retry_wait?: (milliseconds: number, cancelled?: () => boolean) => Promise<void>;
     _active = 0;
     _closing = false;
@@ -1106,7 +1112,8 @@ export class BenchExecutionService {
                 [...bindings.values()].flatMap(route => [route.api_key, route.base_url.replace(/\/+$/, ''), route.api_key_env ?? ''])
             ),
             dirty: false,
-            dirty_samples: new Set()
+            dirty_samples: new Set(),
+            fast_fail: new Map()
         };
         return { run, runtime };
     }
@@ -1298,14 +1305,7 @@ export class BenchExecutionService {
         if (this._closing || this._runtime.has(id) || !TERMINAL_RUN_STATUSES.has(loaded.status))
             throw new TypeError('Run is still active or service unavailable');
         const eligible = loaded.samples.filter(sample =>
-            policy === 'sample-timeout-v1'
-                ? sample.status !== 'completed'
-                : sample.status === 'api_failure' ||
-                  is_timeout_sample(sample) ||
-                  sample.status === 'interrupted' ||
-                  sample.status === 'cancelled' ||
-                  (sample.status === 'budget_not_admitted' &&
-                      ['transport_failure', 'missing_usage_cost', 'cancelled'].includes(loaded.stop_reason ?? ''))
+            policy === 'sample-timeout-v1' ? sample.status !== 'completed' : is_retryable_sample(sample, loaded.stop_reason)
         );
         if (!eligible.length) throw new TypeError(policy ? 'No unfinished samples to rerun' : 'No API-failed samples to retry');
         const latestLimits = batches.at(-1)?.limits;
@@ -1333,14 +1333,7 @@ export class BenchExecutionService {
         if (this._closing || this._runtime.has(id) || !TERMINAL_RUN_STATUSES.has(run.status))
             throw new TypeError('Run retry already active or service closing');
         const currentEligible = run.samples.filter(sample =>
-            policy === 'sample-timeout-v1'
-                ? sample.status !== 'completed'
-                : sample.status === 'api_failure' ||
-                  is_timeout_sample(sample) ||
-                  sample.status === 'interrupted' ||
-                  sample.status === 'cancelled' ||
-                  (sample.status === 'budget_not_admitted' &&
-                      ['transport_failure', 'missing_usage_cost', 'cancelled'].includes(run.stop_reason ?? ''))
+            policy === 'sample-timeout-v1' ? sample.status !== 'completed' : is_retryable_sample(sample, run.stop_reason)
         );
         if (!currentEligible.length) throw new TypeError(policy ? 'No unfinished samples to rerun' : 'No API-failed samples to retry');
         for (const target of run.plan.targets) {
@@ -1429,7 +1422,8 @@ export class BenchExecutionService {
                 last_target_id: null,
                 journal,
                 dirty: false,
-                dirty_samples: new Set()
+                dirty_samples: new Set(),
+                fast_fail: new Map()
             };
             run.budget = budget.snapshot();
             this._runs.set(id, run);
@@ -1449,6 +1443,8 @@ export class BenchExecutionService {
             }
             this._runtime.set(id, runtime);
             this.update_active_index(run);
+            // An explicit manual retry is the user's decision to try the route again.
+            for (const target of run.plan.targets) this.route_blocks.delete(target.route_id);
             for (const route of prepared.bindings.values())
                 this._account_limits.set(
                     route.account_ref,
@@ -1576,7 +1572,7 @@ export class BenchExecutionService {
             const runtime = this._runtime.get(childId),
                 run = this._runs.get(childId);
             if (!runtime || !run || runtime.cancel.value || runtime.budget.stop_reason) continue;
-            if (!run.samples.some(sample => sample.status === 'pending')) continue;
+            if (!run.samples.some(sample => sample.status === 'pending' && !this.route_block(sample.route_id))) continue;
             const target = run.plan.targets[0]!;
             const channelCount = channelCounts.get(this.target_channel_key(target)) ?? 0;
             const routeCount = routeCounts.get(target.route_id) ?? 0;
@@ -1598,9 +1594,17 @@ export class BenchExecutionService {
                     run = this._runs.get(id)!;
                 const cancelled = runtime.cancel.value,
                     stop = runtime.budget.stop_reason;
-                if (cancelled || stop)
-                    for (const sample of run.samples)
-                        if (sample.status === 'pending') sample.status = cancelled ? 'cancelled' : 'budget_not_admitted';
+                for (const sample of run.samples) {
+                    if (sample.status !== 'pending') continue;
+                    const blocked = cancelled || stop ? null : this.route_block(sample.route_id);
+                    if (blocked) runtime.fast_fail.set(sample.route_id, blocked);
+                    if (cancelled || stop || blocked) {
+                        sample.status = cancelled ? 'cancelled' : 'budget_not_admitted';
+                        runtime.dirty = true;
+                        runtime.dirty_samples.add(sample.sample_id);
+                    }
+                }
+                const fastFail = runtime.fast_fail.size ? runtime.fast_fail.values().next().value! : null;
                 const pending = run.samples.filter(sample => sample.status === 'pending');
                 if (!pending.length && !runtime.active) {
                     run.status =
@@ -1623,6 +1627,7 @@ export class BenchExecutionService {
                             : run.status === 'completed'
                               ? null
                               : stop ||
+                                fastFail ||
                                 (run.status === 'failed' ? 'api_failure' : run.status === 'incomplete' ? 'capability_or_limit' : null);
                     runtime.dirty = false;
                     runtime.dirty_samples.clear();
@@ -1813,6 +1818,8 @@ export class BenchExecutionService {
                 latest_attempt_usage: observation.usage,
                 latest_attempt_cost_usd: observation.estimated_uncached_cost_usd
             });
+            const fastFail = fast_fail_stop_reason(observation);
+            if (fastFail) this.block_route(sample.route_id, fastFail);
         } catch (error) {
             Object.assign(sample, {
                 status: 'worker_error',
@@ -1837,6 +1844,20 @@ export class BenchExecutionService {
             this._revision++;
             this.schedule();
         }
+    }
+    /**
+     * After a sample exhausts its retries on a route-level rejection (rate limit, auth/quota or missing model),
+     * no new sample of that route (same model and account binding) starts in any run or task, including tasks
+     * created later; in-flight samples finish normally. The block never expires on its own: the in-sample API
+     * retries already absorb transient errors, so it lasts until an explicit manual retry of a run on that
+     * route or a service restart.
+     */
+    private block_route(routeId: string, reason: string): void {
+        if (!this.route_blocks.has(routeId)) this.route_blocks.set(routeId, reason);
+    }
+    /** Active fast-fail block reason for a route, or null if none. */
+    private route_block(routeId: string): string | null {
+        return this.route_blocks.get(routeId) ?? null;
     }
     async close(wait = true): Promise<void> {
         this._closing = true;
