@@ -84,6 +84,10 @@ test('fast-fail classifies only exhausted route-level rejections', () => {
     );
     expect(fast_fail_stop_reason({ status: 'api_failure', last_http_status: 200, last_error_code: 'server_error' })).toBeNull();
     expect(fast_fail_stop_reason({ status: 'api_failure', last_http_status: 200, last_error_code: 'invalid_prompt' })).toBeNull();
+    // A 5xx or transport failure carrying a rate-limit code stays transient and never blocks the route.
+    for (const status of [500, 503, -1])
+        for (const code of ['rate_limit_exceeded', 'insufficient_quota'])
+            expect(fast_fail_stop_reason({ status: 'api_failure', last_http_status: status, last_error_code: code })).toBeNull();
     expect(
         fast_fail_stop_reason({ status: 'completed', last_http_status: 429, answer_submission: { ended_after_submission: 'api_failure' } })
     ).toBe('rate_limited');

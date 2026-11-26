@@ -40,7 +40,8 @@ export function fast_fail_stop_reason(observation: RecordValue): string | null {
     const reason =
         typeof status === 'number' && Object.hasOwn(FAST_FAIL_HTTP_STATUS_REASONS, status)
             ? FAST_FAIL_HTTP_STATUS_REASONS[status]!
-            : typeof code === 'string' && RATE_LIMIT_ERROR_CODES.has(code)
+            : // Only a streamed HTTP 200 `response.failed` code counts; a 5xx carrying the same code stays transient.
+              status === 200 && typeof code === 'string' && RATE_LIMIT_ERROR_CODES.has(code)
               ? 'rate_limited'
               : null;
     if (reason === null || observation.runner_error === 'SampleTimeout') return null;
