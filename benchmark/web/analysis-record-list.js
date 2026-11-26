@@ -58,9 +58,11 @@ export function renderAnalysisRecordList(
         ? [`用量不完整：${record.usageIncomplete.unknownAttempts} 次尝试未返回用量，按已知下限绘制`]
         : [];
     const note = reason || (anomalyItems.length ? `含异常项：${anomalyItems.join('；')}` : '');
-    const retryableAnomaly = !reason && (record.anomalies?.timedOut > 0 || Boolean(record.usageIncomplete));
+    const retryableAnomaly = !reason && (Boolean(record.anomalies?.hasAny) || Boolean(record.usageIncomplete));
     const retry =
-      record.source === 'run' && record.run_id && ((reason && /API 失败|超时|已中断|已取消/.test(reason)) || retryableAnomaly)
+      record.source === 'run' &&
+      record.run_id &&
+      ((reason && /非模型异常|模型异常|API 失败|超时|已中断|已取消|响应不完整|未完成/.test(reason)) || retryableAnomaly)
         ? ` <button class="text-control" type="button" data-open-run="${escapeHtml(record.run_id)}">去任务页重试</button>`
         : '';
     const label = `${model} · ${thinking} · ${source} · ${fullTime}`;

@@ -460,6 +460,44 @@ describe('assessment baseline validation', () => {
         timedOutSample.samples[1].ok = false;
         expect(() => build_assessment_baseline(timedOutSample, 'target-1')).toThrow('failed or incomplete samples are not scores');
 
+        // Model anomaly (no_submission) has no non-model anomaly and IS eligible for baseline promotion.
+        const modelAnomalyRun = structuredClone(base);
+        modelAnomalyRun.samples[1].grade = {
+            content_score: 0,
+            instruction_checks: { submitted_via_tool: false },
+            outcome: 'no_submission'
+        };
+        modelAnomalyRun.samples[1].answer_submission = {
+            protocol: 'submit-answer-tool-v1',
+            call_id: null,
+            answer: null,
+            submissions: 0,
+            ended_after_submission: null
+        };
+        const modelBaseline = build_assessment_baseline(modelAnomalyRun, 'target-1');
+        expect(validate_assessment_baseline(modelBaseline)).toEqual(modelBaseline);
+
+        // Post-submission timeout and post-submission non-model anomalies are BOTH rejected from baselines.
+        const postTimeoutRun = structuredClone(base);
+        postTimeoutRun.samples[1].answer_submission = {
+            protocol: 'submit-answer-tool-v1',
+            call_id: 'call-1',
+            answer: { ok: true },
+            submissions: 1,
+            ended_after_submission: 'SampleTimeout'
+        };
+        expect(() => build_assessment_baseline(postTimeoutRun, 'target-1')).toThrow('timed-out samples are not eligible for baselines');
+
+        const postApiFailRun = structuredClone(base);
+        postApiFailRun.samples[1].answer_submission = {
+            protocol: 'submit-answer-tool-v1',
+            call_id: 'call-1',
+            answer: { ok: true },
+            submissions: 1,
+            ended_after_submission: 'api_failure'
+        };
+        expect(() => build_assessment_baseline(postApiFailRun, 'target-1')).toThrow('non-model anomalies are not eligible for baselines');
+
         const forgedBaseline = build_assessment_baseline(base, 'target-1');
         forgedBaseline.samples[0].retry_source_sha256 = {
             ...retrySources,

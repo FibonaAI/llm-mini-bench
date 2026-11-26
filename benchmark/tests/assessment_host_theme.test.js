@@ -103,7 +103,7 @@ test('status palette CSS uses C1 semantic tokens and shape-coded markers consist
     expect(benchCss).toContain('mask-image: var(--pause-mark)');
     expect(benchCss).toContain('.task-dot.is-failed');
     expect(benchCss).toContain('mask-image: var(--x-mark)');
-    expect(benchCss).toContain('.task-preview-chip-track');
+    expect(benchCss).toContain('.task-run-pill-track');
     expect(benchCss).toContain('.channel-pod-status.is-running');
     expect(benchCss).toContain('.channel-pod-status.is-cancelling');
     expect(benchCss).not.toContain('.task-channel-badge.is-completed');

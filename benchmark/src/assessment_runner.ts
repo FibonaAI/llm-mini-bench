@@ -77,7 +77,8 @@ export interface AssessmentBudgetController {
         pricing: AssessmentPricing | null,
         cap: number | undefined,
         transport_failed?: boolean,
-        retain_unknown?: boolean
+        retain_unknown?: boolean,
+        known_zero_usage?: boolean
     ): number | null;
 }
 /** Tool traces preserve the original argument string even when parsing fails. */
@@ -208,10 +209,16 @@ export class AssessmentBudget implements AssessmentBudgetController {
         pricing: AssessmentPricing | null,
         cap: number | undefined,
         transport_failed = false,
-        retain_unknown = false
+        retain_unknown = false,
+        known_zero_usage = false
     ): number | null {
         const usage = assessment_usage(payload);
-        const cost = usage && pricing !== null ? usage.input_tokens * pricing.prompt + usage.output_tokens * pricing.completion : null;
+        const cost =
+            usage && pricing !== null
+                ? usage.input_tokens * pricing.prompt + usage.output_tokens * pricing.completion
+                : !usage && known_zero_usage
+                  ? 0
+                  : null;
         this.reserved -= reservation;
         if (cost === null) {
             this.missing_cost++;
@@ -221,7 +228,7 @@ export class AssessmentBudget implements AssessmentBudgetController {
             if (cap !== undefined && usage && usage.output_tokens > cap) this.stop_reason = 'upstream_output_cap_exceeded';
         } else {
             this.spent += cost;
-            if (cap !== undefined && usage!.output_tokens > cap) this.stop_reason = 'upstream_output_cap_exceeded';
+            if (usage && cap !== undefined && usage.output_tokens > cap) this.stop_reason = 'upstream_output_cap_exceeded';
             else if (this.cost_limit !== null && this.spent > this.cost_limit) this.stop_reason = 'observed_cost_exceeded';
         }
         if (transport_failed && !retain_unknown && !this.continue_on_sample_failure) this.stop_reason = 'transport_failure';
@@ -250,6 +257,10 @@ export class AssessmentJournal implements AssessmentJournalWriter {
             if (flushed instanceof Promise) throw new Error('Assessment journal requires synchronous flush');
         }
     }
+}
+/** HTTP 4xx responses other than 408 Request Timeout reject at the gateway entry before model inference. */
+export function is_entry_rejection_status(status: number): boolean {
+    return status >= 400 && status < 500 && status !== 408;
 }
 /** Retry transient API failures only; capability limits and permanent 4xx are not retried. */
 export function retryable_api_status(status: number): boolean {
@@ -328,6 +339,7 @@ export async function run_assessment_sample(
         local_error: string | null = null;
     let last_http_status: number | null = null,
         last_error_code: string | null = null;
+    let unknownCallUsage = false;
     const seen = new Set<string>();
     sampleTurns: for (let turn = 1; turn <= (config.max_turns ?? Infinity); turn++) {
         if (expired()) {
@@ -344,7 +356,8 @@ export async function run_assessment_sample(
         else if (simulator) Object.assign(body, { tools: task.tools });
         let payload: Record<string, unknown> = {},
             status = -1,
-            turnCost: number | null = null;
+            turnCost: number | null = null,
+            turnUsage: AssessmentUsage | null = null;
         let admitted = false,
             apiFailed = false;
         const retryPolicy = config.max_api_retries !== undefined;
@@ -408,8 +421,12 @@ export async function run_assessment_sample(
             last_http_status = status;
             payload = record(raw) ? raw : { error: 'non-object response', received: raw ?? null };
             last_error_code = upstream_error_code(payload);
-            const cost = budget.settle(reservation, payload, pricing, outputCap, status === -1, retryPolicy);
+            const entryRejection = is_entry_rejection_status(status);
+            const cost = budget.settle(reservation, payload, pricing, outputCap, status === -1, retryPolicy, entryRejection);
+            const callUsage = assessment_usage(payload) ?? (entryRejection ? { input_tokens: 0, output_tokens: 0 } : null);
             turnCost = cost;
+            turnUsage = callUsage;
+            if (callUsage === null || (pricing !== null && cost === null)) unknownCallUsage = true;
             journal.write({
                 type: 'call',
                 ...sample,
@@ -456,7 +473,7 @@ export async function run_assessment_sample(
             break;
         }
         const cost = turnCost;
-        const usage = assessment_usage(payload);
+        const usage = turnUsage;
         if (usage !== null) {
             costs.push(cost);
             usages.push(usage);
@@ -596,7 +613,7 @@ export async function run_assessment_sample(
             local_error = error_name(error);
         }
     }
-    if (outcome !== 'completed' && ended_after_submission === null && usages.length < calls.length) {
+    if (outcome !== 'completed' && ended_after_submission === null && local_error !== 'SampleTimeout' && unknownCallUsage) {
         if (
             ![
                 'incomplete',

@@ -9,7 +9,22 @@ import { project_assessment_observation } from './assessment_observations.ts';
 import type { BaselineRun, BaselineTarget } from './assessment_baselines.ts';
 import type { GatewayResponse } from './client.ts';
 
-const success = (text = '42') => ({ status: 'completed', output_text: text, output: [], usage: { input_tokens: 10, output_tokens: 5 } });
+const success = (text = '42', usage = { input_tokens: 10, output_tokens: 5 }) => ({
+    status: 'completed',
+    output_text: text,
+    output: [],
+    usage
+});
+const cleanResponse = (body: Record<string, unknown>) => {
+    const input = Array.isArray(body.input) ? (body.input as Record<string, unknown>[]) : [];
+    if (input.some(item => item.type === 'function_call_output')) return success('Done.', { input_tokens: 5, output_tokens: 3 });
+    return {
+        status: 'completed',
+        output_text: '',
+        output: [{ type: 'function_call', call_id: 'sub-1', name: 'submit_answer', arguments: '{"answer":1}' }],
+        usage: { input_tokens: 5, output_tokens: 2 }
+    };
+};
 const config = { max_output_tokens: 128, max_turns: 6, max_tool_calls: 5, timeout: 10, max_api_retries: 3 };
 const pricing = { prompt: 0.000001, completion: 0.000001 };
 const textTask: RunnerTask = { id: 'test', domain: 'test', kind: 'text', prompt: 'Solve', grade: () => ({ content_score: 1 }) };
@@ -20,7 +35,7 @@ afterEach(async () => {
     for (const dir of dirs.splice(0)) rmSync(dir, { recursive: true, force: true });
 });
 
-test('three API retries means four attempts; each raw attempt precedes its retry and successful usage is retained', async () => {
+test('three API retries means four attempts; 429 entry rejections settle as zero cost while 5xx stay unknown', async () => {
     const records: Record<string, unknown>[] = [],
         delays: number[] = [],
         budget = new AssessmentBudget(Infinity, 20);
@@ -44,11 +59,48 @@ test('three API retries means four attempts; each raw attempt precedes its retry
     expect(result.status).toBe('completed');
     expect(result.estimated_uncached_cost_usd).toBeCloseTo(0.000015, 12);
     expect(result.usage).toEqual({ input_tokens: 10, output_tokens: 5 });
-    expect(budget.missing_cost).toBe(3);
+    expect(budget.missing_cost).toBe(0);
     expect(budget.stop_reason).toBeNull();
-    expect(budget.uncertain_cost).toBeGreaterThan(0);
+    expect(budget.uncertain_cost).toBe(0);
     expect(records.map(row => row.type)).toEqual(['call', 'api_retry', 'call', 'api_retry', 'call', 'api_retry', 'call', 'observation']);
     expect(new Set(result.calls).size).toBe(4);
+
+    // Exhausted 4xx entry rejections record known zero usage/cost rather than unknown null.
+    const rateBudget = new AssessmentBudget(Infinity, 20);
+    const rateFailed = await run_assessment_sample(
+        { post_responses_stream: () => [429, 0, {}, { error: 'rate_limit' }] },
+        textTask,
+        { model: 'm', thinking: 'high' },
+        1,
+        { ...config, max_api_retries: 1 },
+        pricing,
+        rateBudget,
+        { write() {} },
+        undefined,
+        async () => {}
+    );
+    expect(rateFailed.status).toBe('api_failure');
+    expect(rateFailed.usage).toEqual({ input_tokens: 0, output_tokens: 0 });
+    expect(rateFailed.estimated_uncached_cost_usd).toBe(0);
+    expect(rateBudget.missing_cost).toBe(0);
+
+    // Genuine 5xx server failures still record unknown cost on the budget.
+    const serverBudget = new AssessmentBudget(Infinity, 20);
+    let serverCalls = 0;
+    await run_assessment_sample(
+        { post_responses_stream: () => [++serverCalls < 4 ? 500 : 200, 0, {}, serverCalls < 4 ? { error: 'upstream' } : success()] },
+        textTask,
+        { model: 'm', thinking: 'high' },
+        1,
+        config,
+        pricing,
+        serverBudget,
+        { write() {} },
+        undefined,
+        async () => {}
+    );
+    expect(serverBudget.missing_cost).toBe(3);
+    expect(serverBudget.uncertain_cost).toBeGreaterThan(0);
 });
 
 test('only transient HTTP/transport errors retry, not auth errors or capability limits', async () => {
@@ -238,7 +290,7 @@ test('concurrent duplicate manual retry submissions publish one retry generation
     f.succeed();
     await Promise.all([f.service.retry_run(id, '1'.repeat(32)), f.service.retry_run(id, '1'.repeat(32))]);
     await f.service.wait_for_run(id, 2);
-    expect(f.calls()).toBe(2);
+    expect(f.calls()).toBe(3);
     expect(f.service.get_run(id)!.retry_batches).toHaveLength(1);
 });
 
@@ -258,11 +310,15 @@ function fixture(successFirst = false) {
     };
     const routes: ExecutionRoutes = { resolve: () => structuredClone(route), public_routes: () => [] };
     let fail = true,
-        calls = 0;
+        calls = 0,
+        firstSamplePrompt: unknown = undefined;
     const service = new BenchExecutionService(dir, routes, 2, () => ({
-        post_responses_stream: () => {
+        post_responses_stream: body => {
             calls++;
-            return fail && !(successFirst && calls === 1) ? [503, 0, {}, { error: 'private-secret' }] : [200, 0, {}, success()];
+            const prompt = Array.isArray(body.input) ? body.input[0] : undefined;
+            if (successFirst && firstSamplePrompt === undefined) firstSamplePrompt = prompt;
+            const firstClean = successFirst && prompt === firstSamplePrompt;
+            return fail && !firstClean ? [503, 0, {}, { error: 'private-secret' }] : [200, 0, {}, cleanResponse(body)];
         }
     }));
     service.retry_wait = async () => {};
@@ -420,10 +476,10 @@ test('manual retry resumes service-interrupted runs while preserving completed s
     const dir = f.dir;
     await f.service.close();
     const slow = new BenchExecutionService(dir, f.routes, 1, () => ({
-        post_responses_stream: async () => {
+        post_responses_stream: async body => {
             calls++;
-            if (calls > 1) await wait;
-            return [200, 0, {}, success()];
+            if (calls > 2) await wait;
+            return [200, 0, {}, cleanResponse(body)];
         }
     }));
     services.push(slow);
@@ -433,12 +489,12 @@ test('manual retry resumes service-interrupted runs while preserving completed s
         sample_concurrency: 1
     });
     const runId = (slow.get_task(taskId)!.children as { run_id: string }[])[0]!.run_id;
-    while (calls < 2) await new Promise(resolve => setTimeout(resolve, 5));
+    while (calls < 3) await new Promise(resolve => setTimeout(resolve, 5));
     // Simulate a service restart where the previous process stops writing before the new service loads.
     slow._persist = () => {};
     slow._persist_task = () => {};
     const restarted = new BenchExecutionService(dir, f.routes, 2, () => ({
-        post_responses_stream: () => [200, 0, {}, success()]
+        post_responses_stream: body => [200, 0, {}, cleanResponse(body)]
     }));
     services.push(restarted);
     release();
@@ -468,10 +524,10 @@ test('manual retry resumes cancelled runs while keeping completed samples and co
     const dir = f.dir;
     await f.service.close();
     const service = new BenchExecutionService(dir, f.routes, 1, () => ({
-        post_responses_stream: async () => {
+        post_responses_stream: async body => {
             calls++;
-            if (blockSecond && calls === 2) await wait;
-            return [200, 0, {}, success()];
+            if (blockSecond && calls === 3) await wait;
+            return [200, 0, {}, cleanResponse(body)];
         }
     }));
     services.push(service);
@@ -481,7 +537,7 @@ test('manual retry resumes cancelled runs while keeping completed samples and co
         sample_concurrency: 1
     });
     const runId = (service.get_task(taskId)!.children as { run_id: string }[])[0]!.run_id;
-    while (calls < 2) await new Promise(resolve => setTimeout(resolve, 5));
+    while (calls < 3) await new Promise(resolve => setTimeout(resolve, 5));
     service.cancel_task(taskId);
     release();
     await service.wait_for_run(runId, 2);
@@ -538,9 +594,9 @@ test('sample timeout scores zero and completes the run while remaining retryable
 
     // 2) A run whose only non-completed sample is a SampleTimeout loads as completed (score 0) and stays retryable.
     const writer = new BenchExecutionService(dir, f.routes, 2, () => ({
-        post_responses_stream: () => {
+        post_responses_stream: body => {
             calls++;
-            return calls === 2 ? [503, 0.01, {}, { error: 'upstream' }] : [200, 0.01, {}, success()];
+            return calls === 3 ? [503, 0.01, {}, { error: 'upstream' }] : [200, 0.01, {}, cleanResponse(body)];
         }
     }));
     services.push(writer);
@@ -578,7 +634,7 @@ test('sample timeout scores zero and completes the run while remaining retryable
         db.close();
     }
     const reloaded = new BenchExecutionService(dir, f.routes, 2, () => ({
-        post_responses_stream: () => [200, 0.01, {}, success()]
+        post_responses_stream: body => [200, 0.01, {}, cleanResponse(body)]
     }));
     services.push(reloaded);
     const run = reloaded.get_run(runId)!;
@@ -605,4 +661,123 @@ test('sample timeout scores zero and completes the run while remaining retryable
     const retried = reloaded.get_run(runId)!;
     expect(retried.retryable_samples).toBe(0);
     expect(retried.samples.every(sample => sample.status === 'completed')).toBe(true);
+});
+
+test('multi-turn SampleTimeout preserves earlier turns known usage and cost instead of zeroing them', async () => {
+    let turn = 0;
+    const toolTask: RunnerTask = {
+        ...textTask,
+        kind: 'tool',
+        tools: [],
+        make_simulator: () => ({
+            call: () => ({ ok: true }),
+            grade: () => ({ content_score: 1 })
+        })
+    };
+    const result = await run_assessment_sample(
+        {
+            post_responses_stream: (_body, _timeout, options) => {
+                turn++;
+                if (turn === 1) {
+                    return [
+                        200,
+                        0.01,
+                        {},
+                        {
+                            status: 'completed',
+                            output_text: '',
+                            output: [{ type: 'function_call', call_id: 'c1', name: 'probe', arguments: '{}' }],
+                            usage: { input_tokens: 500, output_tokens: 120 }
+                        }
+                    ];
+                }
+                return new Promise<GatewayResponse>(resolve => {
+                    const done = () => resolve([-1, 0.05, {}, { exception: 'TimeoutError' }]);
+                    if (options?.signal?.aborted) return done();
+                    options?.signal?.addEventListener('abort', done, { once: true });
+                });
+            }
+        },
+        toolTask,
+        { model: 'm', thinking: 'high' },
+        1,
+        { ...config, timeout: 0.05, timeout_scope: 'sample', max_api_retries: 0 },
+        pricing,
+        new AssessmentBudget(Infinity, 20),
+        { write() {} },
+        undefined,
+        async () => {}
+    );
+    expect(result.status).toBe('api_failure');
+    expect(result.runner_error).toBe('SampleTimeout');
+    expect(result.usage).toEqual({ input_tokens: 500, output_tokens: 120 });
+    expect(result.estimated_uncached_cost_usd).toBeCloseTo(0.00062, 12);
+});
+
+test('model anomalies (no_submission) complete and stay retryable; post-submission non-model anomalies fail run and retry cleanly', async () => {
+    const f = fixture();
+    const dir = f.dir;
+    await f.service.close();
+
+    // 1) Model anomaly (no_submission): run completes, retryable_samples === 1, and manual retry clears it.
+    let mode: 'no_submission' | 'post_sub_api_fail' | 'clean' = 'no_submission';
+    let sampleCallIndex = 0;
+    const svc = new BenchExecutionService(dir, f.routes, 1, () => ({
+        post_responses_stream: body => {
+            sampleCallIndex++;
+            if (mode === 'no_submission') {
+                // First sample does not call submit_answer -> no_submission; remaining samples submit cleanly.
+                if (sampleCallIndex === 1) return [200, 0.01, {}, success('forgot tool')];
+                return [200, 0.01, {}, cleanResponse(body)];
+            }
+            if (mode === 'post_sub_api_fail') {
+                const input = Array.isArray(body.input) ? (body.input as Record<string, unknown>[]) : [];
+                if (input.some(item => item.type === 'function_call_output')) return [429, 0.01, {}, { error: 'rate limited' }];
+                return [200, 0.01, {}, cleanResponse(body)];
+            }
+            return [200, 0.01, {}, cleanResponse(body)];
+        }
+    }));
+    svc.retry_wait = async () => {};
+    services.push(svc);
+
+    const noSubRunId = await svc.start_run({
+        targets: [{ route_id: 'route', thinking: 'high' }],
+        task_ids: ['K23_HTTP_Conditional_Cache_Precedence', 'K23_IEEE754_ThreeValued_Semantics'],
+        limits: { max_api_retries: 0 }
+    });
+    await svc.wait_for_run(noSubRunId, 5);
+    const noSubRun = svc.get_run(noSubRunId)!;
+    expect(noSubRun.status).toBe('completed');
+    expect(noSubRun.retryable_samples).toBe(1);
+    expect(noSubRun.samples.filter(s => (s.grade as any)?.outcome === 'no_submission')).toHaveLength(1);
+    mode = 'clean';
+    await svc.retry_run(noSubRunId, '6'.repeat(32));
+    await svc.wait_for_run(noSubRunId, 5);
+    const noSubRetried = svc.get_run(noSubRunId)!;
+    expect(noSubRetried.status).toBe('completed');
+    expect(noSubRetried.retryable_samples).toBe(0);
+    expect(noSubRetried.samples.every(s => (s.grade as any)?.outcome !== 'no_submission')).toBe(true);
+
+    // 2) Post-submission non-model anomaly (429 after submit_answer): run status is 'failed', budget cost stays known ($), retry fixes it.
+    mode = 'post_sub_api_fail';
+    const postFailRunId = await svc.start_run({
+        targets: [{ route_id: 'route', thinking: 'high' }],
+        task_ids: ['K23_HTTP_Conditional_Cache_Precedence'],
+        limits: { max_api_retries: 0 }
+    });
+    await svc.wait_for_run(postFailRunId, 5);
+    const postFailRun = svc.get_run(postFailRunId)!;
+    expect(postFailRun.status).toBe('failed');
+    expect(postFailRun.retryable_samples).toBe(1);
+    expect((postFailRun.samples[0]!.answer_submission as any)?.ended_after_submission).toBe('api_failure');
+    expect(postFailRun.budget.missing_cost_calls).toBe(0);
+    expect(typeof postFailRun.budget.estimated_uncached_cost_usd).toBe('number');
+    mode = 'clean';
+    await svc.retry_run(postFailRunId, '7'.repeat(32));
+    await svc.wait_for_run(postFailRunId, 5);
+    const postFailRetried = svc.get_run(postFailRunId)!;
+    expect(postFailRetried.status).toBe('completed');
+    expect(postFailRetried.retryable_samples).toBe(0);
+    expect((postFailRetried.samples[0]!.answer_submission as any)?.ended_after_submission).toBeNull();
 });

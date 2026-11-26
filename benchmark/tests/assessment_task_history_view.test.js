@@ -107,29 +107,43 @@ function fixture() {
         }
     };
     const view = createTaskHistoryView({ app, state, retryRequests: new Map(), retrying: new Set() });
-    return { nodes, detached, state, view };
+    return { nodes, detached, state, view, app };
 }
 
-test('task history keeps the same detached sections and expanded sample IDs across redraws', () => {
+function clickRunDetail(nodes, selector, dataset) {
+    nodes.get('bench-run-detail').handlers.get('click')({
+        target: {
+            closest: s => (s === selector ? { dataset } : null)
+        }
+    });
+}
+
+function clickTaskDetail(nodes, selector, dataset) {
+    nodes.get('bench-task-detail').handlers.get('click')({
+        stopPropagation() {},
+        target: {
+            closest: s => (s === selector ? { dataset } : null)
+        }
+    });
+}
+
+test('task history keeps the same detached sections and open inline inspector across redraws', () => {
     const { nodes, detached, state, view } = fixture();
     view.renderDetails();
     const taskSection = nodes.get('bench-task-section'),
         runSection = nodes.get('bench-run-section');
     expect(taskSection.parentSlot).toBe('data-inline-task="task"');
     expect(runSection.parentSlot).toBe('data-inline-run="run"');
-    const container = nodes.get('bench-run-detail');
-    container.samples.find(sample => sample.dataset.sampleId === 'sample-one').open = true;
+    expect(taskSection.classList.contains('is-single-run-task')).toBe(true);
+    clickRunDetail(nodes, '[data-open-sample]', { openSample: 'sample-one' });
+    expect(nodes.get('bench-run-detail').innerHTML).toContain('data-inspector-sample="sample-one"');
     // DOM lookup cannot see sections detached by history innerHTML replacement.
     for (const id of ['bench-task-section', 'bench-run-section', 'bench-run-detail', 'bench-task-detail']) detached.add(id);
     state.runDetail = { ...state.runDetail, samples: state.runDetail.samples.map(sample => ({ ...sample })) };
     view.renderDetails();
     expect(view.taskSection).toBe(taskSection);
     expect(view.runSection).toBe(runSection);
-    // Samples needing attention render first; open state follows sample IDs, not DOM order.
-    expect(Object.fromEntries(container.samples.map(sample => [sample.dataset.sampleId, sample.open]))).toEqual({
-        'sample-one': true,
-        'sample-two': false
-    });
+    expect(nodes.get('bench-run-detail').innerHTML).toContain('data-inspector-sample="sample-one"');
     expect(runSection.hidden).toBe(false);
     state.selectedRunId = null;
     state.runDetail = null;
@@ -145,7 +159,7 @@ test('unchanged history polling does not replace any detail markup', () => {
     state.runDetail = structuredClone(state.runDetail);
     view.renderDetails();
     expect(ids.map(id => nodes.get(id).renderCount)).toEqual(counts);
-    expect(nodes.get('bench-task-detail').innerHTML).toContain('aria-expanded="true"');
+    expect(nodes.get('bench-task-detail').innerHTML).toContain('data-inline-run="run"');
     expect(nodes.get('bench-run-list').innerHTML).toContain('aria-expanded="true"');
 });
 
@@ -154,14 +168,18 @@ test('completed sample diagnostics distinguish parser ambiguity, zero scores and
     state.runDetail.samples = [
         {
             sample_id: 'ambiguous',
+            task: 't-ambig',
+            round: 1,
             status: 'completed',
             grade: { content_score: null, outcome: 'ambiguous' },
             text: '{"answer":1} explanation {invalid}'
         },
-        { sample_id: 'ungradable', status: 'completed', grade: { content_score: null, outcome: 'ungradable' } },
-        { sample_id: 'missing', status: 'completed', grade: null },
+        { sample_id: 'ungradable', task: 't-ungrad', round: 1, status: 'completed', grade: { content_score: null, outcome: 'ungradable' } },
+        { sample_id: 'missing', task: 't-miss', round: 1, status: 'completed', grade: null },
         {
             sample_id: 'recovered',
+            task: 't-rec',
+            round: 1,
             status: 'completed',
             grade: { content_score: 0, outcome: 'ok' },
             attempts: [{ status: 'api_failure' }],
@@ -177,12 +195,18 @@ test('completed sample diagnostics distinguish parser ambiguity, zero scores and
     expect(html).toContain('答案无法解析');
     expect(html).toContain('评分记录缺失或无效');
     expect(html).not.toContain('未评分');
-    expect(html).toContain('completed · 0');
-    expect(html).toContain('历次尝试');
-    expect(html).toContain('本次尝试用量');
-    expect(html).toContain('评分结果');
-    expect(html).not.toContain('工具执行结果');
-    expect(html).toContain('data-history-disclosure=');
+    expect(html).toContain('data-open-sample="recovered"');
+    // Opening the recovered sample surfaces missing cumulative usage banner and raw evidence tab.
+    clickRunDetail(nodes, '[data-open-sample]', { openSample: 'recovered' });
+    const inspHtml = nodes.get('bench-run-detail').innerHTML;
+    expect(inspHtml).toContain('累计用量、累计估算费用未知');
+    expect(inspHtml).toContain('历次尝试存在缺失记录');
+    clickRunDetail(nodes, '[data-si-tab]', { siTab: 'raw' });
+    const rawHtml = nodes.get('bench-run-detail').innerHTML;
+    expect(rawHtml).toContain('历次尝试（原始记录）');
+    expect(rawHtml).toContain('用量与费用');
+    expect(rawHtml).toContain('评分结果');
+    expect(rawHtml).toContain('data-history-disclosure=');
 });
 
 test('known zero usage and cost do not produce missing-accounting warnings', () => {
@@ -190,6 +214,8 @@ test('known zero usage and cost do not produce missing-accounting warnings', () 
     state.runDetail.samples = [
         {
             sample_id: 'zero',
+            task: 't-zero',
+            round: 1,
             status: 'completed',
             grade: { content_score: 0 },
             usage: { input_tokens: 0, output_tokens: 0 },
@@ -197,28 +223,29 @@ test('known zero usage and cost do not produce missing-accounting warnings', () 
         }
     ];
     view.renderDetails();
+    clickRunDetail(nodes, '[data-open-sample]', { openSample: 'zero' });
     const html = nodes.get('bench-run-detail').innerHTML;
-    expect(html).toContain('completed · 0');
+    expect(html).toContain('data-inspector-sample="zero"');
     expect(html).not.toContain('累计用量');
     expect(html).not.toContain('累计估算费用');
     expect(html).not.toContain('无法评分');
 });
 
-test('searching away the selected task does not discard details or expanded samples', () => {
+test('searching away the selected task does not discard details or open sample inspector', () => {
     const { nodes, state, view } = fixture();
     view.renderDetails();
-    const container = nodes.get('bench-run-detail');
-    container.samples[1].open = true;
+    clickRunDetail(nodes, '[data-open-sample]', { openSample: 'sample-two' });
+    expect(nodes.get('bench-run-detail').innerHTML).toContain('data-inspector-sample="sample-two"');
     nodes.get('history-search').value = 'not-present';
     nodes.get('history-search').handlers.get('input')();
     expect(nodes.get('bench-run-list').innerHTML).toContain('没有匹配');
     expect(state.selectedTaskId).toBe('task');
     expect(state.selectedRunId).toBe('run');
-    expect(container.samples[1].open).toBe(true);
+    expect(nodes.get('bench-run-detail').innerHTML).toContain('data-inspector-sample="sample-two"');
     nodes.get('history-search').value = '';
     nodes.get('history-search').handlers.get('input')();
     expect(nodes.get('bench-run-section').parentSlot).toBe('data-inline-run="run"');
-    expect(container.samples[1].open).toBe(true);
+    expect(nodes.get('bench-run-detail').innerHTML).toContain('data-inspector-sample="sample-two"');
 });
 
 test('failed samples show journaled call diagnoses, never-sent attempts and a task-by-round matrix', async () => {
@@ -287,12 +314,15 @@ test('failed samples show journaled call diagnoses, never-sent attempts and a ta
     const html = nodes.get('bench-run-detail').innerHTML;
     expect(html).toContain('上游返回 response.failed：server_error（connection lost mid-reply）');
     expect(html).toContain('整题超时（300 秒）；最后一次请求：300 秒后等待超时（未收到任何输出）');
-    expect(html).toContain('未发出请求');
     expect(html).toContain('data-open-sample="sample-two"');
     expect(html).toContain('第 2 轮');
-    // Unchanged run versions do not refetch.
+    // Unchanged run versions do not refetch call summaries.
     withRequest.renderDetails();
     expect(requests).toHaveLength(1);
+    // Opening sample-two shows prior never-sent attempt in the trace inspector and fetches its events once.
+    clickRunDetail(nodes, '[data-open-sample]', { openSample: 'sample-two' });
+    expect(nodes.get('bench-run-detail').innerHTML).toContain('未发出请求');
+    expect(requests).toEqual(['./api/bench/runs/run/calls', './api/bench/runs/run/events?sample_id=sample-two']);
 });
 
 test('queued and running records omit unknown usage warnings and duplicate cost labels; finished records report unknown usage once', () => {
@@ -347,11 +377,11 @@ test('queued and running records omit unknown usage warnings and duplicate cost 
         children: [{ ...state.tasks[0].children[0], status: 'completed' }]
     };
     state.taskDetail = state.tasks[0];
+    state.selectedRunId = null;
     view.renderDetails();
     expect(nodes.get('bench-run-list').innerHTML).toContain('2 个累计用量未知');
     expect(nodes.get('bench-run-list').innerHTML).not.toContain('累计费用未知');
-    expect(nodes.get('bench-task-detail').innerHTML).toContain('2 个累计用量未知');
-    expect(nodes.get('bench-task-detail').innerHTML).not.toContain('累计费用未知');
+    expect(nodes.get('bench-task-detail').innerHTML).toContain('未定价 / 缺失');
 });
 
 test('history search filters both task list and expanded child runs without leaking unmatched channels', () => {
@@ -416,8 +446,8 @@ test('status badges, sample cells, and retry labels distinguish timeout, cancell
     expect(html).toContain('sample-cell is-failed');
     expect(html).toContain('sample-cell is-cancelled');
     expect(html).toContain('sample-cell is-interrupted');
-    expect(html).toContain('0（超时）');
-    expect(nodes.get('bench-retry-run').textContent).toBe('重试未完成样本');
+    expect(html).toContain('按 0 分计');
+    expect(nodes.get('bench-retry-run').textContent).toBe('重试异常样本');
 
     // Pure cancelled run gets cancelled-specific retry label
     state.runDetail = {
@@ -495,11 +525,12 @@ test('outer task cards show model names and expanded tasks render a model-groupe
     expect(listHtml).toContain('Model 1、Model 2、Model 3、Model 4、Model 5 等 7 个模型');
     const detailHtml = nodes.get('bench-task-detail').innerHTML;
     expect(detailHtml).toContain('class="task-preview"');
+    expect(detailHtml).toContain('class="task-ribbon-pills"');
     expect(detailHtml).toContain('data-preview-run-id="r-1"');
     expect(detailHtml).toContain('data-preview-run-id="r-2"');
     expect(detailHtml).toContain('12/36');
-    expect(detailHtml).toContain('class="raw-block task-all-runs"');
-    expect(detailHtml).toContain('全部 2 个独立运行列表');
+    expect(detailHtml).not.toContain('task-all-runs');
+    expect(detailHtml).toContain('class="raw-block task-tech-meta"');
 });
 
 test('run detail defers raw JSON formatting until a disclosure is opened', () => {
@@ -527,14 +558,20 @@ test('run detail defers raw JSON formatting until a disclosure is opened', () =>
     state.runDetail = run;
     view.renderDetails();
     const detail = nodes.get('bench-run-detail');
-    expect(detail.innerHTML).toContain('data-lazy-json="run-lazy:s-1:原始回答"');
+    expect(detail.innerHTML).toContain('data-lazy-json="run-lazy:预算与用量原始记录 (JSON)"');
     expect(detail.innerHTML).not.toContain('very-large-model-answer-payload');
     expect(detail.innerHTML).not.toContain('<pre>');
+
+    // Open sample inspector -> Raw JSON tab: raw answer stays deferred until toggled open.
+    clickRunDetail(nodes, '[data-open-sample]', { openSample: 's-1' });
+    clickRunDetail(nodes, '[data-si-tab]', { siTab: 'raw' });
+    expect(detail.innerHTML).toContain('data-lazy-json="run-lazy:si:s-1:原始回答"');
+    expect(detail.innerHTML).not.toContain('very-large-model-answer-payload');
 
     const appended = [];
     const fakeDetails = {
         open: true,
-        dataset: { lazyJson: 'run-lazy:s-1:原始回答' },
+        dataset: { lazyJson: 'run-lazy:si:s-1:原始回答' },
         querySelector: () => null,
         ownerDocument: {
             createElement: tag => ({ tag, textContent: '' })
@@ -624,11 +661,8 @@ test('task preview groups multiple accounts into effort-ordered thinking lanes a
     const html = nodes.get('bench-task-detail').innerHTML;
     expect(html.indexOf('data-thinking-lane="low"')).toBeGreaterThan(-1);
     expect(html.indexOf('data-thinking-lane="high"')).toBeGreaterThan(html.indexOf('data-thinking-lane="low"'));
-    expect(html).toContain('<code class="task-thinking-rail-value">low</code><span class="task-thinking-rail-stat">1/1 完成</span>');
-    expect(html).toContain('<code class="task-thinking-rail-value">high</code><span class="task-thinking-rail-stat">2/2 完成</span>');
-    expect(html).toContain('<span class="task-preview-chip-label">alpha</span>');
-    expect(html).toContain('<span class="task-preview-chip-label">beta</span>');
-    expect(html).toContain('aria-describedby="history-preview-lane-task-multi-acct-0-0"');
+    expect(html).toContain('task-run-account">alpha</span>');
+    expect(html).toContain('task-run-account">beta</span>');
     const listHtml = nodes.get('bench-run-list').innerHTML;
     expect(listHtml).toContain('GPT-6 Luna · bench-mock（2 个账号）');
     expect(listHtml).toContain('class="task-thinking-badge"');
@@ -641,17 +675,16 @@ test('task preview groups multiple accounts into effort-ordered thinking lanes a
     expect(runHtml).toContain('<span class="run-thinking-pill"><span class="run-thinking-pill-prefix">思考</span><code>high</code></span>');
     expect(runHtml).toContain('<span class="run-account-pill">账号 alpha</span>');
 
-    // Multi-account × single thinking (e.g. 7 accounts × medium) keeps medium explicitly visible on the lane rail.
+    // Multi-account × single thinking (e.g. 2 accounts × medium) keeps medium explicitly visible in its thinking lane rail.
     state.selectedTaskId = 'task-multi-acct-medium';
     state.selectedRunId = null;
     state.taskDetail = multiAcctSingleThinkTask;
     state.runDetail = null;
     view.renderDetails();
     const singleThinkHtml = nodes.get('bench-task-detail').innerHTML;
-    expect(singleThinkHtml).toContain('data-thinking-lane="medium"');
-    expect(singleThinkHtml).toContain(
-        '<code class="task-thinking-rail-value">medium</code><span class="task-thinking-rail-stat">1/2 完成</span>'
-    );
+    expect(singleThinkHtml).toContain('<code class="task-thinking-rail-value">medium</code>');
+    expect(singleThinkHtml).toContain('task-run-account">acc-one@example.com</span>');
+    expect(singleThinkHtml).toContain('task-run-account">acc-two@example.com</span>');
 });
 
 test('task preview labels gateway-binding accounts as 自动分配 and single-pinned tasks show account in headline', () => {
@@ -724,8 +757,8 @@ test('task preview labels gateway-binding accounts as 自动分配 and single-pi
     view.renderDetails();
     expect(nodes.get('bench-run-list').innerHTML).toContain('GPT-5.4 · openai / team-a');
     expect(nodes.get('bench-task-detail').innerHTML).toContain('<code class="task-thinking-rail-value">默认</code>');
-    expect(nodes.get('bench-task-detail').innerHTML).toContain('<span class="task-preview-chip-label">自动分配</span>');
-    expect(nodes.get('bench-task-detail').innerHTML).toContain('<span class="task-preview-chip-label">team-a</span>');
+    expect(nodes.get('bench-task-detail').innerHTML).toContain('task-run-account is-auto">自动分配</span>');
+    expect(nodes.get('bench-task-detail').innerHTML).toContain('task-run-account">team-a</span>');
     nodes.get('history-search').value = '默认';
     nodes.get('history-search').handlers.get('input')();
     expect(nodes.get('bench-run-list').innerHTML).toContain('task-mixed-auto');
@@ -843,12 +876,12 @@ test('task card surfaces channel badges, non-zero status pills, and channel-pod 
     expect(detailHtml).toContain('账号 prod-key-2');
     expect(detailHtml).toContain('自动分配');
     expect(detailHtml).toContain('远端路由');
-    expect(detailHtml).toContain('style="--pct:50%"');
-    expect(detailHtml).toContain('class="task-preview-chip-fill"');
-    expect(detailHtml).toContain('class="task-preview-chip is-queued"');
-    expect(detailHtml).toContain('× 失败');
-    expect(detailHtml).toContain('‖ 中断');
-    expect(detailHtml).toContain('✓ 完成');
+    expect(detailHtml).toContain('style="width:50%"');
+    expect(detailHtml).toContain('class="task-run-pill-track"');
+    expect(detailHtml).toContain('class="task-run-pill is-queued has-cancel"');
+    expect(detailHtml).toContain('class="task-run-pill is-failed"');
+    expect(detailHtml).toContain('class="task-run-pill is-interrupted"');
+    expect(detailHtml).toContain('class="task-run-pill is-completed"');
 });
 
 test('large task history paginates to 40 cards, expands for deep selection, and loads more on demand', () => {
@@ -974,11 +1007,10 @@ test('task history renders task, channel-pod, and run baseline actions, badges, 
     expect(taskDetailHtml).not.toContain('task-chip-baseline');
     expect(taskDetailHtml).not.toContain('task-preview-chip-pair');
     expect(taskDetailHtml).toContain('不可设为基线：含 2 个超时样本');
-    expect(taskDetailHtml).toContain('task-preview-chip is-completed is-baseline');
+    expect(taskDetailHtml).toContain('task-run-pill is-completed is-baseline is-selected');
     expect(taskDetailHtml).toContain(
-        '<span class="task-preview-chip-baseline"><i class="task-baseline-sq" aria-hidden="true"></i><span class="visually-hidden">已设基线</span></span><span class="task-preview-chip-label">high</span><span class="task-preview-chip-state">✓ 完成</span>'
+        '<span class="task-run-baseline" title="已设为基线"><i class="task-baseline-sq" aria-hidden="true"></i><span class="visually-hidden">已设基线</span></span>'
     );
-    expect(taskDetailHtml).toContain('task-baseline-inline');
 
     // Selected promoted run surfaces unbaseline button and banner pill.
     expect(nodes.get('bench-baseline-run').hidden).toBe(true);
@@ -1062,13 +1094,11 @@ test('abnormal tasks support healthy channel/model promotion without cluttering 
     expect(nodes.get('bench-baseline-task').title).toContain('重试时源码版本发生变化');
 
     const html = nodes.get('bench-task-detail').innerHTML;
-    // Multi-model channel surfaces a model-level action only for the model with promotable runs.
-    expect(html).toContain('data-baseline-level="model"');
-    expect(html).toContain('aria-label="devin swe-2 设为基线 (1)"');
-    // Fully ineligible model omits disabled baseline buttons, while chip tooltips retain specific reasons.
+    // Channel-pod promotes only the eligible run while row tooltips preserve specific ineligibility reasons.
+    expect(html).toContain('data-baseline-level="channel"');
+    expect(html).toContain('data-baseline-promote-runs="ab-ok-hi"');
     expect(html).not.toContain('devin swe-2-flash 不可设为基线');
     expect(html).not.toContain('task-chip-baseline');
-    expect(html).not.toContain('task-thinking-rail-actions');
     expect(html).toContain('不可设为基线：含 6 个 API 失败样本');
     expect(html).toContain('不可设为基线：重试时源码版本发生变化');
 
@@ -1166,10 +1196,572 @@ test('cancelling and queued states render distinct non-running tones across card
     expect(detailHtml).toContain('class="channel-pod-status is-cancelling"');
     expect(detailHtml).toContain('class="channel-pod is-queued"');
     expect(detailHtml).toContain('class="channel-pod-status is-queued"');
-    expect(detailHtml).toContain('class="task-preview-chip is-cancelling"');
-    expect(detailHtml).toContain('取消中 12/36');
-    expect(detailHtml).not.toContain('task-preview-chip-fill');
-    expect(detailHtml).toContain('class="task-preview-legend-item"><i class="task-dot is-cancelling" aria-hidden="true"></i>取消中');
+    expect(detailHtml).toContain('class="task-run-pill is-cancelling has-cancel"');
+    expect(detailHtml).toContain('class="task-run-pill is-queued has-cancel"');
+    expect(detailHtml).not.toContain('task-run-pill-track');
+});
+
+test('task list, preview chip, run detail, matrix, and attention list surface ended_after_submission and no_submission anomalies', async () => {
+    const { state, nodes, view } = fixture();
+    const target = {
+        id: 't-sub',
+        provider_id: 'opencode-go',
+        model: 'hungerg-free',
+        model_display_name: 'HungerG Free',
+        thinking: 'default',
+        account_ref: 'gateway-default',
+        account_evidence: 'gateway_binding'
+    };
+    const quality = {
+        completed_samples: 36,
+        unscored_samples: 0,
+        timeout_samples: 1,
+        model_anomaly_samples: 1,
+        non_model_anomaly_samples: 0,
+        ended_after_submission_samples: 1,
+        ended_after_timeout_samples: 1,
+        ended_after_non_model_samples: 0,
+        no_submission_samples: 1,
+        unknown_usage_samples: 0,
+        unknown_cost_samples: 0,
+        prior_unknown_usage_samples: 0,
+        prior_unknown_cost_samples: 0
+    };
+    const task = {
+        id: 'task-sub-anom',
+        bank_version: '1.0',
+        status: 'completed',
+        created_at: '2026-11-25T09:31:05Z',
+        plan: {
+            targets: [target],
+            run_count: 1,
+            rounds: 1,
+            sample_count: 3
+        },
+        children: [
+            {
+                run_id: 'run-sub-anom',
+                target,
+                status: 'completed',
+                sample_count: 3,
+                sample_status_counts: { completed: 3 },
+                result_quality: quality
+            }
+        ]
+    };
+    const runDetail = {
+        id: 'run-sub-anom',
+        task_id: 'task-sub-anom',
+        bank_version: '1.0',
+        status: 'completed',
+        updated_at: '2026-11-25T09:31:05Z',
+        plan: { targets: [target], limits: { timeout: 600 } },
+        sample_count: 3,
+        sample_status_counts: { completed: 3 },
+        result_quality: quality,
+        samples: [
+            {
+                sample_id: 's-ok',
+                task: 'K1',
+                round: 1,
+                status: 'completed',
+                grade: { content_score: 1, outcome: 'ok' },
+                usage: { input_tokens: 100, output_tokens: 50 },
+                estimated_uncached_cost_usd: 0,
+                elapsed_seconds: 12
+            },
+            {
+                sample_id: 's-ended',
+                task: 'T2',
+                round: 1,
+                status: 'completed',
+                runner_error: 'SampleTimeout',
+                grade: { content_score: 1, outcome: 'ok' },
+                answer_submission: {
+                    protocol: 'submit-answer-tool-v1',
+                    call_id: 'call-1',
+                    answer: { ans: 42 },
+                    submissions: 1,
+                    ended_after_submission: 'SampleTimeout'
+                },
+                usage: { input_tokens: 200, output_tokens: 80 },
+                estimated_uncached_cost_usd: 0,
+                elapsed_seconds: 600
+            },
+            {
+                sample_id: 's-nosub',
+                task: 'T3',
+                round: 1,
+                status: 'completed',
+                grade: { content_score: 0, outcome: 'no_submission' },
+                answer_submission: {
+                    protocol: 'submit-answer-tool-v1',
+                    call_id: null,
+                    answer: null,
+                    submissions: 0,
+                    ended_after_submission: null
+                },
+                usage: { input_tokens: 150, output_tokens: 40 },
+                estimated_uncached_cost_usd: 0,
+                elapsed_seconds: 30
+            }
+        ]
+    };
+    state.tasks = [task];
+    state.selectedTaskId = task.id;
+    state.taskDetail = task;
+    state.selectedRunId = runDetail.id;
+    state.runDetail = runDetail;
+    view.renderDetails();
+
+    const listHtml = nodes.get('bench-run-list').innerHTML;
+    expect(listHtml).toContain('超时 1 样本');
+    expect(listHtml).toContain('模型异常 1（未提交）');
+    // Balanced counts bar: completed child with timeout still counts in 已完成 1, alongside overlay anomaly pill.
+    expect(listHtml).toContain('已完成 1');
+    expect(listHtml).toContain('含异常 1（1 超时 · 1 未提交）');
+
+    // Single-run task auto-directs straight into its sole child run detail.
+    const taskDetailHtml = nodes.get('bench-task-detail').innerHTML;
+    expect(nodes.get('bench-task-section').classList.contains('is-single-run-task')).toBe(true);
+    expect(taskDetailHtml).toContain('class="task-single-run-slot"');
+
+    const runDetailHtml = nodes.get('bench-run-detail').innerHTML;
+    expect(runDetailHtml).toContain('class="run-diag-bar is-warn"');
+    expect(runDetailHtml).toContain('提交后超时 1');
+    expect(runDetailHtml).toContain('模型异常 1');
+    expect(runDetailHtml).toContain('定位异常样本 →');
+    expect(runDetailHtml).toContain('class="sample-cell is-full has-anomaly" data-open-sample="s-ended"');
+    expect(runDetailHtml).toContain('class="sample-cell is-zero has-anomaly" data-open-sample="s-nosub"');
+    expect(runDetailHtml).not.toContain('需要关注的样本');
+    expect(runDetailHtml).not.toContain('全部 3 个样本详情');
+    expect(runDetailHtml).toContain('仅高亮异常 2');
+    expect(runDetailHtml).toContain('异常巡检 0/2');
+    expect(runDetailHtml).toContain('超时（提交后超时 · 按最后提交评分）');
+    expect(runDetailHtml).toContain('超时：提交后整题超时（SampleTimeout）');
+    expect(runDetailHtml).toContain('1 题提交后超时（按最后提交评分，不可设基线）');
+    expect(runDetailHtml).toContain('1 题未提交答案（按 0 分计，可设基线）');
+    expect(runDetailHtml).toContain('模型异常（未提交答案 · 按 0 分计）');
+    // Opening s-ended and checking raw tab exposes answer submission record without duplicating all samples.
+    clickRunDetail(nodes, '[data-open-sample]', { openSample: 's-ended' });
+    clickRunDetail(nodes, '[data-si-tab]', { siTab: 'raw' });
+    expect(nodes.get('bench-run-detail').innerHTML).toContain('答案提交记录');
+
+    // Status filter 'anomalous' matches anomalous tasks and hides clean completed ones.
+    const cleanTask = {
+        id: 'task-clean',
+        status: 'completed',
+        created_at: '2026-11-25T09:00:00Z',
+        plan: { targets: [target], run_count: 1, rounds: 1, sample_count: 1 },
+        children: [{ run_id: 'run-clean', target, status: 'completed', sample_count: 1, sample_status_counts: { completed: 1 } }]
+    };
+    state.tasks = [task, cleanTask];
+    nodes.get('history-status').value = 'anomalous';
+    view.renderDetails();
+    const filteredHtml = nodes.get('bench-run-list').innerHTML;
+    expect(filteredHtml).toContain('task-sub-anom');
+    expect(filteredHtml).not.toContain('task-clean');
+});
+
+test('inline sample inspector opens below matrix row, adapts default tab, lazily loads session events, and compares rounds', async () => {
+    const { state, nodes, app } = fixture();
+    const requests = [];
+    const mockEventsBySample = {
+        's-partial': [
+            {
+                id: 1,
+                run_id: 'run',
+                sample_id: 's-partial',
+                attempt_id: 'att-1',
+                seq: 1,
+                kind: 'llm_turn',
+                turn: 1,
+                api_attempt: 1,
+                http_status: 200,
+                elapsed_seconds: 12.4,
+                first_output_seconds: 1.8,
+                usage_known: true,
+                input_tokens: 1200,
+                output_tokens: 450,
+                estimated_cost_usd: 0.0123,
+                response_status: 'completed',
+                payload: {
+                    reasoning_summary: ['Trace yield* delegation'],
+                    assistant_text: 'Submitting computed states.',
+                    tool_calls: [
+                        {
+                            call_id: 'tc-1',
+                            name: 'submit_answer',
+                            arguments: '{"first":1,"second":{"value":5,"done":false},"steps":["I1","BAD"]}'
+                        }
+                    ]
+                }
+            },
+            {
+                id: 2,
+                run_id: 'run',
+                sample_id: 's-partial',
+                attempt_id: 'att-1',
+                seq: 2,
+                kind: 'tool_result',
+                call_id: 'tc-1',
+                payload: { name: 'submit_answer', result: { accepted: true } }
+            },
+            {
+                id: 3,
+                run_id: 'run',
+                sample_id: 's-partial',
+                attempt_id: 'att-1',
+                seq: 3,
+                kind: 'grade',
+                elapsed_seconds: 12.4,
+                estimated_cost_usd: 0.0123,
+                payload: { status: 'completed', outcome: 'graded', content_score: 0.333 }
+            }
+        ],
+        's-nosub': [
+            {
+                id: 10,
+                run_id: 'run',
+                sample_id: 's-nosub',
+                attempt_id: 'att-old',
+                seq: 1,
+                kind: 'llm_turn',
+                turn: 1,
+                api_attempt: 1,
+                http_status: 429,
+                elapsed_seconds: 2.0,
+                error_code: 'rate_limit_exceeded',
+                error_message: 'slow down',
+                payload: { raw_error_excerpt: '{"error":"429"}' }
+            },
+            {
+                id: 11,
+                run_id: 'run',
+                sample_id: 's-nosub',
+                attempt_id: 'att-old',
+                seq: 2,
+                kind: 'api_retry',
+                turn: 1,
+                api_attempt: 2,
+                payload: { delay_ms: 1500 }
+            },
+            {
+                id: 12,
+                run_id: 'run',
+                sample_id: 's-nosub',
+                attempt_id: 'att-new',
+                seq: 1,
+                kind: 'llm_turn',
+                turn: 1,
+                api_attempt: 1,
+                http_status: 200,
+                elapsed_seconds: 8.5,
+                response_status: 'completed',
+                payload: { assistant_text: 'The final answer is 42, forgot tool call.' }
+            }
+        ]
+    };
+    app.services.request = async url => {
+        requests.push(url);
+        if (url.includes('/events')) {
+            const sampleId = new URL('http://local/' + url.replace(/^\.\//, '')).searchParams.get('sample_id');
+            return { sample_id: sampleId, events: mockEventsBySample[sampleId] || [] };
+        }
+        return { calls: [] };
+    };
+    state.banks = [
+        {
+            version: '1.0',
+            tasks: [
+                {
+                    id: 'C23_Async_Generator_Finally_Override',
+                    domain: 'code',
+                    title: 'ECMAScript async generator yield* return forwarding',
+                    prompt: 'Evaluate the async generator.',
+                    grading: {
+                        expected: {
+                            first: 1,
+                            second: { value: 105, done: false },
+                            steps: ['I1', 'T1']
+                        }
+                    }
+                }
+            ]
+        }
+    ];
+    state.runDetail = {
+        id: 'run',
+        task_id: 'task',
+        status: 'completed',
+        updated_at: '2026-11-26T00:00:00Z',
+        plan: { bank_version: '1.0', targets: state.runDetail.plan.targets, limits: { timeout: 600 } },
+        samples: [
+            {
+                sample_id: 's-partial',
+                task: 'C23_Async_Generator_Finally_Override',
+                domain: 'code',
+                round: 1,
+                status: 'completed',
+                elapsed_seconds: 12.4,
+                usage: { input_tokens: 1200, output_tokens: 450 },
+                estimated_uncached_cost_usd: 0.0123,
+                answer_submission: {
+                    submissions: 1,
+                    answer: { first: 1, second: { value: 5, done: false }, steps: ['I1', 'BAD'] }
+                },
+                grade: {
+                    outcome: 'graded',
+                    content_score: 0.333,
+                    content_checks: { first: true, second: false, steps: false },
+                    instruction_checks: { submitted_via_tool: true }
+                }
+            },
+            {
+                sample_id: 's-nosub',
+                task: 'C23_Async_Generator_Finally_Override',
+                domain: 'code',
+                round: 2,
+                status: 'completed',
+                attempt_id: 'att-new',
+                elapsed_seconds: 8.5,
+                text: 'The final answer is 42, forgot tool call.',
+                attempts: [
+                    { attempt_id: 'att-old', status: 'api_failure' },
+                    { attempt_id: 'att-new', status: 'completed' }
+                ],
+                grade: {
+                    outcome: 'no_submission',
+                    content_score: 0,
+                    content_checks: { first: false, second: false, steps: false },
+                    instruction_checks: { submitted_via_tool: false }
+                }
+            }
+        ]
+    };
+    const view = createTaskHistoryView({ app, state, retryRequests: new Set(), retrying: new Set() });
+    view.renderDetails();
+
+    // Before clicking any matrix cell, no /events request should fire.
+    expect(requests.some(url => url.includes('/events'))).toBe(false);
+    const runDetailNode = nodes.get('bench-run-detail');
+    const click = runDetailNode.handlers.get('click');
+    const makeClickEvent = (attr, val) => ({
+        target: {
+            closest: selector => {
+                if (selector === `[${attr}]`) {
+                    const camel = attr.replace(/^data-/, '').replace(/-([a-z])/g, (_, c) => c.toUpperCase());
+                    return { dataset: { [camel]: val } };
+                }
+                return null;
+            }
+        }
+    });
+
+    // Click partial-score sample -> lands on 判分对照 with diff highlighting + folded passed fields, and lazily fetches /events.
+    click(makeClickEvent('data-open-sample', 's-partial'));
+    await new Promise(resolve => setTimeout(resolve, 0));
+    expect(requests).toContain('./api/bench/runs/run/events?sample_id=s-partial');
+    const gradingHtml = runDetailNode.innerHTML;
+    expect(gradingHtml).toContain('sample-inline-inspector');
+    expect(gradingHtml).toContain('ECMAScript async generator yield* return forwarding');
+    expect(gradingHtml).toContain('si-tok-mismatch');
+    expect(gradingHtml).toContain('value: 5');
+    expect(gradingHtml).toContain('value: 105');
+    expect(gradingHtml).toContain('si-seq-tok is-mismatch');
+    expect(gradingHtml).toContain('已折叠 1 个通过字段（first）');
+
+    // Switch to 执行轨迹 tab -> shows reasoning summary, assistant text, paired submit_answer tool call + accepted badge, and grade node.
+    click(makeClickEvent('data-si-tab', 'trace'));
+    const traceHtml = runDetailNode.innerHTML;
+    expect(traceHtml).toContain('Trace yield* delegation');
+    expect(traceHtml).toContain('Submitting computed states.');
+    expect(traceHtml).toContain('submit_answer');
+    expect(traceHtml).toContain('已接受');
+    expect(traceHtml).toContain('GRADE');
+
+    // Switch to 多轮对照 -> shows Field × Round comparison matrix.
+    click(makeClickEvent('data-si-tab', 'compare'));
+    const cmpHtml = runDetailNode.innerHTML;
+    expect(cmpHtml).toContain('si-cmp-table');
+    expect(cmpHtml).toContain('第 1 轮');
+    expect(cmpHtml).toContain('第 2 轮');
+    expect(cmpHtml).toContain('未提交');
+
+    // Click anomaly stepper -> jumps to s-nosub, defaults to 执行轨迹, shows multi-attempt switcher + visible prose.
+    click(makeClickEvent('data-matrix-step', 'next'));
+    await new Promise(resolve => setTimeout(resolve, 0));
+    expect(requests).toContain('./api/bench/runs/run/events?sample_id=s-nosub');
+    const nosubHtml = runDetailNode.innerHTML;
+    expect(nosubHtml).toContain('未调用 submit_answer（模型异常 · 0 分）');
+    expect(nosubHtml).toContain('第 1 次尝试 · 失败');
+    expect(nosubHtml).toContain('第 2 次尝试 · 完成（最新）');
+    expect(nosubHtml).toContain('The final answer is 42, forgot tool call.');
+
+    // Switch to attempt 1 -> shows 429 error excerpt and api_retry timeline step.
+    click(makeClickEvent('data-si-attempt', 'att-old'));
+    const att1Html = runDetailNode.innerHTML;
+    expect(att1Html).toContain('HTTP 429');
+    expect(att1Html).toContain('rate_limit_exceeded');
+    expect(att1Html).toContain('退避 1.5s');
+
+    // Close inspector -> removes panel cleanly.
+    click(makeClickEvent('data-si-close', '1'));
+    expect(runDetailNode.innerHTML).not.toContain('sample-inline-inspector');
+});
+
+test('multi-run task comparison table projects per-round cost/tokens, avg sample elapsed, KPI strips, and anomaly filter toggle', () => {
+    const { state, view, nodes } = fixture();
+    const tFast = {
+        id: 't-fast',
+        provider_id: 'openai-official',
+        model: 'gpt-5.4',
+        model_display_name: 'GPT-5.4',
+        thinking: 'medium',
+        account_ref: 'gateway-default',
+        account_evidence: 'gateway_binding'
+    };
+    const tSlow = {
+        id: 't-slow',
+        provider_id: 'openai-official',
+        model: 'gpt-5.4',
+        model_display_name: 'GPT-5.4',
+        thinking: 'high',
+        account_ref: 'gateway-default',
+        account_evidence: 'gateway_binding'
+    };
+    const multiTask = {
+        id: 'task-metrics',
+        status: 'completed',
+        plan: { targets: [tFast, tSlow], run_count: 2, rounds: 3, run_concurrency: 2, sample_concurrency: 6, sample_count: 72 },
+        children: [
+            {
+                run_id: 'run-clean',
+                target: tFast,
+                status: 'completed',
+                sample_count: 36,
+                sample_status_counts: { completed: 36 },
+                metrics: {
+                    rounds: 3,
+                    scored_samples: 36,
+                    full_score_samples: 30,
+                    partial_score_samples: 3,
+                    zero_score_samples: 3,
+                    mean_score: 87.5,
+                    score_complete: true,
+                    elapsed_sample_count: 36,
+                    elapsed_seconds_known: 1800,
+                    elapsed_seconds_total: 1800,
+                    avg_sample_elapsed_seconds: 50,
+                    input_tokens: 900000,
+                    output_tokens: 300000,
+                    total_tokens: 1200000,
+                    known_input_tokens_lower_bound: null,
+                    known_output_tokens_lower_bound: null,
+                    known_total_tokens_lower_bound: null,
+                    estimated_cost_usd: 0.9,
+                    known_cost_lower_bound_usd: null,
+                    unknown_usage_attempts: 0,
+                    unknown_cost_attempts: 0
+                }
+            },
+            {
+                run_id: 'run-anom',
+                target: tSlow,
+                status: 'completed',
+                sample_count: 36,
+                sample_status_counts: { completed: 35, timeout: 1 },
+                result_quality: {
+                    completed_samples: 35,
+                    unscored_samples: 0,
+                    timeout_samples: 1,
+                    model_anomaly_samples: 1,
+                    non_model_anomaly_samples: 0,
+                    ended_after_submission_samples: 0,
+                    ended_after_timeout_samples: 0,
+                    ended_after_non_model_samples: 0,
+                    no_submission_samples: 1,
+                    unknown_usage_attempts: 0,
+                    unknown_cost_attempts: 0
+                },
+                metrics: {
+                    rounds: 3,
+                    scored_samples: 36,
+                    full_score_samples: 24,
+                    partial_score_samples: 6,
+                    zero_score_samples: 6,
+                    mean_score: 75,
+                    score_complete: true,
+                    elapsed_sample_count: 36,
+                    elapsed_seconds_known: 5400,
+                    elapsed_seconds_total: 5400,
+                    avg_sample_elapsed_seconds: 150,
+                    input_tokens: null,
+                    output_tokens: null,
+                    total_tokens: null,
+                    known_input_tokens_lower_bound: 1500000,
+                    known_output_tokens_lower_bound: 600000,
+                    known_total_tokens_lower_bound: 2100000,
+                    estimated_cost_usd: null,
+                    known_cost_lower_bound_usd: 1.5,
+                    unknown_usage_attempts: 1,
+                    unknown_cost_attempts: 1
+                }
+            }
+        ]
+    };
+    state.tasks = [multiTask];
+    state.selectedTaskId = 'task-metrics';
+    state.taskDetail = multiTask;
+    state.selectedRunId = 'run-clean';
+    state.runDetail = {
+        id: 'run-clean',
+        task_id: 'task-metrics',
+        status: 'completed',
+        plan: { targets: [tFast], rounds: 3 },
+        metrics: multiTask.children[0].metrics,
+        samples: [
+            { sample_id: 's1', task: 'K23_Alpha', round: 1, status: 'completed', grade: { content_score: 1 }, elapsed_seconds: 40 },
+            { sample_id: 's2', task: 'K23_Alpha', round: 2, status: 'completed', grade: { content_score: 0.5 }, elapsed_seconds: 60 }
+        ]
+    };
+    view.renderDetails();
+
+    const taskHtml = nodes.get('bench-task-detail').innerHTML;
+    expect(taskHtml).toContain('class="task-inline-bar"');
+    expect(taskHtml).toContain('单题均耗 <b>1m 40s</b>');
+    expect(taskHtml).toMatch(/总费用 <b class="is-bound">≥ \$/);
+    expect(taskHtml).toMatch(/总 Tokens <b class="is-bound">≥ /);
+    // Status-focused pills: no inline score / metric strip, no density toggle, no boxed anomaly summary.
+    expect(taskHtml).not.toContain('task-run-pill-score');
+    expect(taskHtml).not.toContain('task-run-pill-metrics');
+    expect(taskHtml).not.toContain('data-task-metric-mode');
+    expect(taskHtml).not.toContain('task-tele-');
+    expect(taskHtml).toContain('仅看异常 1');
+    expect(taskHtml).toContain('全部 2');
+    // Full score/metrics stay reachable through the pill tooltip.
+    expect(taskHtml).toContain('每轮估算费用 $0.3');
+    expect(taskHtml).toContain('≥ $0.5');
+    expect(taskHtml).toContain('≥ 700k');
+
+    // Toggle anomaly filter -> hides clean run row, keeps anomalous run row.
+    clickTaskDetail(nodes, '[data-task-run-filter]', { taskRunFilter: 'anomaly' });
+    const filteredHtml = nodes.get('bench-task-detail').innerHTML;
+    expect(filteredHtml).not.toContain('data-preview-run-id="run-clean"');
+    expect(filteredHtml).toContain('data-preview-run-id="run-anom"');
+    // Switch back to all -> both rows visible again.
+    clickTaskDetail(nodes, '[data-task-run-filter]', { taskRunFilter: 'all' });
+    expect(nodes.get('bench-task-detail').innerHTML).toContain('data-preview-run-id="run-clean"');
+
+    // Run detail KPI strip & sample matrix avg time column.
+    const runHtml = nodes.get('bench-run-detail').innerHTML;
+    expect(runHtml).toContain('class="run-kpi-strip"');
+    expect(runHtml).toContain('30 满 · 3 部 · 3 零');
+    expect(runHtml).toContain('每轮 10m');
+    expect(runHtml).toContain('3 轮总计 $0.9');
+    expect(runHtml).toContain('入 300k / 出 100k');
+    expect(runHtml).toContain('<span role="columnheader" class="sample-matrix-time-head">单题均耗</span>');
+    expect(runHtml).toContain('<span role="cell" class="sample-matrix-time">50s</span>');
 });
 
 test('history entries fail closed when active bank is unloaded or record lacks bank_version', () => {

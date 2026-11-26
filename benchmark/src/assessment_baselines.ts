@@ -264,6 +264,17 @@ function buildBaseline(
         );
         sampleIds.add(sample.sample_id);
         requireBaseline(sample.status === 'completed' && sample.ok === true, 'failed or incomplete samples are not scores');
+        const submission = object(sample.answer_submission) ? sample.answer_submission : null;
+        const endedAfter =
+            typeof submission?.ended_after_submission === 'string' && submission.ended_after_submission.trim()
+                ? submission.ended_after_submission.trim()
+                : null;
+        requireBaseline(
+            endedAfter === null,
+            endedAfter === 'SampleTimeout'
+                ? 'timed-out samples are not eligible for baselines'
+                : 'non-model anomalies are not eligible for baselines'
+        );
         requireBaseline(sample.model === target.model && sample.thinking === target.thinking, 'sample target identity differs');
         for (const key of ['run_id', 'route_id', 'account_ref'])
             requireBaseline(

@@ -240,6 +240,17 @@ describe('terminal run eviction and persistent index cache', () => {
             expect(recovered.list_runs()).toEqual(expectedSummary);
             expect(recovered.list_observations()).toEqual(expectedObs);
             await recovered.close();
+
+            // Stale summary_json missing 3-category anomaly fields -> startup rehydrates and repairs cache.
+            const staleSummary = structuredClone(expectedSummary[0]!);
+            delete (staleSummary.result_quality as Record<string, unknown>).timeout_samples;
+            delete (staleSummary.result_quality as Record<string, unknown>).model_anomaly_samples;
+            delete (staleSummary.result_quality as Record<string, unknown>).non_model_anomaly_samples;
+            db.db.run('UPDATE run_index_cache SET summary_json = ? WHERE run_id = ?', [JSON.stringify(staleSummary), runId]);
+            const upgraded = new BenchExecutionService(dir, routes(), 4, clientFactory as never, db);
+            expect(loadRunCalls).toBe(2);
+            expect(upgraded.list_runs()).toEqual(expectedSummary);
+            await upgraded.close();
             db.close();
         } finally {
             rmSync(dir, { recursive: true, force: true });
@@ -272,6 +283,92 @@ describe('terminal run eviction and persistent index cache', () => {
             expect(sameRuns).toEqual({ etag: firstRuns.etag, unchanged: true });
         } finally {
             await service.close();
+            rmSync(dir, { recursive: true, force: true });
+        }
+    });
+
+    test('startup legacy overlay normalizes post-submission non-model runs and repairs 4xx budget / wiped timeout usage', async () => {
+        const dir = mkdtempSync(join(tmpdir(), 'mini-bench-legacy-repair-'));
+        const taskId = load_assessment_bank().task_ids[0]!;
+        try {
+            const clientFactory = () => ({
+                post_responses_stream: () => [200, 0.01, {}, completedResponse()] as const
+            });
+            const writer = new BenchExecutionService(dir, routes(), 4, clientFactory as never);
+            const runId = await writer.start_run({
+                targets: [{ id: 'target-a', route_id: 'route-a', thinking: 'high' }],
+                task_ids: [taskId],
+                rounds: 1
+            });
+            expect(await writer.wait_for_run(runId, 5)).toBe(true);
+            await writer.close();
+
+            const db = new BenchDatabase(join(dir, 'mini-bench.sqlite'));
+            try {
+                const saved = db.load_run(runId) as any;
+                const sample = saved.samples[0];
+                sample.answer_submission = {
+                    protocol: 'submit-answer-tool-v1',
+                    call_id: 'c1',
+                    answer: { ok: true },
+                    submissions: 1,
+                    ended_after_submission: 'api_failure'
+                };
+                sample.grade = { content_score: 1, outcome: 'exact_match', instruction_checks: { submitted_via_tool: true } };
+                saved.budget.missing_cost_calls = 1;
+                saved.budget.uncertain_cost_reservation_usd = 0.25;
+                saved.budget.estimated_uncached_cost_usd = null;
+                db.save_run(saved);
+                db.insert_session_event({
+                    run_id: runId,
+                    sample_id: sample.sample_id,
+                    attempt_id: sample.attempt_id,
+                    seq: 99,
+                    kind: 'llm_turn',
+                    call_id: `${sample.attempt_id}:2:1`,
+                    turn: 2,
+                    api_attempt: 1,
+                    http_status: 429,
+                    elapsed_seconds: 0.2,
+                    usage_known: false,
+                    input_tokens: null,
+                    output_tokens: null,
+                    estimated_cost_usd: null,
+                    response_status: null,
+                    error_code: 'rate_limit_error',
+                    error_message: 'rate limited',
+                    local_exception: null,
+                    terminal_event: null,
+                    termination: 'http_error',
+                    first_output_seconds: null,
+                    last_progress_seconds: null,
+                    payload: { type: 'call' }
+                });
+                db.db.run('DELETE FROM run_index_cache');
+            } finally {
+                db.close();
+            }
+
+            const reloaded = new BenchExecutionService(dir, routes(), 4, clientFactory as never);
+            const loaded = reloaded.get_run(runId)!;
+            expect(loaded.status).toBe('failed');
+            expect(loaded.retryable_samples).toBe(1);
+            expect(loaded.budget.missing_cost_calls).toBe(0);
+            expect(loaded.budget.uncertain_cost_reservation_usd).toBe(0);
+            expect(typeof loaded.budget.estimated_uncached_cost_usd).toBe('number');
+            const summary = reloaded.list_runs().find(r => r.id === runId)!;
+            expect(summary.status).toBe('failed');
+            const quality = summary.result_quality as Record<string, number>;
+            expect(quality.non_model_anomaly_samples).toBe(1);
+            expect(quality.ended_after_non_model_samples).toBe(1);
+            await reloaded.close();
+
+            const cachedReload = new BenchExecutionService(dir, routes(), 4, clientFactory as never);
+            expect(cachedReload.list_runs().find(r => r.id === runId)!.status).toBe('failed');
+            expect(cachedReload.get_run(runId)!.status).toBe('failed');
+            expect(cachedReload.get_run(runId)!.budget.missing_cost_calls).toBe(0);
+            await cachedReload.close();
+        } finally {
             rmSync(dir, { recursive: true, force: true });
         }
     });

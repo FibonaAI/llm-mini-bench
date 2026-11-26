@@ -187,6 +187,8 @@ test('unified anomaly helpers detect timeout, ended_after_submission, no_submiss
     const clean = observation(1);
     expect(buildObservationAnomalies(observationSampleAnomalies(clean), null)).toEqual({
         timedOut: 0,
+        endedAfterTimeout: 0,
+        endedAfterNonModel: 0,
         endedAfterSubmission: 0,
         noSubmission: 0,
         usageIncomplete: null,
@@ -211,14 +213,28 @@ test('unified anomaly helpers detect timeout, ended_after_submission, no_submiss
         outcome: 'no_submission',
         ended_after_submission: null
     };
+    mixed.tasks[3].samples[0] = {
+        round: 1,
+        status: 'completed',
+        content_score: 1,
+        outcome: 'exact_match',
+        ended_after_submission: 'SampleTimeout'
+    };
     const sampleAnomalies = observationSampleAnomalies(mixed);
-    expect(sampleAnomalies).toEqual({ timedOut: 1, endedAfterSubmission: 1, noSubmission: 1 });
+    expect(sampleAnomalies).toEqual({
+        timedOut: 1,
+        endedAfterTimeout: 1,
+        endedAfterNonModel: 1,
+        endedAfterSubmission: 2,
+        noSubmission: 1
+    });
     const combined = buildObservationAnomalies(sampleAnomalies, { cost: 0.1, unknownAttempts: 2, attempts: 14 });
     expect(combined.hasAny).toBe(true);
-    expect(combined.items).toHaveLength(4);
-    expect(combined.summary).toContain('1 个样本超时（按 0 分计）');
-    expect(combined.summary).toContain('1 个样本提交答案后异常中止（按最后一次提交评分）');
-    expect(combined.summary).toContain('1 个样本未调用 submit_answer 提交（按 0 分计）');
+    expect(combined.items).toHaveLength(5);
+    expect(combined.summary).toContain('超时：1 个样本整题超时（按 0 分计）');
+    expect(combined.summary).toContain('超时：1 个样本提交答案后超时（按最后一次提交评分）');
+    expect(combined.summary).toContain('非模型异常：1 个样本提交答案后异常中止（按最后一次提交评分）');
+    expect(combined.summary).toContain('模型异常：1 个样本未提交答案（按 0 分计）');
     expect(combined.summary).toContain('用量不完整：2 次请求尝试未返回用量');
 });
 

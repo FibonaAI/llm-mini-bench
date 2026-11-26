@@ -2,7 +2,7 @@ import { PRODUCTION_BANK_VERSION } from './production_bank.ts';
 import type { RunCallSummary } from './bench_call_summaries.ts';
 import { join, resolve } from 'node:path';
 import { createHash, randomUUID } from 'node:crypto';
-import { AssessmentBudget, run_assessment_sample } from './assessment_runner.ts';
+import { AssessmentBudget, is_entry_rejection_status, run_assessment_sample } from './assessment_runner.ts';
 import { load_assessment_bank } from './assessment_bank.ts';
 import {
     assessment_source_signature,
@@ -11,7 +11,7 @@ import {
     type AssessmentSourceContext
 } from './assessment_provenance.ts';
 import { project_run_observations } from './assessment_baselines.ts';
-import type { AssessmentObservation } from './assessment_observations.ts';
+import { sent_no_request_attempt, type AssessmentObservation } from './assessment_observations.ts';
 import { BENCH_DB_FILENAME, BenchDatabase, type RunIndexCacheEntry, type StoredSessionEvent } from './bench_db.ts';
 import { private_directory, SessionJournal, SampleJournal } from './bench_execution_storage.ts';
 import {
@@ -20,7 +20,8 @@ import {
     execution_task_summary,
     fast_fail_stop_reason,
     is_retryable_sample,
-    is_timeout_sample
+    is_timeout_sample,
+    terminal_run_status
 } from './bench_execution_queries.ts';
 export { EXECUTION_SOURCE_PATHS } from './assessment_provenance.ts';
 export { private_directory, save_execution_json } from './bench_execution_storage.ts';
@@ -228,12 +229,22 @@ class RunBudget extends AssessmentBudget {
 interface LegacyRunOverlay {
     status?: string;
     known_cost_lower_bound_usd?: number;
+    budget_missing_cost_calls?: number;
+    budget_uncertain_cost_reservation_usd?: number;
+    budget_estimated_uncached_cost_usd?: number | null;
     samples: Record<
         string,
         {
             status?: string;
             usage?: { input_tokens: number; output_tokens: number };
             estimated_uncached_cost_usd?: number;
+            attempts?: Record<
+                number,
+                {
+                    usage?: { input_tokens: number; output_tokens: number };
+                    estimated_uncached_cost_usd?: number;
+                }
+            >;
         }
     >;
 }
@@ -349,6 +360,10 @@ export class BenchExecutionService {
         if (!this.has_run(id)) return null;
         return this.with_db_read(db => db.read_run_session_events(id, attemptId));
     }
+    read_sample_session_events(id: string, sampleId: string, attemptId?: string): StoredSessionEvent[] | null {
+        if (!this.has_run(id)) return null;
+        return this.with_db_read(db => db.read_sample_session_events(id, sampleId, attemptId));
+    }
     private run_status(id: string): string | null {
         return this._runs.get(id)?.status ?? this._run_index.get(id)?.status ?? null;
     }
@@ -404,20 +419,55 @@ export class BenchExecutionService {
             if (!patch) continue;
             if (patch.status) sample.status = patch.status;
             if (patch.usage) {
-                if (!object(sample.usage)) sample.usage = clone(patch.usage);
-                if (Object.hasOwn(sample, 'latest_attempt_usage') && !object(sample.latest_attempt_usage))
+                const zeroTimeoutUsage =
+                    is_timeout_sample(sample) &&
+                    object(sample.usage) &&
+                    Number(sample.usage.input_tokens) === 0 &&
+                    Number(sample.usage.output_tokens) === 0 &&
+                    (patch.usage.input_tokens > 0 || patch.usage.output_tokens > 0);
+                if (!object(sample.usage) || zeroTimeoutUsage) sample.usage = clone(patch.usage);
+                if (Object.hasOwn(sample, 'latest_attempt_usage') && (!object(sample.latest_attempt_usage) || zeroTimeoutUsage))
                     sample.latest_attempt_usage = clone(patch.usage);
             }
             if (patch.estimated_uncached_cost_usd !== undefined) {
-                if (typeof sample.estimated_uncached_cost_usd !== 'number')
+                const zeroTimeoutCost =
+                    is_timeout_sample(sample) && sample.estimated_uncached_cost_usd === 0 && patch.estimated_uncached_cost_usd > 0;
+                if (typeof sample.estimated_uncached_cost_usd !== 'number' || zeroTimeoutCost)
                     sample.estimated_uncached_cost_usd = patch.estimated_uncached_cost_usd;
-                if (Object.hasOwn(sample, 'latest_attempt_cost_usd') && typeof sample.latest_attempt_cost_usd !== 'number')
+                if (
+                    Object.hasOwn(sample, 'latest_attempt_cost_usd') &&
+                    (typeof sample.latest_attempt_cost_usd !== 'number' || zeroTimeoutCost)
+                )
                     sample.latest_attempt_cost_usd = patch.estimated_uncached_cost_usd;
             }
+            if (patch.attempts && Array.isArray(sample.attempts)) {
+                for (const [indexKey, attemptPatch] of Object.entries(patch.attempts)) {
+                    const attempt = sample.attempts[Number(indexKey)];
+                    if (!object(attempt)) continue;
+                    if (attemptPatch.usage) {
+                        if (!object(attempt.usage)) attempt.usage = clone(attemptPatch.usage);
+                        if (Object.hasOwn(attempt, 'latest_attempt_usage') && !object(attempt.latest_attempt_usage))
+                            attempt.latest_attempt_usage = clone(attemptPatch.usage);
+                    }
+                    if (attemptPatch.estimated_uncached_cost_usd !== undefined) {
+                        if (typeof attempt.estimated_uncached_cost_usd !== 'number')
+                            attempt.estimated_uncached_cost_usd = attemptPatch.estimated_uncached_cost_usd;
+                        if (Object.hasOwn(attempt, 'latest_attempt_cost_usd') && typeof attempt.latest_attempt_cost_usd !== 'number')
+                            attempt.latest_attempt_cost_usd = attemptPatch.estimated_uncached_cost_usd;
+                    }
+                }
+            }
         }
-        if (object(run.budget) && overlay.known_cost_lower_bound_usd !== undefined) {
-            if (overlay.known_cost_lower_bound_usd > Number(run.budget.known_cost_lower_bound_usd ?? 0))
-                run.budget.known_cost_lower_bound_usd = overlay.known_cost_lower_bound_usd;
+        if (object(run.budget)) {
+            if (overlay.known_cost_lower_bound_usd !== undefined) {
+                if (overlay.known_cost_lower_bound_usd > Number(run.budget.known_cost_lower_bound_usd ?? 0))
+                    run.budget.known_cost_lower_bound_usd = overlay.known_cost_lower_bound_usd;
+            }
+            if (overlay.budget_missing_cost_calls !== undefined) run.budget.missing_cost_calls = overlay.budget_missing_cost_calls;
+            if (overlay.budget_uncertain_cost_reservation_usd !== undefined)
+                run.budget.uncertain_cost_reservation_usd = overlay.budget_uncertain_cost_reservation_usd;
+            if (overlay.budget_estimated_uncached_cost_usd !== undefined)
+                run.budget.estimated_uncached_cost_usd = overlay.budget_estimated_uncached_cost_usd;
         }
     }
     private load_run_from_db(id: string, includeProvenance = true): ExecutionRun | null {
@@ -448,16 +498,17 @@ export class BenchExecutionService {
                     }
                 }
             }
-            if (
-                !run.samples.some(
-                    sample => ['api_failure', 'worker_error', 'storage_error'].includes(sample.status) && !is_timeout_sample(sample)
-                )
-            ) {
-                run.status =
-                    run.samples.length && run.samples.every(sample => sample.status === 'completed' || is_timeout_sample(sample))
-                        ? 'completed'
-                        : 'incomplete';
-                overlay.status = run.status;
+            const normalizedStatus = terminal_run_status(run.samples, run.stop_reason, false);
+            if (normalizedStatus !== run.status) {
+                run.status = normalizedStatus;
+                overlay.status = normalizedStatus;
+                patched = true;
+            }
+        } else if (run.status === 'completed') {
+            const normalizedStatus = terminal_run_status(run.samples, run.stop_reason, false);
+            if (normalizedStatus !== run.status) {
+                run.status = normalizedStatus;
+                overlay.status = normalizedStatus;
                 patched = true;
             }
         }
@@ -470,71 +521,161 @@ export class BenchExecutionService {
             )
                 sample.estimated_uncached_cost_usd = sample.latest_attempt_cost_usd;
         }
+        const isZeroTimeoutUsage = (sample: ExecutionSample) =>
+            is_timeout_sample(sample) &&
+            Array.isArray(sample.calls) &&
+            sample.calls.length > 1 &&
+            object(sample.usage) &&
+            Number(sample.usage.input_tokens) === 0 &&
+            Number(sample.usage.output_tokens) === 0;
         const needsEventUsage = run.samples.some(
             sample =>
-                (sample.status === 'completed' || is_timeout_sample(sample)) &&
-                (!object(sample.usage) || typeof sample.estimated_uncached_cost_usd !== 'number')
+                ((sample.status === 'completed' || is_timeout_sample(sample)) &&
+                    (!object(sample.usage) || typeof sample.estimated_uncached_cost_usd !== 'number' || isZeroTimeoutUsage(sample))) ||
+                (Array.isArray(sample.attempts) &&
+                    (sample.attempts as unknown[]).some(
+                        attempt =>
+                            object(attempt) &&
+                            !sent_no_request_attempt(attempt) &&
+                            Array.isArray(attempt.calls) &&
+                            attempt.calls.length > 0 &&
+                            (!object(Object.hasOwn(attempt, 'latest_attempt_usage') ? attempt.latest_attempt_usage : attempt.usage) ||
+                                typeof (Object.hasOwn(attempt, 'latest_attempt_cost_usd')
+                                    ? attempt.latest_attempt_cost_usd
+                                    : attempt.estimated_uncached_cost_usd) !== 'number')
+                    ))
         );
-        if (needsEventUsage) {
-            const callUsage = new Map<string, { usage: { input_tokens: number; output_tokens: number }; cost: number | null }>();
-            for (const event of this.db.read_run_session_events(run.id)) {
-                if (
-                    event.kind === 'llm_turn' &&
-                    event.usage_known &&
-                    event.input_tokens !== null &&
-                    event.output_tokens !== null &&
-                    event.call_id
-                ) {
-                    callUsage.set(event.call_id, {
-                        usage: { input_tokens: event.input_tokens, output_tokens: event.output_tokens },
-                        cost: event.estimated_cost_usd
-                    });
-                }
+        const needsBudgetRepair = object(run.budget) && Number(run.budget.missing_cost_calls ?? 0) > 0;
+        let runEvents: StoredSessionEvent[] | null = null;
+        if (needsEventUsage || needsBudgetRepair) {
+            runEvents = this.db.read_run_session_events(run.id);
+        }
+        if (needsEventUsage && runEvents) {
+            const callEvents = new Map<
+                string,
+                { usage: { input_tokens: number; output_tokens: number } | null; cost: number | null; entryRejection: boolean }
+            >();
+            for (const event of runEvents) {
+                if (event.kind !== 'llm_turn' || !event.call_id) continue;
+                const entryRejection = event.http_status !== null && is_entry_rejection_status(event.http_status);
+                const usage =
+                    event.usage_known && event.input_tokens !== null && event.output_tokens !== null
+                        ? { input_tokens: event.input_tokens, output_tokens: event.output_tokens }
+                        : entryRejection
+                          ? { input_tokens: 0, output_tokens: 0 }
+                          : null;
+                const cost = usage ? (event.estimated_cost_usd !== null ? event.estimated_cost_usd : entryRejection ? 0 : null) : null;
+                callEvents.set(event.call_id, { usage, cost, entryRejection });
             }
             for (const sample of run.samples) {
-                if (sample.status !== 'completed' && !is_timeout_sample(sample)) continue;
-                if (object(sample.usage) && typeof sample.estimated_uncached_cost_usd === 'number') continue;
-                const ids = Array.isArray(sample.calls) ? (sample.calls as string[]) : [];
-                const known = ids.map(callId => callUsage.get(String(callId))).filter(Boolean) as {
-                    usage: { input_tokens: number; output_tokens: number };
-                    cost: number | null;
-                }[];
-                if (known.length > 0 || is_timeout_sample(sample)) {
-                    const usage = known.reduce(
-                        (acc, item) => ({
-                            input_tokens: acc.input_tokens + item.usage.input_tokens,
-                            output_tokens: acc.output_tokens + item.usage.output_tokens
-                        }),
-                        { input_tokens: 0, output_tokens: 0 }
-                    );
-                    const target = run.plan.targets.find(item => item.id === sample.target_id);
-                    const pricing = target?.pricing;
-                    const cost =
-                        known.length > 0 && known.every(item => item.cost !== null)
-                            ? known.reduce((acc, item) => acc + (item.cost ?? 0), 0)
-                            : pricing
-                              ? usage.input_tokens * pricing.prompt + usage.output_tokens * pricing.completion
-                              : null;
-                    const patch = overlay.samples[sample.sample_id] ?? {};
-                    if (!object(sample.usage)) {
-                        sample.usage = usage;
-                        patch.usage = clone(usage);
-                        patched = true;
+                const target = run.plan.targets.find(item => item.id === sample.target_id);
+                const pricing = target?.pricing;
+                if (
+                    (sample.status === 'completed' || is_timeout_sample(sample)) &&
+                    (!object(sample.usage) || typeof sample.estimated_uncached_cost_usd !== 'number' || isZeroTimeoutUsage(sample))
+                ) {
+                    const ids = Array.isArray(sample.calls) ? (sample.calls as string[]) : [];
+                    const known = ids
+                        .map(callId => callEvents.get(String(callId)))
+                        .filter(
+                            (
+                                item
+                            ): item is {
+                                usage: { input_tokens: number; output_tokens: number };
+                                cost: number | null;
+                                entryRejection: boolean;
+                            } => Boolean(item && item.usage)
+                        );
+                    if (known.length > 0 || (is_timeout_sample(sample) && !isZeroTimeoutUsage(sample))) {
+                        const usage = known.reduce(
+                            (acc, item) => ({
+                                input_tokens: acc.input_tokens + item.usage.input_tokens,
+                                output_tokens: acc.output_tokens + item.usage.output_tokens
+                            }),
+                            { input_tokens: 0, output_tokens: 0 }
+                        );
+                        const cost =
+                            known.length > 0 && known.every(item => item.cost !== null)
+                                ? known.reduce((acc, item) => acc + (item.cost ?? 0), 0)
+                                : pricing
+                                  ? usage.input_tokens * pricing.prompt + usage.output_tokens * pricing.completion
+                                  : null;
+                        const zeroRestore = isZeroTimeoutUsage(sample) && (usage.input_tokens > 0 || usage.output_tokens > 0);
+                        const patch = overlay.samples[sample.sample_id] ?? {};
+                        if (!object(sample.usage) || zeroRestore) {
+                            sample.usage = usage;
+                            patch.usage = clone(usage);
+                            patched = true;
+                        }
+                        if (Object.hasOwn(sample, 'latest_attempt_usage') && (!object(sample.latest_attempt_usage) || zeroRestore))
+                            sample.latest_attempt_usage = clone(usage);
+                        if (
+                            (typeof sample.estimated_uncached_cost_usd !== 'number' || (zeroRestore && cost !== null && cost > 0)) &&
+                            cost !== null
+                        ) {
+                            sample.estimated_uncached_cost_usd = cost;
+                            patch.estimated_uncached_cost_usd = cost;
+                            patched = true;
+                        }
+                        if (
+                            Object.hasOwn(sample, 'latest_attempt_cost_usd') &&
+                            (typeof sample.latest_attempt_cost_usd !== 'number' || (zeroRestore && cost !== null && cost > 0)) &&
+                            cost !== null
+                        )
+                            sample.latest_attempt_cost_usd = cost;
+                        if (patch.usage || patch.estimated_uncached_cost_usd !== undefined) overlay.samples[sample.sample_id] = patch;
                     }
-                    if (Object.hasOwn(sample, 'latest_attempt_usage') && !object(sample.latest_attempt_usage))
-                        sample.latest_attempt_usage = clone(usage);
-                    if (typeof sample.estimated_uncached_cost_usd !== 'number' && cost !== null) {
-                        sample.estimated_uncached_cost_usd = cost;
-                        patch.estimated_uncached_cost_usd = cost;
-                        patched = true;
+                }
+                if (Array.isArray(sample.attempts)) {
+                    for (let attemptIndex = 0; attemptIndex < sample.attempts.length; attemptIndex++) {
+                        const attempt = sample.attempts[attemptIndex];
+                        if (!object(attempt) || sent_no_request_attempt(attempt) || !Array.isArray(attempt.calls) || !attempt.calls.length)
+                            continue;
+                        const attemptUsage = Object.hasOwn(attempt, 'latest_attempt_usage') ? attempt.latest_attempt_usage : attempt.usage;
+                        const attemptCost = Object.hasOwn(attempt, 'latest_attempt_cost_usd')
+                            ? attempt.latest_attempt_cost_usd
+                            : attempt.estimated_uncached_cost_usd;
+                        if (object(attemptUsage) && typeof attemptCost === 'number') continue;
+                        const items = (attempt.calls as string[]).map(callId => callEvents.get(String(callId)));
+                        if (items.length && items.every(item => item && item.usage !== null)) {
+                            const usage = items.reduce(
+                                (acc, item) => ({
+                                    input_tokens: acc.input_tokens + item!.usage!.input_tokens,
+                                    output_tokens: acc.output_tokens + item!.usage!.output_tokens
+                                }),
+                                { input_tokens: 0, output_tokens: 0 }
+                            );
+                            const cost = items.every(item => item!.cost !== null)
+                                ? items.reduce((acc, item) => acc + (item!.cost ?? 0), 0)
+                                : pricing
+                                  ? usage.input_tokens * pricing.prompt + usage.output_tokens * pricing.completion
+                                  : null;
+                            const samplePatch = overlay.samples[sample.sample_id] ?? {};
+                            const attemptPatch = samplePatch.attempts?.[attemptIndex] ?? {};
+                            if (!object(attempt.usage)) {
+                                attempt.usage = usage;
+                                attemptPatch.usage = clone(usage);
+                                patched = true;
+                            }
+                            if (Object.hasOwn(attempt, 'latest_attempt_usage') && !object(attempt.latest_attempt_usage))
+                                attempt.latest_attempt_usage = clone(usage);
+                            if (typeof attempt.estimated_uncached_cost_usd !== 'number' && cost !== null) {
+                                attempt.estimated_uncached_cost_usd = cost;
+                                attemptPatch.estimated_uncached_cost_usd = cost;
+                                patched = true;
+                            }
+                            if (
+                                Object.hasOwn(attempt, 'latest_attempt_cost_usd') &&
+                                typeof attempt.latest_attempt_cost_usd !== 'number' &&
+                                cost !== null
+                            )
+                                attempt.latest_attempt_cost_usd = cost;
+                            if (attemptPatch.usage || attemptPatch.estimated_uncached_cost_usd !== undefined) {
+                                samplePatch.attempts = { ...(samplePatch.attempts ?? {}), [attemptIndex]: attemptPatch };
+                                overlay.samples[sample.sample_id] = samplePatch;
+                            }
+                        }
                     }
-                    if (
-                        Object.hasOwn(sample, 'latest_attempt_cost_usd') &&
-                        typeof sample.latest_attempt_cost_usd !== 'number' &&
-                        cost !== null
-                    )
-                        sample.latest_attempt_cost_usd = cost;
-                    if (patch.usage || patch.estimated_uncached_cost_usd !== undefined) overlay.samples[sample.sample_id] = patch;
                 }
             }
         }
@@ -547,6 +688,22 @@ export class BenchExecutionService {
                 run.budget.known_cost_lower_bound_usd = totalKnownCost;
                 overlay.known_cost_lower_bound_usd = totalKnownCost;
                 patched = true;
+            }
+            if (needsBudgetRepair && runEvents) {
+                const llmEvents = runEvents.filter(event => event.kind === 'llm_turn');
+                const nonEntryUnknown = llmEvents.filter(
+                    event => !event.usage_known && !(event.http_status !== null && is_entry_rejection_status(event.http_status))
+                );
+                if (llmEvents.length > 0 && nonEntryUnknown.length === 0) {
+                    const knownBound = Number(run.budget.known_cost_lower_bound_usd ?? 0);
+                    run.budget.missing_cost_calls = 0;
+                    run.budget.uncertain_cost_reservation_usd = 0;
+                    run.budget.estimated_uncached_cost_usd = knownBound;
+                    overlay.budget_missing_cost_calls = 0;
+                    overlay.budget_uncertain_cost_reservation_usd = 0;
+                    overlay.budget_estimated_uncached_cost_usd = knownBound;
+                    patched = true;
+                }
             }
         }
         return patched ? overlay : undefined;
@@ -580,12 +737,23 @@ export class BenchExecutionService {
                     const observations = JSON.parse(row.observations_json) as AssessmentObservation[];
                     const legacy_overlay =
                         typeof row.legacy_overlay_json === 'string' ? (JSON.parse(row.legacy_overlay_json) as LegacyRunOverlay) : undefined;
-                    if (object(summary) && summary.id === id && Array.isArray(observations)) {
+                    if (
+                        object(summary) &&
+                        summary.id === id &&
+                        typeof summary.result_quality?.timeout_samples === 'number' &&
+                        typeof summary.result_quality?.model_anomaly_samples === 'number' &&
+                        typeof summary.result_quality?.non_model_anomaly_samples === 'number' &&
+                        typeof summary.result_quality?.ended_after_submission_samples === 'number' &&
+                        typeof summary.result_quality?.no_submission_samples === 'number' &&
+                        typeof summary.metrics?.scored_samples === 'number' &&
+                        typeof summary.metrics?.elapsed_sample_count === 'number' &&
+                        Array.isArray(observations)
+                    ) {
                         this._run_index.set(id, {
                             id,
                             ...(typeof row.task_id === 'string' ? { task_id: row.task_id } : {}),
                             ...(typeof row.execution_kind === 'string' ? { execution_kind: row.execution_kind } : {}),
-                            status: row.status,
+                            status: legacy_overlay?.status ?? summary.status ?? row.status,
                             stop_reason: row.stop_reason ?? null,
                             created_at: row.created_at,
                             updated_at: row.updated_at,
@@ -647,10 +815,19 @@ export class BenchExecutionService {
                 task.updated_at = now();
                 this.db.update_task_status(id, task.status, task.stop_reason, task.updated_at);
             }
-            if (['failed', 'incomplete'].includes(task.status)) {
+            if (['completed', 'failed', 'incomplete'].includes(task.status) && task.stop_reason !== 'storage_error') {
                 const children = task.child_run_ids.map(child => this._run_index.get(child)!);
-                if (children.every(run => TERMINAL_RUN_STATUSES.has(run.status)) && !children.some(run => run.status === 'failed'))
-                    task.status = children.every(run => run.status === 'completed') ? 'completed' : 'incomplete';
+                if (children.every(run => TERMINAL_RUN_STATUSES.has(run.status))) {
+                    task.status = children.every(run => run.status === 'completed')
+                        ? 'completed'
+                        : children.some(run => run.status === 'failed')
+                          ? 'failed'
+                          : children.some(run => run.status === 'interrupted')
+                            ? 'interrupted'
+                            : children.every(run => run.status === 'cancelled')
+                              ? 'cancelled'
+                              : 'incomplete';
+                }
             }
             this._tasks.set(id, slim_task_state(task));
             this.slim_tasks.add(id);
@@ -1307,7 +1484,8 @@ export class BenchExecutionService {
         const eligible = loaded.samples.filter(sample =>
             policy === 'sample-timeout-v1' ? sample.status !== 'completed' : is_retryable_sample(sample, loaded.stop_reason)
         );
-        if (!eligible.length) throw new TypeError(policy ? 'No unfinished samples to rerun' : 'No API-failed samples to retry');
+        if (!eligible.length)
+            throw new TypeError(policy ? 'No unfinished samples to rerun' : 'No API-failed or anomalous samples to retry');
         const latestLimits = batches.at(-1)?.limits;
         const retryLimits = policy ? clone(DEFAULT_LIMITS) : object(latestLimits) ? (latestLimits as Limits) : loaded.plan.limits;
         const prepared = await this.prepare(
@@ -1335,7 +1513,8 @@ export class BenchExecutionService {
         const currentEligible = run.samples.filter(sample =>
             policy === 'sample-timeout-v1' ? sample.status !== 'completed' : is_retryable_sample(sample, run.stop_reason)
         );
-        if (!currentEligible.length) throw new TypeError(policy ? 'No unfinished samples to rerun' : 'No API-failed samples to retry');
+        if (!currentEligible.length)
+            throw new TypeError(policy ? 'No unfinished samples to rerun' : 'No API-failed or anomalous samples to retry');
         for (const target of run.plan.targets) {
             const current = prepared.plan.targets.find(value => value.id === target.id)!;
             for (const key of [
@@ -1381,6 +1560,12 @@ export class BenchExecutionService {
                     'calls',
                     'usage',
                     'estimated_uncached_cost_usd',
+                    'latest_attempt_usage',
+                    'latest_attempt_cost_usd',
+                    'answer_submission',
+                    'api_request_count',
+                    'last_http_status',
+                    'elapsed_seconds',
                     'text',
                     'tool_trace',
                     'started_at',
@@ -1607,20 +1792,7 @@ export class BenchExecutionService {
                 const fastFail = runtime.fast_fail.size ? runtime.fast_fail.values().next().value! : null;
                 const pending = run.samples.filter(sample => sample.status === 'pending');
                 if (!pending.length && !runtime.active) {
-                    run.status =
-                        run.stop_reason === 'storage_error'
-                            ? 'failed'
-                            : cancelled
-                              ? 'cancelled'
-                              : run.samples.every(sample => sample.status === 'completed' || is_timeout_sample(sample))
-                                ? 'completed'
-                                : run.samples.some(
-                                        sample =>
-                                            ['api_failure', 'worker_error', 'storage_error'].includes(sample.status) &&
-                                            !is_timeout_sample(sample)
-                                    )
-                                  ? 'failed'
-                                  : 'incomplete';
+                    run.status = terminal_run_status(run.samples, run.stop_reason, cancelled);
                     if (run.stop_reason !== 'storage_error')
                         run.stop_reason = cancelled
                             ? 'cancelled'

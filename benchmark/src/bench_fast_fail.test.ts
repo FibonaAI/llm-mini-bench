@@ -6,7 +6,19 @@ import { BenchExecutionService, type ExecutionRoutes } from './bench_execution.t
 import { fast_fail_stop_reason } from './bench_execution_queries.ts';
 import type { GatewayResponse } from './client.ts';
 
-const success = () => ({ status: 'completed', output_text: '42', output: [], usage: { input_tokens: 10, output_tokens: 5 } });
+const usage = { input_tokens: 10, output_tokens: 5 };
+/** A clean answer: submit via `submit_answer`, then end the turn, so healthy runs carry no model anomaly. */
+const isContinuation = (body: Record<string, unknown>) =>
+    Array.isArray(body.input) && (body.input as Record<string, unknown>[]).some(item => item.type === 'function_call_output');
+const success = (body: Record<string, unknown>) =>
+    isContinuation(body)
+        ? { status: 'completed', output_text: 'Done.', output: [], usage }
+        : {
+              status: 'completed',
+              output_text: '',
+              output: [{ type: 'function_call', call_id: 'sub-1', name: 'submit_answer', arguments: '{"answer":1}' }],
+              usage
+          };
 const pricing = { prompt: 0.000001, completion: 0.000001 };
 const dirs: string[] = [],
     services: BenchExecutionService[] = [];
@@ -15,7 +27,10 @@ afterEach(async () => {
     for (const dir of dirs.splice(0)) rmSync(dir, { recursive: true, force: true });
 });
 
-/** Two routes on separate accounts; route A answers with `failure` until healed, route B always succeeds. */
+/**
+ * Two routes on separate accounts; route A answers with `failure` until healed, route B always succeeds.
+ * Counts track first-turn requests (including API retries), not the closing turn after a submission.
+ */
 function fixture(failure: GatewayResponse) {
     const dir = mkdtempSync(join(tmpdir(), 'bench-fast-fail-'));
     dirs.push(dir);
@@ -39,13 +54,14 @@ function fixture(failure: GatewayResponse) {
     const counts = { a: 0, b: 0 };
     let healed = false;
     const service = new BenchExecutionService(dir, routes, 18, base_url => ({
-        post_responses_stream: (): GatewayResponse => {
+        post_responses_stream: (body: Record<string, unknown>): GatewayResponse => {
+            const first = !isContinuation(body);
             if (base_url.includes('//a.')) {
-                counts.a++;
-                return healed ? [200, 0, {}, success()] : structuredClone(failure);
+                if (first) counts.a++;
+                return healed ? [200, 0, {}, success(body)] : structuredClone(failure);
             }
-            counts.b++;
-            return [200, 0, {}, success()];
+            if (first) counts.b++;
+            return [200, 0, {}, success(body)];
         }
     }));
     service.retry_wait = async () => {};
@@ -129,12 +145,12 @@ test('a rate-limited route stops after bounded retries, stops sibling Thinking r
     expect(after.every(run => run.status === 'completed' && run.stop_reason === null)).toBe(true);
     expect(f.counts.a).toBe(2 + 24);
     expect(f.service.get_task(taskId)!.status).toBe('completed');
-    // Only the rate-limited attempt sent requests without usage; never-sent attempts are known zero.
+    // The 429 entry rejections and the never-sent attempts are all known zero, so no prior attempt has unknown usage.
     const quality = f.service
         .list_runs()
         .filter(run => routeA.some(item => item.id === run.id))
         .map(run => run.result_quality as Record<string, number>);
-    expect(quality.reduce((sum, item) => sum + item.prior_unknown_usage_samples!, 0)).toBe(1);
+    expect(quality.reduce((sum, item) => sum + item.prior_unknown_usage_samples!, 0)).toBe(0);
 });
 
 test('a permanent 403 is not retried; in-flight samples finish but no further sample is sent', async () => {

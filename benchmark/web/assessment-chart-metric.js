@@ -117,6 +117,15 @@ export function observationQualitySummary(record, { includeUsage = true } = {}) 
   const samples = (record?.tasks || []).flatMap(task => (task.samples || []).map(sample => ({ ...sample, task_id: task.task_id })));
   const timedOut = samples.filter(sample => sample.status === 'timeout');
   const failed = samples.filter(sample => sample.status !== 'completed' && sample.status !== 'timeout');
+  const endedAfterTimeout = samples.filter(sample => sample.status === 'completed' && sample.ended_after_submission === 'SampleTimeout');
+  const endedAfterNonModel = samples.filter(
+    sample =>
+      sample.status === 'completed' &&
+      typeof sample.ended_after_submission === 'string' &&
+      sample.ended_after_submission.trim() &&
+      sample.ended_after_submission.trim() !== 'SampleTimeout'
+  );
+  const noSubmission = samples.filter(sample => sample.status === 'completed' && sample.outcome === 'no_submission');
   const unscored = samples.filter(
     sample => sample.status === 'completed' && !(typeof sample.content_score === 'number' && Number.isFinite(sample.content_score))
   );
@@ -134,11 +143,14 @@ export function observationQualitySummary(record, { includeUsage = true } = {}) 
     interrupted: '已中断'
   };
   const parts = [];
-  if (timedOut.length > 0) parts.push(`${timedOut.length} 个样本超时（按 0 分计）`);
+  if (timedOut.length > 0) parts.push(`超时：${timedOut.length} 个样本整题超时（按 0 分计）`);
+  if (endedAfterTimeout.length > 0) parts.push(`超时：${endedAfterTimeout.length} 个样本提交答案后超时`);
+  if (endedAfterNonModel.length > 0) parts.push(`非模型异常：${endedAfterNonModel.length} 个样本提交答案后异常中止`);
   for (const [status, count] of Object.entries(failedStatus)) {
     const label = statusText[status] ?? status;
     parts.push(`${count} 个样本${/^[A-Za-z]/.test(label) ? ' ' : ''}${label}`);
   }
+  if (noSubmission.length > 0) parts.push(`模型异常：${noSubmission.length} 个样本未提交答案（按 0 分计）`);
   if (byOutcome('ambiguous')) parts.push(`${byOutcome('ambiguous')} 个样本答案歧义，无法评分`);
   if (byOutcome('ungradable')) parts.push(`${byOutcome('ungradable')} 个样本答案无法解析`);
   const otherUnscored = unscored.length - byOutcome('ambiguous') - byOutcome('ungradable');
@@ -154,10 +166,19 @@ export function observationQualitySummary(record, { includeUsage = true } = {}) 
     }
   }
   return {
-    failed: failed.length,
-    timedOut: timedOut.length,
+    failed: failed.length + endedAfterNonModel.length,
+    timedOut: timedOut.length + endedAfterTimeout.length,
+    noSubmission: noSubmission.length,
     unscored: unscored.length,
-    retryable: (failedStatus.api_failure ?? 0) + timedOut.length + (failedStatus.interrupted ?? 0) + (failedStatus.cancelled ?? 0),
+    retryable:
+      (failedStatus.api_failure ?? 0) +
+      (failedStatus.incomplete ?? 0) +
+      timedOut.length +
+      endedAfterTimeout.length +
+      endedAfterNonModel.length +
+      noSubmission.length +
+      (failedStatus.interrupted ?? 0) +
+      (failedStatus.cancelled ?? 0),
     text: parts.join(' · ')
   };
 }
@@ -168,7 +189,8 @@ export function observationQualitySummary(record, { includeUsage = true } = {}) 
  */
 export function observationSampleAnomalies(record) {
   let timedOut = 0,
-    endedAfterSubmission = 0,
+    endedAfterTimeout = 0,
+    endedAfterNonModel = 0,
     noSubmission = 0;
   for (const task of record?.tasks || []) {
     for (const sample of task?.samples || []) {
@@ -178,26 +200,44 @@ export function observationSampleAnomalies(record) {
         continue;
       }
       if (sample.status !== 'completed') continue;
-      if (typeof sample.ended_after_submission === 'string' && sample.ended_after_submission.trim()) endedAfterSubmission++;
+      const ended = typeof sample.ended_after_submission === 'string' ? sample.ended_after_submission.trim() : '';
+      if (ended) {
+        if (ended === 'SampleTimeout') endedAfterTimeout++;
+        else endedAfterNonModel++;
+      }
       if (sample.outcome === 'no_submission') noSubmission++;
     }
   }
-  return { timedOut, endedAfterSubmission, noSubmission };
+  return {
+    timedOut,
+    endedAfterTimeout,
+    endedAfterNonModel,
+    endedAfterSubmission: endedAfterTimeout + endedAfterNonModel,
+    noSubmission
+  };
 }
 
 /** Combine cached sample anomalies with active usage lower-bound state without rescanning tasks. */
 export function buildObservationAnomalies(sampleAnomalies, usageIncomplete = null) {
   const timedOut = Number.isInteger(sampleAnomalies?.timedOut) && sampleAnomalies.timedOut > 0 ? sampleAnomalies.timedOut : 0;
-  const endedAfterSubmission =
-    Number.isInteger(sampleAnomalies?.endedAfterSubmission) && sampleAnomalies.endedAfterSubmission > 0
+  const hasSplitEnded = Number.isInteger(sampleAnomalies?.endedAfterTimeout) || Number.isInteger(sampleAnomalies?.endedAfterNonModel);
+  const endedAfterTimeout =
+    Number.isInteger(sampleAnomalies?.endedAfterTimeout) && sampleAnomalies.endedAfterTimeout > 0 ? sampleAnomalies.endedAfterTimeout : 0;
+  const endedAfterNonModel = hasSplitEnded
+    ? Number.isInteger(sampleAnomalies?.endedAfterNonModel) && sampleAnomalies.endedAfterNonModel > 0
+      ? sampleAnomalies.endedAfterNonModel
+      : 0
+    : Number.isInteger(sampleAnomalies?.endedAfterSubmission) && sampleAnomalies.endedAfterSubmission > 0
       ? sampleAnomalies.endedAfterSubmission
       : 0;
+  const endedAfterSubmission = endedAfterTimeout + endedAfterNonModel;
   const noSubmission =
     Number.isInteger(sampleAnomalies?.noSubmission) && sampleAnomalies.noSubmission > 0 ? sampleAnomalies.noSubmission : 0;
   const items = [];
-  if (timedOut > 0) items.push(`${timedOut} 个样本超时（按 0 分计）`);
-  if (endedAfterSubmission > 0) items.push(`${endedAfterSubmission} 个样本提交答案后异常中止（按最后一次提交评分）`);
-  if (noSubmission > 0) items.push(`${noSubmission} 个样本未调用 submit_answer 提交（按 0 分计）`);
+  if (timedOut > 0) items.push(`超时：${timedOut} 个样本整题超时（按 0 分计）`);
+  if (endedAfterTimeout > 0) items.push(`超时：${endedAfterTimeout} 个样本提交答案后超时（按最后一次提交评分）`);
+  if (endedAfterNonModel > 0) items.push(`非模型异常：${endedAfterNonModel} 个样本提交答案后异常中止（按最后一次提交评分）`);
+  if (noSubmission > 0) items.push(`模型异常：${noSubmission} 个样本未提交答案（按 0 分计）`);
   const activeUsageIncomplete =
     usageIncomplete && Number.isInteger(usageIncomplete.unknownAttempts) && usageIncomplete.unknownAttempts > 0 ? usageIncomplete : null;
   if (activeUsageIncomplete) {
@@ -205,6 +245,8 @@ export function buildObservationAnomalies(sampleAnomalies, usageIncomplete = nul
   }
   return {
     timedOut,
+    endedAfterTimeout,
+    endedAfterNonModel,
     endedAfterSubmission,
     noSubmission,
     usageIncomplete: activeUsageIncomplete,

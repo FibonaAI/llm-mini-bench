@@ -165,7 +165,7 @@ function fixture() {
         routePickerLeaves: records =>
             records.flatMap(route => route.thinking_levels.map(think => ({ ...route, route, routeId: route.id, think })))
     });
-    for (const filename of ['app-context.js', 'runs.js', 'task-history-view.js', 'task-submission.js', 'bench.js']) {
+    for (const filename of ['app-context.js', 'runs.js', 'sample-inspector.js', 'task-history-view.js', 'task-submission.js', 'bench.js']) {
         const raw = readFileSync(
             process.env.MINI_BENCH_WEB_DIR
                 ? join(process.env.MINI_BENCH_WEB_DIR, filename)
@@ -424,10 +424,10 @@ test('new task history excludes child runs from top level and retains old record
     expect(html).toContain('data-bench-run-id="old-run"');
     expect(html).not.toContain('data-bench-run-id="child-run"');
     expect(html).toContain('旧运行');
-    expect(f.element('bench-task-detail').innerHTML).toContain('2/42');
-    expect(f.element('bench-task-detail').innerHTML).toContain('remote-instance / group（路由组）');
-    await f.window.dispatchEvent({ type: 'mini-bench:select-run', detail: 'child-run' });
-    expect(f.element('bench-task-detail').innerHTML).toContain('fixed-account');
+    // Single-run task auto-directs straight into its sole child run detail.
+    expect(f.element('bench-task-detail').innerHTML).toContain('data-inline-run="child-run"');
+    expect(f.element('bench-run-detail').innerHTML).toContain('remote-instance / group（路由组）');
+    expect(f.element('bench-run-detail').innerHTML).toContain('fixed-account');
     expect(f.element('bench-run-detail').innerHTML).toContain('sample-a');
     await f.element('bench-cancel-run').emit('click');
     expect(f.calls.filter(call => call.options?.method === 'POST').map(call => call.path)).toEqual(['./api/bench/runs/child-run/cancel']);

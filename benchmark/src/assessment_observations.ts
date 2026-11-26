@@ -42,6 +42,13 @@ const isTimeoutSample = (sample: Evidence) =>
     sample.status === 'timeout' ||
     (object(sample.grade) && sample.grade.outcome === 'timeout') ||
     (sample.status === 'api_failure' && sample.runner_error === 'SampleTimeout');
+const endedAfterSubmissionReason = (sample: Evidence): string | null => {
+    if (sample.status !== 'completed') return null;
+    const submission = object(sample.answer_submission) ? sample.answer_submission : null;
+    return typeof submission?.ended_after_submission === 'string' && submission.ended_after_submission.trim()
+        ? submission.ended_after_submission.trim()
+        : null;
+};
 
 /**
  * Cumulative accounting over every sample. When a sample has known effective usage and cost,
@@ -134,6 +141,21 @@ export function project_assessment_observation(
         samples.length && samples.every(sample => knownNumber(sample.elapsed_seconds))
             ? samples.reduce((sum, sample) => sum + Number(sample.elapsed_seconds), 0)
             : null;
+    const hasPostSubmissionNonModel = samples.some(sample => {
+        const ended = endedAfterSubmissionReason(sample);
+        return ended !== null && ended !== 'SampleTimeout';
+    });
+    const projectedStatus =
+        run.status === 'completed' && hasPostSubmissionNonModel
+            ? samples.some(sample => endedAfterSubmissionReason(sample) === 'api_failure')
+                ? 'failed'
+                : 'incomplete'
+            : run.status === 'failed' &&
+                samples.length > 0 &&
+                !hasPostSubmissionNonModel &&
+                samples.every(sample => sample.status === 'completed' || isTimeoutSample(sample))
+              ? 'completed'
+              : (run.status ?? null);
     return {
         id: baseline?.id ?? run.id + ':' + target.id,
         source,
@@ -169,12 +191,7 @@ export function project_assessment_observation(
         implementation: Object.keys(bank.source_sha256 ?? {}).some(key => key.endsWith('.py')) ? 'python-historical' : 'typescript-bun',
         assessment_protocol_sha256: candidate?.assessment_protocol_sha256 ?? null,
         rounds: plan.rounds ?? null,
-        status:
-            run.status === 'failed' &&
-            samples.length > 0 &&
-            samples.every(sample => sample.status === 'completed' || isTimeoutSample(sample))
-                ? 'completed'
-                : (run.status ?? null),
+        status: projectedStatus,
         baseline_eligible: candidate !== null,
         ineligibility_reason: reason,
         tasks
