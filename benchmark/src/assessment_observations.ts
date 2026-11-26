@@ -32,7 +32,8 @@ const knownUsage = (value: unknown): value is UsageValue =>
     Number.isInteger(value.output_tokens) &&
     (value.input_tokens as number) >= 0 &&
     (value.output_tokens as number) >= 0;
-const sentNoRequest = (attempt: Evidence) =>
+/** An attempt that never sent a request (empty `calls`, or never started and left unsent) is a known zero. */
+export const sent_no_request_attempt = (attempt: Evidence) =>
     (Array.isArray(attempt.calls) && attempt.calls.length === 0) ||
     (!Array.isArray(attempt.calls) &&
         !attempt.started_at &&
@@ -56,7 +57,7 @@ export function observation_usage_accounting(samples: readonly Evidence[]) {
         attempts = 0;
     const add = (attempt: Evidence, usage: unknown, cost: unknown) => {
         attempts++;
-        if (sentNoRequest(attempt)) return;
+        if (sent_no_request_attempt(attempt)) return;
         if (knownUsage(usage)) {
             usage_known.input_tokens += usage.input_tokens;
             usage_known.output_tokens += usage.output_tokens;

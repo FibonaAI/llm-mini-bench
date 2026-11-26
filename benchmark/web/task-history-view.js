@@ -291,6 +291,24 @@ export function createTaskHistoryView({ app, state, retryRequests, retrying, bas
             not_executed_after_api_failure: '未执行：此前 API 失败导致停止',
             not_executed_execution_limit: '未执行：触及执行上限'
           }[sample.historical_outcome_classification?.reason] || statusText(sample.status);
+  const STOP_REASON_TEXT = {
+    rate_limited: '上游限流或额度不足（HTTP 429），重试后仍失败，已停止该模型后续样本',
+    access_denied: '上游拒绝访问（HTTP 401/403），已停止该模型后续样本',
+    payment_required: '上游额度或计费不足（HTTP 402），已停止该模型后续样本',
+    model_not_found: '上游找不到该模型（HTTP 404），已停止该模型后续样本',
+    cancelled: '已取消',
+    service_restart: '服务重启导致中断',
+    storage_error: '存储错误',
+    child_failure: '部分运行失败',
+    capability_or_limit: '能力或执行上限',
+    request_limit: '触及请求次数上限',
+    cost_reservation_limit: '触及费用预留上限',
+    observed_cost_exceeded: '触及费用上限',
+    missing_usage_cost: '上游未返回用量或费用',
+    transport_failure: '传输异常'
+  };
+  const stopReasonText = reason => STOP_REASON_TEXT[reason] || reason;
+  const isFastFailStop = reason => ['rate_limited', 'access_denied', 'payment_required', 'model_not_found'].includes(reason);
   /** Terminal 'failed' means some samples hit API failures, not that the whole run failed. */
   const recordStatusLabel = record => {
     if (record.status === 'completed') {
@@ -1150,7 +1168,7 @@ export function createTaskHistoryView({ app, state, retryRequests, retrying, bas
             baseState = childBaselineState(child),
             budget = budgetLabel(child.budget, child.status),
             quality = qualityLabel(child);
-          return `<div class="task-child-row ${child.run_id === state.selectedRunId ? 'is-selected' : ''}" data-child-run-id="${escapeHtml(child.run_id)}"><button class="task-child-open" type="button" aria-expanded="${child.run_id === state.selectedRunId}" aria-controls="history-run-${escapeHtml(child.run_id)}" data-history-focus="run:${escapeHtml(child.run_id)}" data-bench-run-id="${escapeHtml(child.run_id)}"><strong>${escapeHtml(targetLabel(target))}${baseState.baselineId ? '<span class="task-baseline-inline"><i class="task-baseline-sq" aria-hidden="true"></i>基线</span>' : ''}</strong><span>${escapeHtml(targetIdentity(target))}</span><small>运行 ${escapeHtml(child.run_id)} · ${progress.done}/${progress.total} 样本已结束${baseState.baselineId ? ' · 已设为基线' : ''}${budget ? ` · ${escapeHtml(budget)}` : ''}${quality ? ` · ${escapeHtml(quality)}` : ''}${child.stop_reason && child.stop_reason !== 'api_failure' ? ` · 停止原因 ${escapeHtml(child.stop_reason)}` : ''}${child.retryable_samples > 0 && !inProgress(child) ? ` · ${child.retryable_samples} 个可重试` : ''}</small></button><span class="run-list-status ${statusBadgeClass(child)}"><i class="task-dot is-${statusTone(child)}${statusTone(child) === 'running' ? ' is-pulse' : ''}" aria-hidden="true"></i>${escapeHtml(recordStatusLabel(child))}</span><button class="btn" type="button" data-history-focus="cancel:${escapeHtml(child.run_id)}" data-cancel-child="${escapeHtml(child.run_id)}" ${!canCancel(child) || state.cancelling.has(`run:${child.run_id}`) ? 'disabled' : ''}>取消运行</button></div><div id="history-run-${escapeHtml(child.run_id)}" data-inline-run="${escapeHtml(child.run_id)}"></div>`;
+          return `<div class="task-child-row ${child.run_id === state.selectedRunId ? 'is-selected' : ''}" data-child-run-id="${escapeHtml(child.run_id)}"><button class="task-child-open" type="button" aria-expanded="${child.run_id === state.selectedRunId}" aria-controls="history-run-${escapeHtml(child.run_id)}" data-history-focus="run:${escapeHtml(child.run_id)}" data-bench-run-id="${escapeHtml(child.run_id)}"><strong>${escapeHtml(targetLabel(target))}${baseState.baselineId ? '<span class="task-baseline-inline"><i class="task-baseline-sq" aria-hidden="true"></i>基线</span>' : ''}</strong><span>${escapeHtml(targetIdentity(target))}</span><small>运行 ${escapeHtml(child.run_id)} · ${progress.done}/${progress.total} 样本已结束${baseState.baselineId ? ' · 已设为基线' : ''}${budget ? ` · ${escapeHtml(budget)}` : ''}${quality ? ` · ${escapeHtml(quality)}` : ''}${child.stop_reason && child.stop_reason !== 'api_failure' ? ` · 停止原因 ${escapeHtml(stopReasonText(child.stop_reason))}` : ''}${child.retryable_samples > 0 && !inProgress(child) ? ` · ${child.retryable_samples} 个可重试` : ''}</small></button><span class="run-list-status ${statusBadgeClass(child)}"><i class="task-dot is-${statusTone(child)}${statusTone(child) === 'running' ? ' is-pulse' : ''}" aria-hidden="true"></i>${escapeHtml(recordStatusLabel(child))}</span><button class="btn" type="button" data-history-focus="cancel:${escapeHtml(child.run_id)}" data-cancel-child="${escapeHtml(child.run_id)}" ${!canCancel(child) || state.cancelling.has(`run:${child.run_id}`) ? 'disabled' : ''}>取消运行</button></div><div id="history-run-${escapeHtml(child.run_id)}" data-inline-run="${escapeHtml(child.run_id)}"></div>`;
         })
         .join(
           ''
@@ -1313,6 +1331,8 @@ export function createTaskHistoryView({ app, state, retryRequests, retrying, bas
     const timeout = run.plan?.limits?.timeout;
     const failureText = sample => {
       if (sample.status === 'completed' || ['pending', 'queued', 'running'].includes(sample.status)) return null;
+      if (sample.status === 'budget_not_admitted' && !sample.calls?.length && isFastFailStop(run.stop_reason))
+        return `未发出请求：${stopReasonText(run.stop_reason)}`;
       return (
         attemptFailureText(sample, calls, timeout) ?? (calls === null && callSummaries.get(run.id)?.loading ? '正在读取调用记录…' : null)
       );
@@ -1342,7 +1362,7 @@ export function createTaskHistoryView({ app, state, retryRequests, retrying, bas
       retryBatches.length
         ? `手动重试 <strong>${retryBatches.length} 次${latestRetry?.created_at ? `（最近 ${escapeHtml(formatDate(latestRetry.created_at))}）` : ''}</strong>`
         : '',
-      run.budget?.stop_reason ? `停止原因 <strong>${escapeHtml(run.budget.stop_reason)}</strong>` : '',
+      run.budget?.stop_reason ? `停止原因 <strong>${escapeHtml(stopReasonText(run.budget.stop_reason))}</strong>` : '',
       runTargets.length ? escapeHtml(runTargets.map(target => `${targetLabel(target)} · ${targetIdentity(target)}`).join('；')) : '',
       !run.task_id ? '旧运行记录，未迁移为新任务。' : ''
     ].filter(Boolean);
@@ -1429,7 +1449,7 @@ export function createTaskHistoryView({ app, state, retryRequests, retrying, bas
     const allKey = escapeHtml(`${run.id}:all-samples`);
     replaceHistoryMarkup(
       container,
-      `${summary}${run.stop_reason && run.stop_reason !== 'api_failure' ? `<p class="item-error">停止原因：${escapeHtml(run.stop_reason)}</p>` : ''}${matrix}${
+      `${summary}${run.stop_reason && run.stop_reason !== 'api_failure' ? `<p class="item-error">停止原因：${escapeHtml(stopReasonText(run.stop_reason))}</p>` : ''}${matrix}${
         matrix
           ? `<p class="sample-matrix-legend">${[
               ['full', '1', '满分'],
