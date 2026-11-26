@@ -2,9 +2,26 @@
 
 [中文](ASSESSMENT_BANK.zh.md)
 
-Assessment 1.0 is the production 12-task bank. Its official manifest is `benchmark/banks/assessment-1.0.json`, and full task prompts are in `benchmark/banks/assessment-1.0.questions.json`. The page, execution service, and standalone calibrator all use the same manifest-driven loader (`src/assessment_bank.ts`) and grading implementation.
+Assessment 2.0 and Assessment 1.0 are the two official 12-task banks served side-by-side in the workspace (`benchmark/banks/assessment-2.0.json` / `assessment-2.0.questions.json` and `benchmark/banks/assessment-1.0.json` / `assessment-1.0.questions.json`). The page, execution service, and standalone calibrator all use the same manifest-driven loader (`src/assessment_bank.ts`), while keeping grading, baselines, charts, and task histories strictly isolated by `bank_version`.
 
-Data-defined text tasks use shared exact-field grading (`assessment-exact-fields-v1`) with tagged fractions and closed aliases. Interactive tool tasks use fixed in-memory simulators bound through `src/assessment_interactive.ts` (`assessment-documents-v1`, `assessment-blackbox-v1`, and `assessment-delegated-release-v1`). Model answers remain data and are never executed.
+Data-defined text tasks use shared exact-field grading (`assessment-exact-fields-v1`) with tagged fractions and closed aliases. Interactive tool tasks use fixed in-memory simulators bound through `src/assessment_interactive.ts` (`v1` for 1.0) and `src/assessment_interactive_v2.ts` (`assessment-documents-v2`, `assessment-blackbox-v2`, and `assessment-delegated-release-v2` for 2.0, requiring real within-budget simulator evidence for full credit). Model answers remain data and are never executed.
+
+## Released 2.0 tasks (`task_sha256: 84feeda2…24a3`)
+
+| ID | Domain | Coverage |
+| --- | --- | --- |
+| `K25_IPv4_BitReverse_Abduction` | Knowledge | Unguided hardware/protocol abduction: 8-bit serial LSB↔MSB bit reversal of uppercase ASCII country names disguised as IPv4 dotted quads |
+| `K25_FIDE_Perft_EdgeCases` | Knowledge | FIDE Laws of Chess 1-ply legal-move and checking-move counts across two compact FEN positions combining horizontal en passant pin, diagonal pin, promotion checks, and castling boundary rules |
+| `R25_Shifted_Pinyin_Abduction` | Reasoning | Unguided zero-example abduction across composed US QWERTY right-hand rightward displacement and Mandarin Pinyin syllable re-segmentation |
+| `R25_Morse_Sentence_Camouflage` | Reasoning | Unguided zero-example abduction across ITU Morse dot/dash polarity inversion camouflaged as five valid English words |
+| `C25_FourSlot_Readback` | Code | Minimal total atomic step counts for ascending (`a<b`) and descending (`a>b`) torn readbacks in a 4-slot checkpoint/recovery ring store with intermediate head guards |
+| `C25_Clock_Belady_Anomaly` | Code | Shortest lexicographically first request sequence exhibiting a capacity-3 vs capacity-2 Belady anomaly in a second-chance (Clock) page replacement implementation |
+| `X25_Checkout_Credit_Audit` | Context | Cross-timezone (`UTC` vs `UTC+8`) staggered site rollbacks, edge-vs-origin fault attribution, end-labeled minute buckets, and customer-level retry deduplication |
+| `E25_Tight_Budget_Deductive_Audit` | Context | Budget-5 zero-slack archive investigation starting at `INDEX`, resisting the unverified `BRIEF` note and eliminating `LOG_A` via cargo-weight arithmetic from `INDEX` to retrieve governing schedule `TAR_C` |
+| `I25_SOP_MinStep_Protocol` | Instruction | Minimum-step startup toggle planning and lexicographical tie-breaking across five strictly load-bearing valve interlock preconditions, forbidden state invariant, and same-or-adjacent cooldown |
+| `I25_Bilingual_Custody_Discrepancy` | Instruction | Bilingual English/Chinese semantic projection across six shift notes, separating entailed physical crate custody (`H`/`N`/`U`) from pass rules, document-only exceptions, and clearance |
+| `T25_Deceptive_Relay_Matrix` | Tool use | Budget-4 zero-slack 16-candidate relay isolation across 12 contacts where 10 of 11 balanced `8:8` openings are deceptive traps and only opening `I` certifies every revision with unique feasible step-2 splits |
+| `T25_Delegated_Manifest_Dispatch` | Tool use | Zero-rejection signed delegation queue dispatch maximizing 6 of 8 records across shared ancestor use caps, grandparent revocation, and operation-scoped chains |
 
 ## Production 1.0 tasks
 
@@ -30,7 +47,7 @@ Task IDs remain stable; do not rename them to make their numbering visually cons
 - **Content score**: Each task reports `content_score` in `[0, 1]` as the fraction of its semantic checks passed. There is no inferred domain weighting.
 - **Format and instruction separation**: `instruction_checks` are reported separately from `content_checks`.
 - **Abstention and ungradable outputs**: Whole-answer abstentions (`"UNKNOWN"`, `"UNSURE"`, `"ABSTAIN"`, `"不知道"`) receive `content_score: 0` and `outcome: "abstained"`. Malformed or missing text outputs that cannot be graded remain `content_score: null`.
-- **Tool-submitted answers (`submit-answer-tool-v1`)**: All twelve Assessment 1.0 tasks declare `answer_protocol: "submit-answer-tool-v1"` and an exact `answer_schema`. The runner injects a strict `submit_answer` function tool and grades the last valid `submit_answer` call's raw JSON arguments string, ignoring surrounding prose or earlier drafts. If a completed turn never calls `submit_answer` with a JSON object, it receives `content_score: 0` and `outcome: "no_submission"` with `instruction_checks.submitted_via_tool: false`. If an upstream error, timeout, or cap aborts a turn after a valid `submit_answer` call was already recorded, the runner grades that last submission, marks `status: "completed"`, and records `ended_after_submission`.
+- **Tool-submitted answers (`submit-answer-tool-v1`)**: All twelve tasks in both Assessment 2.0 and Assessment 1.0 declare `answer_protocol: "submit-answer-tool-v1"` and an exact `answer_schema`. The runner injects a strict `submit_answer` function tool and grades the last valid `submit_answer` call's raw JSON arguments string, ignoring surrounding prose or earlier drafts. If a completed turn never calls `submit_answer` with a JSON object, it receives `content_score: 0` and `outcome: "no_submission"` with `instruction_checks.submitted_via_tool: false`. If an upstream error, timeout, or cap aborts a turn after a valid `submit_answer` call was already recorded, the runner grades that last submission, marks `status: "completed"`, and records `ended_after_submission`.
 
 Exceeding the turn, request, or token budget in a tool loop is recorded separately as an execution failure. All tasks use fixed graders, with no model judge and no execution of model-generated programs.
 
@@ -46,7 +63,7 @@ Records that cannot be plotted retain their per-task and raw details. Meeting th
 
 When comparing results, check the bank version, task snapshots, task source hashes, Thinking, and execution protocol. Output token limits, tool call limits, turn limits, and timeouts are part of the sample protocol. Unknown historical settings must not be filled in with current defaults.
 
-The manifest records the core TypeScript source hashes (`src/assessment_tasks.ts`, `src/assessment_json.ts`, and `src/assessment_data.ts`) plus the interactive simulator modules in `extension_sha256` (`src/assessment_interactive.ts`, `src/assessment_blackbox.ts`, `src/assessment_documents.ts`, and `src/assessment_delegated_release.ts`). Calibration and service runs retain the complete execution source closure. Data-defined expected answers and simulator configurations participate in the task hash (`d58ddb12…fed8`).
+Each manifest records the core TypeScript source hashes (`src/assessment_tasks.ts`, `src/assessment_json.ts`, and `src/assessment_data.ts`) plus the interactive simulator modules in `extension_sha256` (`v1` modules for 1.0, and `v1` + `v2` modules for 2.0). Calibration and service runs retain the complete execution source closure. Data-defined expected answers and simulator configurations participate in each bank's task hash (`84feeda2…24a3` for 2.0; `d58ddb12…fed8` for 1.0).
 
 This is a small exploratory capability bank with limited coverage. A single completed round does not establish repeatability or a general model ranking.
 
@@ -63,7 +80,7 @@ bun benchmark/calibrate_assessment.ts \
   --rounds 1 --timeout 600
 ```
 
-It loads the complete Assessment 1.0 bank by default. `--task-ids` selects a diagnostic subset from the bank; subset results cannot be promoted to a complete baseline. Write to a new output file rather than overwriting existing results.
+It loads the complete Assessment 1.0 bank by default (pass `--bank-version 2.0` to calibrate Assessment 2.0). `--task-ids` selects a diagnostic subset from the bank; subset results cannot be promoted to a complete baseline. Write to a new output file rather than overwriting existing results.
 
 The standalone calibrator applies response-token, request-count, or USD caps only when the corresponding option is explicitly passed. The default per-sample timeout is 600 seconds (configurable from 10 to 600 seconds). Samples run through a worker pool so finishing one sample immediately starts the next. `--max-api-retries 0..3` retries transient API failures within the sample deadline (default 0). Transport timeouts or missing usage fail only the affected sample without aborting the rest of the run. To inspect calibration results on the task and analysis pages, import the JSONL read-only with `benchmark/tools/import_calibration.ts`.
 

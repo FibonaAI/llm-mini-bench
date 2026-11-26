@@ -89,17 +89,157 @@ export function createTaskSubmission({
       total_max_cost_usd: config.limits.max_cost_usd === null ? null : config.targets.length * config.limits.max_cost_usd
     });
   }
+  let versionMenuOpen = false;
+  function setVersionMenuOpen(next, { focus = false, restoreFocus = false } = {}) {
+    const trigger = element('bench-version-trigger');
+    const menu = element('bench-version-menu');
+    if (!trigger || !menu) return;
+    versionMenuOpen = Boolean(next);
+    trigger.setAttribute?.('aria-expanded', String(versionMenuOpen));
+    menu.hidden = !versionMenuOpen;
+    if (versionMenuOpen && focus) {
+      const target = menu.querySelector?.('[aria-selected="true"]') || menu.querySelector?.('[data-bank-version]');
+      target?.focus?.({ preventScroll: true });
+    } else if (!versionMenuOpen && restoreFocus) {
+      trigger.focus?.({ preventScroll: true });
+    }
+  }
+  function defaultBankEntry(banks) {
+    return banks.find(entry => entry?.default === true) || banks.find(entry => entry?.production === true) || banks[0] || null;
+  }
+  function preferredDefaultBank(banks, recordedVersions) {
+    const defaultBank = defaultBankEntry(banks);
+    if (!defaultBank) return null;
+    if (recordedVersions?.size && !recordedVersions.has(defaultBank.version)) {
+      const legacyBank = banks.find(
+        entry => entry?.version && entry.version !== defaultBank.version && recordedVersions.has(entry.version)
+      );
+      if (legacyBank) return legacyBank;
+    }
+    return defaultBank;
+  }
+  function unseenDefaultBankVersion(banks, recordedVersions) {
+    if (!Array.isArray(banks) || banks.length < 2) return null;
+    const defaultBank = banks.find(entry => entry?.default === true);
+    if (!defaultBank?.version || recordedVersions?.has(defaultBank.version)) return null;
+    return defaultBank.version;
+  }
+  function renderVersionSwitcher(bank = app.bank) {
+    const switcher = element('bench-version-switch');
+    if (!switcher || !bank || typeof bank.version !== 'string') return;
+    const banks = Array.isArray(state.banks) ? state.banks : [];
+    const versions = banks.filter(entry => typeof entry?.version === 'string');
+    const recordedVersions = app.recordedBankVersions;
+    const unseenDefault = unseenDefaultBankVersion(versions, recordedVersions);
+    const hasNewer = Boolean(unseenDefault && unseenDefault !== bank.version);
+    const label = element('bench-version-label');
+    const badge = element('bench-version-badge');
+    const trigger = element('bench-version-trigger');
+    const menu = element('bench-version-menu');
+    if (label) label.textContent = bank.version;
+    if (badge) badge.hidden = !hasNewer;
+    if (trigger) {
+      trigger.title = hasNewer ? `Mini Bench ${bank.version}（新版本 ${unseenDefault} 已发布，点击切换）` : `Mini Bench ${bank.version}`;
+      trigger.setAttribute?.(
+        'aria-label',
+        hasNewer ? `题库版本：Mini Bench ${bank.version}，有新版本 ${unseenDefault} 可用` : `题库版本：Mini Bench ${bank.version}`
+      );
+      if (hasNewer) trigger.setAttribute?.('data-has-update', 'true');
+      else trigger.removeAttribute?.('data-has-update');
+    }
+    if (menu) {
+      menu.innerHTML = versions
+        .map(entry => {
+          const isNew = Boolean(unseenDefault && entry.version === unseenDefault);
+          const title = isNew ? `Mini Bench ${entry.version}（新版本）` : `Mini Bench ${entry.version}`;
+          const newBadge = isNew ? '<span class="version-option-badge">新版本</span>' : '';
+          return `<button class="version-option" type="button" role="option" data-bank-version="${escapeHtml(entry.version)}" aria-selected="${entry.version === bank.version}" title="${escapeHtml(title)}"><span>${escapeHtml(entry.version)}</span>${newBadge}</button>`;
+        })
+        .join('');
+    }
+    switcher.hidden = versions.length < 2;
+    if (switcher.hidden && versionMenuOpen) setVersionMenuOpen(false);
+  }
   function renderBanks() {
-    // The service marks exactly one production bank; its version and task count drive the form.
-    const bank = state.banks.find(entry => entry.production === true) ?? (state.banks.length === 1 ? state.banks[0] : undefined);
+    // Keep the user's in-memory choice; otherwise prefer the legacy bank only when the workspace has
+    // legacy records without any record on the default (latest) bank, and default to latest otherwise.
+    const banks = Array.isArray(state.banks) ? state.banks : [];
+    const bank =
+      (state.selectedBankVersion && banks.find(entry => entry?.version === state.selectedBankVersion)) ||
+      preferredDefaultBank(banks, app.recordedBankVersions);
     if (!bank || typeof bank.version !== 'string' || !Array.isArray(bank.tasks) || !bank.tasks.length)
       throw new Error('Mini Bench 题库格式无效');
+    state.selectedBankVersion = bank.version;
+    renderVersionSwitcher(bank);
+    const labelPrefix = banks.length > 1 ? `Mini Bench ${bank.version}` : 'Mini Bench';
     element('bench-bank').value = bank.version;
-    element('bench-bank-label').textContent = `Mini Bench · ${bank.tasks.length} 题全部运行`;
+    element('bench-bank-label').textContent = `${labelPrefix} · ${bank.tasks.length} 题全部运行`;
     const header = element('runs-bank-label');
-    if (header) header.textContent = `Mini Bench · ${bank.tasks.length} 题`;
+    if (header) header.textContent = `${labelPrefix} · ${bank.tasks.length} 题`;
     app.setBank(bank);
     updateTaskPreview();
+  }
+  function selectBankVersion(version) {
+    setVersionMenuOpen(false, { restoreFocus: true });
+    if (!version || !state.banks.some(entry => entry?.version === version)) return;
+    state.bankVersionPinned = true;
+    if (version === state.selectedBankVersion) return;
+    state.selectedBankVersion = version;
+    renderBanks();
+  }
+  function reconcileDefaultBank() {
+    if (!state.banks.length) return;
+    if (!state.bankVersionPinned) {
+      const preferred = preferredDefaultBank(state.banks, app.recordedBankVersions);
+      if (preferred && preferred.version !== state.selectedBankVersion) {
+        state.selectedBankVersion = preferred.version;
+        renderBanks();
+        return;
+      }
+    }
+    renderVersionSwitcher();
+  }
+  element('bench-version-trigger')?.addEventListener?.('click', () => {
+    setVersionMenuOpen(!versionMenuOpen, { focus: !versionMenuOpen });
+  });
+  element('bench-version-trigger')?.addEventListener?.('keydown', event => {
+    if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {
+      event.preventDefault();
+      setVersionMenuOpen(true, { focus: true });
+    }
+  });
+  element('bench-version-menu')?.addEventListener?.('keydown', event => {
+    if (!versionMenuOpen) return;
+    const options = [...(element('bench-version-menu')?.querySelectorAll?.('[data-bank-version]') || [])];
+    if (!options.length) return;
+    const index = options.indexOf(event.target?.closest?.('[data-bank-version]'));
+    if (event.key === 'ArrowDown') {
+      event.preventDefault();
+      options[(index + 1 + options.length) % options.length]?.focus?.({ preventScroll: true });
+    } else if (event.key === 'ArrowUp') {
+      event.preventDefault();
+      options[(index - 1 + options.length) % options.length]?.focus?.({ preventScroll: true });
+    } else if (event.key === 'Home') {
+      event.preventDefault();
+      options[0]?.focus?.({ preventScroll: true });
+    } else if (event.key === 'End') {
+      event.preventDefault();
+      options[options.length - 1]?.focus?.({ preventScroll: true });
+    } else if (event.key === 'Escape') {
+      event.preventDefault();
+      setVersionMenuOpen(false, { restoreFocus: true });
+    } else if (event.key === 'Tab') {
+      setVersionMenuOpen(false);
+    }
+  });
+  element('bench-version-switch')?.addEventListener?.('click', event => {
+    const button = event.target?.closest?.('[data-bank-version]');
+    if (button) selectBankVersion(button.dataset.bankVersion);
+  });
+  if (typeof document !== 'undefined') {
+    document.addEventListener('pointerdown', event => {
+      if (versionMenuOpen && !element('bench-version-switch')?.contains?.(event.target)) setVersionMenuOpen(false);
+    });
   }
   function renderTaskSummary(plan) {
     const thinkingLevels = sortThinkingEfforts(new Set((plan.targets || []).map(target => target?.thinking || 'unknown'))).map(
@@ -118,6 +258,7 @@ export function createTaskSubmission({
       return;
     }
     const submission = taskRequestConfig();
+    const submittedBankVersion = submission.bank_version;
     state.busy = true;
     updateTaskPreview();
     notify('正在启动评测。');
@@ -126,11 +267,13 @@ export function createTaskSubmission({
       const result = await request('./api/bench/tasks', { method: 'POST', body: JSON.stringify(submission) });
       if (!result?.id) throw new Error('服务未返回任务 ID');
       created = true;
-      state.selectionVersion++;
-      state.selectedTaskId = result.id;
-      state.selectedRunId = null;
-      state.taskDetail = null;
-      state.runDetail = null;
+      if (app.bank?.version === submittedBankVersion) {
+        state.selectionVersion++;
+        state.selectedTaskId = result.id;
+        state.selectedRunId = null;
+        state.taskDetail = null;
+        state.runDetail = null;
+      }
       app.setTaskSelection([]);
     } catch (error) {
       state.submissionUncertain = true;
@@ -154,6 +297,9 @@ export function createTaskSubmission({
   async function copyTaskConfig(record) {
     const plan = record?.plan;
     if (!plan) return;
+    const recordVersion = record?.bank_version ?? plan.bank_version;
+    if (recordVersion && recordVersion !== app.bank?.version && state.banks.some(entry => entry?.version === recordVersion))
+      selectBankVersion(recordVersion);
     const targets = fixedTargets(record),
       keys = [];
     for (const target of targets) {
@@ -228,5 +374,5 @@ export function createTaskSubmission({
   element('run-form').addEventListener('change', updateTaskPreview);
   element('run-form').addEventListener('input', updateTaskPreview);
   updateTaskPreview();
-  return { updateTaskPreview, renderBanks };
+  return { updateTaskPreview, renderBanks, renderVersionSwitcher, reconcileDefaultBank, selectBankVersion };
 }

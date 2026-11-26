@@ -2,7 +2,7 @@
 
 [中文](README.zh.md)
 
-This directory holds validated `assessment-baseline-v1` snapshots exported for offline reference. Each baseline preserves every planned round of all 12 Assessment 1.0 tasks, with per-task content scores, instruction checks, and tool checks. Partial task sets, failed runs, and ungradable samples cannot be filled in with zero scores or imported as baselines.
+This directory holds validated `assessment-baseline-v1` snapshots exported for offline reference. Each baseline preserves every planned round of all 12 tasks of an official released bank (`1.0` or `2.0`), with its recorded `bank_version`, per-task content scores, instruction checks, and tool checks. Partial task sets, failed runs, and ungradable samples cannot be filled in with zero scores or imported as baselines.
 
 These files are offline reference evidence, not initial user data. The application starts personal workspaces empty and displays only runs and baselines saved under the configured data directory.
 
@@ -15,4 +15,4 @@ bun benchmark/tools/import_assessment_baseline.ts /path/to/run.json \
   --target-id TARGET_ID --output-dir benchmark/baselines
 ```
 
-The input must be a native Bench `run.json` whose target completed every Assessment 1.0 task and every planned round. The tool validates task snapshots, source hashes, per-sample protocols, and gradability, then writes a JSON file named by its content hash. It does not call models.
+The input must be a native Bench `run.json` whose target completed all 12 tasks of Assessment `1.0` or `2.0` across every planned round. The tool validates task snapshots, source hashes, per-sample protocols, and gradability, then writes a JSON file named by its content hash. It does not call models.

@@ -492,18 +492,30 @@ export function createTaskHistoryView({ app, state, retryRequests, retrying, bas
       .filter(Boolean)
       .join(' · ');
   }
+  // History shows only records proven to belong to the currently active bank version.
+  const recordBankVersion = record => record?.bank_version ?? record?.plan?.bank_version ?? null;
+  const activeBankVersion = () => app.bank?.version ?? null;
+  const matchesBankVersion = (record, version) => Boolean(version) && recordBankVersion(record) === version;
+  const matchesActiveBank = record => matchesBankVersion(record, activeBankVersion());
   let cachedEntriesTasksSnapshot = null;
   let cachedEntriesRunsSnapshot = null;
+  let cachedEntriesBankVersion = undefined;
   let cachedEntriesList = [];
   const sameArrayItems = (prev, next) => prev !== null && prev.length === next.length && prev.every((item, index) => item === next[index]);
   function historyEntries() {
-    if (sameArrayItems(cachedEntriesTasksSnapshot, state.tasks) && sameArrayItems(cachedEntriesRunsSnapshot, state.runs))
+    const bankVersion = activeBankVersion();
+    if (
+      cachedEntriesBankVersion === bankVersion &&
+      sameArrayItems(cachedEntriesTasksSnapshot, state.tasks) &&
+      sameArrayItems(cachedEntriesRunsSnapshot, state.runs)
+    )
       return cachedEntriesList;
     cachedEntriesTasksSnapshot = [...state.tasks];
     cachedEntriesRunsSnapshot = [...state.runs];
+    cachedEntriesBankVersion = bankVersion;
     cachedEntriesList = [
-      ...state.tasks.map(record => ({ kind: 'task', record })),
-      ...state.runs.filter(record => !record.task_id).map(record => ({ kind: 'legacy', record }))
+      ...state.tasks.filter(matchesActiveBank).map(record => ({ kind: 'task', record })),
+      ...state.runs.filter(record => !record.task_id && matchesActiveBank(record)).map(record => ({ kind: 'legacy', record }))
     ].sort((a, b) => Number(new Date(b.record.created_at || 0)) - Number(new Date(a.record.created_at || 0)));
     return cachedEntriesList;
   }
@@ -550,7 +562,8 @@ export function createTaskHistoryView({ app, state, retryRequests, retrying, bas
       if (entry.kind === 'legacy') legacyCount++;
       if (inProgress(entry.record)) activeCount++;
     }
-    element('run-summary').textContent = `${state.tasks.length} 个任务 · ${legacyCount} 条旧运行 · ${activeCount} 个进行中`;
+    const scopedTasks = state.tasks.filter(matchesActiveBank);
+    element('run-summary').textContent = `${scopedTasks.length} 个任务 · ${legacyCount} 条旧运行 · ${activeCount} 个进行中`;
     const rawSearch = element('history-search').value,
       status = element('history-status').value;
     const filterKey = `${status}\u0000${rawSearch}`;
@@ -1321,9 +1334,6 @@ export function createTaskHistoryView({ app, state, retryRequests, retrying, bas
             ''
           )}</div><div class="run-target-badges">${promotedTargets.length > 0 ? '<span class="run-baseline-pill"><i class="task-baseline-sq" aria-hidden="true"></i>已设为基线</span>' : ''}<span class="run-list-status ${statusBadgeClass(run)}"><i class="task-dot is-${statusTone(run)}${statusTone(run) === 'running' ? ' is-pulse' : ''}" aria-hidden="true"></i>${escapeHtml(recordStatusLabel(run))}${sampleTotal ? ` · ${runProgress.done}/${sampleTotal} 样本` : ''}</span></div></div>`
       : '';
-    const ineligibleNoteHtml = runIneligibleReason
-      ? `<p class="run-baseline-note" role="note">不可设为基线：${escapeHtml(runIneligibleReason)}</p>`
-      : '';
     const provenanceBits = [
       `运行 <code class="task-meta-id">${escapeHtml(run.id)}</code>`,
       !runTargets.length ? `状态 <strong>${escapeHtml(recordStatusLabel(run))}</strong>` : '',
@@ -1336,7 +1346,7 @@ export function createTaskHistoryView({ app, state, retryRequests, retrying, bas
       runTargets.length ? escapeHtml(runTargets.map(target => `${targetLabel(target)} · ${targetIdentity(target)}`).join('；')) : '',
       !run.task_id ? '旧运行记录，未迁移为新任务。' : ''
     ].filter(Boolean);
-    const summary = `${retryRequests.has(`runs:${run.id}`) && !retrying.has(`runs:${run.id}`) ? `<p class="task-detail-note">${retryNotePrefix}；再次点击右上角“${escapeHtml(runConfirmLabel)}”后开始。</p>` : ''}${targetBanner}${ineligibleNoteHtml}<p class="task-detail-note run-detail-provenance">${provenanceBits.join(' · ')}</p>`;
+    const summary = `${retryRequests.has(`runs:${run.id}`) && !retrying.has(`runs:${run.id}`) ? `<p class="task-detail-note">${retryNotePrefix}；再次点击右上角“${escapeHtml(runConfirmLabel)}”后开始。</p>` : ''}${targetBanner}<p class="task-detail-note run-detail-provenance">${provenanceBits.join(' · ')}</p>`;
     const sampleTone = sample =>
       isTimeoutSample(sample)
         ? 'timeout'
@@ -1539,5 +1549,17 @@ export function createTaskHistoryView({ app, state, retryRequests, retrying, bas
   });
   element('history-search').addEventListener('input', renderDetails);
   element('history-status').addEventListener('change', renderDetails);
-  return { element, historyEntries, renderDetails, inProgress, canCancel, fixedTargets, runBaselineTargets, taskSection, runSection };
+  return {
+    element,
+    historyEntries,
+    renderDetails,
+    inProgress,
+    canCancel,
+    fixedTargets,
+    runBaselineTargets,
+    taskSection,
+    runSection,
+    recordBankVersion,
+    matchesBankVersion
+  };
 }

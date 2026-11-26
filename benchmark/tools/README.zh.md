@@ -56,7 +56,7 @@ bun benchmark/tools/import_assessment_baseline.ts --run-id RUN_ID [--data-dir DI
   --target-id TARGET_ID --output-dir benchmark/baselines
 ```
 
-也可直接传入独立的运行 JSON 文件代替 `--run-id`。工具校验 Assessment 1.0 完整 12 题、全部预定轮次、题库哈希、源码和逐样本执行协议，只接受完成且可评分的结果。
+也可直接传入独立的运行 JSON 文件代替 `--run-id`。工具按运行所属的正式题库版本（Assessment 2.0 或 1.0）校验完整 12 题、全部预定轮次、题库与扩展哈希、执行源码闭包和逐样本执行协议，只接受完成且可评分的结果。
 
 输出文件名由完整快照的内容哈希生成。相同证据再次导入不会覆盖不同内容。个人基线推荐通过插件页面保存，避免把个人数据写入项目。
 

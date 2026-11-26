@@ -1,7 +1,7 @@
 import { readFileSync, statSync } from 'node:fs';
 import { createHash } from 'node:crypto';
 import { join } from 'node:path';
-import { PRODUCTION_BANK_VERSION } from './production_bank.ts';
+import { PRODUCTION_BANK_VERSION, RELEASED_BANK_VERSIONS } from './production_bank.ts';
 import {
     ASSESSMENT_BANK_SOURCE_PATHS,
     ASSESSMENT_PROJECT_ROOT,
@@ -11,6 +11,7 @@ import {
     type AssessmentTaskSnapshot
 } from './assessment_bank.ts';
 import { ASSESSMENT_INTERACTIVE_SOURCE_PATHS } from './assessment_interactive.ts';
+import { ASSESSMENT_INTERACTIVE_V2_SOURCE_PATHS } from './assessment_interactive_v2.ts';
 
 /** Execution source closure is independent of the selected bank's grading hash contract. */
 export const EXECUTION_SOURCE_PATHS = [
@@ -35,8 +36,9 @@ export const EXECUTION_SOURCE_PATHS = [
     'src/bench_call_summaries.ts',
     'src/production_bank.ts',
     ...ASSESSMENT_BANK_SOURCE_PATHS,
-    // The bank loader imports these unconditionally, including for production 1.0.
-    ...ASSESSMENT_INTERACTIVE_SOURCE_PATHS
+    // The bank loader imports these unconditionally across released banks.
+    ...ASSESSMENT_INTERACTIVE_SOURCE_PATHS,
+    ...ASSESSMENT_INTERACTIVE_V2_SOURCE_PATHS
 ] as const;
 
 /** Select the complete import closure, retaining any additional declared bank sources. */
@@ -62,35 +64,50 @@ export function capture_assessment_sources(
     return { sources, hashes };
 }
 
-/** Query-local source verification shares one production bank load, including a failed load. */
+/** Query-local source verification shares bank loads per version, including failed loads. */
 export interface AssessmentSourceContext {
     production_bank(): AssessmentBank;
     production_cards(): AssessmentTaskSnapshot[];
+    bank_for_version?(version: string): AssessmentBank;
+    cards_for_version?(version: string): AssessmentTaskSnapshot[];
 }
 
 /** Never cache across queries: edited source bytes must be revalidated on the next query. */
-export function create_assessment_source_context(load_bank: () => AssessmentBank = load_assessment_bank): AssessmentSourceContext {
-    let result: { bank: AssessmentBank } | { error: unknown } | undefined;
-    let cards: AssessmentTaskSnapshot[] | undefined;
-    const production_bank = () => {
-        if (!result) {
+export function create_assessment_source_context(
+    load_bank: (version?: string) => AssessmentBank = load_assessment_bank
+): AssessmentSourceContext {
+    const entries = new Map<string, { bank: AssessmentBank; cards?: AssessmentTaskSnapshot[] } | { error: unknown }>();
+    const bank_for_version = (version: string): AssessmentBank => {
+        let entry = entries.get(version);
+        if (!entry) {
             try {
-                result = { bank: load_bank() };
+                const bank = version === PRODUCTION_BANK_VERSION ? load_bank() : load_bank(version);
+                entry = { bank };
             } catch (error) {
-                result = { error };
+                entry = { error };
             }
+            entries.set(version, entry);
         }
-        if ('error' in result) throw result.error;
-        return result.bank;
+        if ('error' in entry) throw entry.error;
+        return entry.bank;
     };
-    return { production_bank, production_cards: () => (cards ??= production_bank().tasks.map(assessment_task_snapshot)) };
+    const cards_for_version = (version: string): AssessmentTaskSnapshot[] => {
+        const bank = bank_for_version(version);
+        const entry = entries.get(version) as { bank: AssessmentBank; cards?: AssessmentTaskSnapshot[] };
+        return (entry.cards ??= bank.tasks.map(assessment_task_snapshot));
+    };
+    return {
+        production_bank: () => bank_for_version(PRODUCTION_BANK_VERSION),
+        production_cards: () => cards_for_version(PRODUCTION_BANK_VERSION),
+        bank_for_version,
+        cards_for_version
+    };
 }
 
 /** Fast stat-only signature of tracked source and bank files; detects on-disk edits without reading bytes. */
 export function assessment_source_signature(root = ASSESSMENT_PROJECT_ROOT): string {
     const tracked = [
-        `banks/assessment-${PRODUCTION_BANK_VERSION}.json`,
-        `banks/assessment-${PRODUCTION_BANK_VERSION}.questions.json`,
+        ...RELEASED_BANK_VERSIONS.flatMap(version => [`banks/assessment-${version}.json`, `banks/assessment-${version}.questions.json`]),
         ...EXECUTION_SOURCE_PATHS
     ];
     return tracked
@@ -105,14 +122,16 @@ export function assessment_source_signature(root = ASSESSMENT_PROJECT_ROOT): str
         .join('|');
 }
 
-/** Cryptographic digest of the current production bank and execution sources for persistent cache validation. */
+/** Cryptographic digest of the released banks and execution sources for persistent cache validation. */
 export function assessment_source_digest(context = create_assessment_source_context()): string {
     try {
-        const bank = context.production_bank();
-        const { hashes } = capture_assessment_sources(bank);
-        return createHash('sha256')
-            .update(JSON.stringify({ version: bank.version, task_sha256: bank.task_sha256, hashes }))
-            .digest('hex');
+        const versions = context.bank_for_version ? RELEASED_BANK_VERSIONS : [PRODUCTION_BANK_VERSION];
+        const digests = versions.map(version => {
+            const bank = context.bank_for_version ? context.bank_for_version(version) : context.production_bank();
+            const { hashes } = capture_assessment_sources(bank);
+            return { version: bank.version, task_sha256: bank.task_sha256, hashes };
+        });
+        return createHash('sha256').update(JSON.stringify(digests)).digest('hex');
     } catch {
         return 'invalid:' + assessment_source_signature();
     }

@@ -10,7 +10,7 @@ import {
     load_assessment_baselines,
     validate_assessment_baseline
 } from '../src/assessment_baselines.ts';
-import { create_assessment_source_context } from '../src/assessment_provenance.ts';
+import { capture_assessment_sources, create_assessment_source_context } from '../src/assessment_provenance.ts';
 import { project_assessment_observation } from '../src/assessment_observations.ts';
 import { assessment_hash } from '../src/assessment_json.ts';
 import { assessment_sample_protocol, execution_protocol_hash } from '../src/run_protocol.ts';
@@ -476,5 +476,82 @@ describe('assessment baseline validation', () => {
         expect(readFileSync(join(ASSESSMENT_PROJECT_ROOT, 'tools/import_assessment_baseline.ts'), 'utf8')).toContain(
             "join(ASSESSMENT_PROJECT_ROOT, 'baselines')"
         );
+    });
+    test('Assessment 2.0 runs build validated 2.0 baselines and stay strictly isolated from 1.0', () => {
+        const bank2 = load_assessment_bank('2.0');
+        const cards2 = bank2.tasks.map(assessment_task_snapshot);
+        const config = { max_output_tokens: null, max_turns: null, max_tool_calls: null, timeout: 600 };
+        const target = {
+            id: 'target-v2',
+            model: 'example/model-v2',
+            route_id: 'example/route',
+            account_ref: 'account-a',
+            account_evidence: 'configured_binding',
+            thinking: 'high'
+        };
+        const sources: Record<string, string> = capture_assessment_sources(bank2).hashes;
+        const { tasks: _tasks2, ...snapshot2 } = bank2;
+        const run2: Evidence = {
+            id: 'test-run-v2',
+            status: 'completed',
+            created_at: '2026-11-23T00:00:00Z',
+            plan: {
+                bank_version: '2.0',
+                bank_scope: 'whole',
+                bank_snapshot: snapshot2,
+                task_ids: bank2.task_ids,
+                task_snapshots: cards2,
+                source_sha256: sources,
+                targets: [target],
+                rounds: 1,
+                limits: config
+            },
+            samples: cards2.map(card => {
+                const { execution_protocol, assessment_protocol_sha256 } = assessment_sample_protocol(card, 'high', config, false);
+                return {
+                    sample_id: `${card.id}-1`,
+                    run_id: 'test-run-v2',
+                    target_id: target.id,
+                    route_id: target.route_id,
+                    account_ref: target.account_ref,
+                    task: card.id,
+                    round: 1,
+                    model: target.model,
+                    thinking: 'high',
+                    status: 'completed',
+                    ok: true,
+                    execution_protocol,
+                    execution_protocol_sha256: execution_protocol_hash(execution_protocol),
+                    assessment_protocol_sha256,
+                    grade: { content_score: 0.75, instruction_checks: { submitted_via_tool: true }, outcome: 'partial' }
+                };
+            })
+        };
+        const baseline2 = build_assessment_baseline(run2, 'target-v2');
+        expect(baseline2.bank_version).toBe('2.0');
+        expect(baseline2.samples).toHaveLength(12);
+        const run1 = completeRun(1);
+        const baseline1 = build_assessment_baseline(run1, 'target-1');
+        const combined = assessment_observations([baseline1, baseline2], [run1, run2]);
+        expect(combined.map(r => [r.source, r.bank_version, r.baseline_eligible])).toEqual([
+            ['baseline', '1.0', true],
+            ['baseline', '2.0', true],
+            ['run', '1.0', true],
+            ['run', '2.0', true]
+        ]);
+        expect(baseline2.bank_snapshot.extension_sha256).toEqual(bank2.extension_sha256);
+        // Cross-version relabeling, tampered bank_snapshot.extension_sha256, or incomplete execution closure must fail.
+        const relabeled = structuredClone(run2);
+        relabeled.plan.bank_version = '1.0';
+        expect(() => build_assessment_baseline(relabeled, 'target-v2')).toThrow(TypeError);
+        const badSnapExt = structuredClone(run2);
+        badSnapExt.plan.bank_snapshot.extension_sha256 = { 'src/assessment_blackbox_v2.ts': '0'.repeat(64) };
+        expect(() => build_assessment_baseline(badSnapExt, 'target-v2')).toThrow('extension_sha256');
+        const missingExt = structuredClone(run2);
+        delete missingExt.plan.source_sha256['src/assessment_blackbox_v2.ts'];
+        expect(() => build_assessment_baseline(missingExt, 'target-v2')).toThrow('extension source hashes');
+        const missingExec = structuredClone(run2);
+        delete missingExec.plan.source_sha256['src/assessment_runner.ts'];
+        expect(() => build_assessment_baseline(missingExec, 'target-v2')).toThrow('execution source provenance');
     });
 });

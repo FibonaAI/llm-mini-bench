@@ -7,7 +7,7 @@
 ## 项目边界
 
 - Bun 上的 TypeScript 后端、原生 HTML/CSS/JavaScript 前端和 TypeScript Magpie 插件入口。无运行时 npm 依赖和前端构建步骤。TypeScript、`@types/bun` 与 Prettier 仅为开发依赖。提交前运行 `bun run format`；`.prettierignore` 排除了按字节哈希固定的题库评分器/模拟器源码、题库、证据和文档，这些文件不得重新格式化。
-- Assessment 1.0 共 12 题（覆盖六个领域），是唯一生产题库。早期测试题库、旧指纹工具与兼容 API 均已删除。
+- Assessment 2.0（界面默认选中）与 Assessment 1.0 各共 12 题（覆盖六个领域），是并存提供的两套正式题库，共用底层基建但按版本严格隔离评分、图表、基线与任务历史。早期测试题库、旧指纹工具与兼容 API 均已删除。
 - 评分按题保留内容得分、指令检查、工具检查与执行状态。分析页允许使用已批准的展示指标：全部预定轮次中 12 题的等权均分乘以 100，对照总估算美元费用、输入与输出 Token 总和或总耗时除以轮数。仅为已完成、题目 ID 恰好匹配正式 12 题、1 至 3 轮样本完整且不重复、内容分有限且在 0 到 1 之间、所选轴用量或耗时已知且非负的记录绘点。零费用记录在费用轴的对数和线性刻度下均可入图并绘制在左边界坐标轴上，但不计入帕累托前沿；其余横轴的零用量可在线性轴显示，对数轴隐藏。未发出请求的尝试（`calls` 为空）是已知零用量，不算未知。整题超时按 `0` 分计，运行仍可完成且可手动重试；含样本超时、提交后异常中止（`ended_after_submission`）、未调用 `submit_answer` 提交（`no_submission`）或用量不完整（图表设置项，默认开启按已知下限绘点）的记录均加区分角标，不参与帕累托前沿，且不得将不完整用量表述为完整总量（含超时或用量不完整的运行也不能用于基线）。不同 Thinking 协议不禁用对照及当前可见点的帕累托前沿。颜色默认区分模型、渠道及账号组合，可选跨渠道的模型、模型系列或评测时间着色，仅用于显示。颜色图例保持一行简览，按需展开单列列表；图例搜索和高亮不得筛选记录或改变指标。普通运行用圆点、基线用方块；只在已记录的同批次、渠道、账号及模型内连接 Thinking。不新增任意权重，不把 API 失败或缺失、不可评分结果记成零分，不做 best-of 筛选。该展示指标不改变判分、题库协议或哈希。
 - 题面和模型回答是数据。不能执行模型生成的代码，工具只运行项目内固定的内存模拟器。
 
@@ -23,11 +23,11 @@ TypeScript 在 Bun 上实现评测引擎和 HTTP 服务，原生浏览器 JavaSc
 
 | 位置 | 职责 |
 | --- | --- |
-| `benchmark/banks/assessment-1.0.json` | 生产发布清单，固定题目顺序、题目哈希、评分描述和源码哈希 |
-| `benchmark/banks/assessment-1.0.questions.json` | Assessment 1.0 的完整 12 题可序列化题面导出 |
+| `benchmark/banks/assessment-2.0.json`、`assessment-1.0.json` | 2.0 与 1.0 正式发布清单，固定题目顺序、题目哈希、评分描述和源码哈希 |
+| `benchmark/banks/assessment-2.0.questions.json`、`assessment-1.0.questions.json` | Assessment 2.0 与 1.0 的完整 12 题可序列化题面导出 |
 | `benchmark/src/assessment_bank.ts` | 校验题库清单并加载可运行题目 |
 | `benchmark/src/assessment_data.ts` | 共用数据化精确字段评分（`assessment-exact-fields-v1`）；参与任务哈希 |
-| `benchmark/src/assessment_interactive.ts` | 交互式工具题构建器，分发到固定内存模拟器 |
+| `benchmark/src/assessment_interactive.ts`、`benchmark/src/assessment_interactive_v2.ts` | 交互式工具题构建器，分别分发到固定 `v1`（1.0）与证据门控 `v2`（2.0）内存模拟器 |
 | `benchmark/src/assessment_documents.ts` | 受限预算文档调查模拟器（`assessment-documents-v1`） |
 | `benchmark/src/assessment_blackbox.ts` | 有限候选自适应探针故障诊断模拟器（`assessment-blackbox-v1`） |
 | `benchmark/src/assessment_delegated_release.ts` | 不可变授权链、共享祖先额度与释放结果评分（`assessment-delegated-release-v1`） |
@@ -37,7 +37,7 @@ TypeScript 在 Bun 上实现评测引擎和 HTTP 服务，原生浏览器 JavaSc
 | `benchmark/src/assessment_provenance.ts` | 统一执行源码依赖闭包与字节／哈希捕获，生产 1.0 也包含加载器的无条件依赖 |
 | `benchmark/src/run_protocol.ts` | 请求配置标准化与共用样本协议身份构建，保留省略、null 和 stream 语义 |
 | `benchmark/src/assessment_response.ts` | 可见回答提取与明确单价解析 |
-| `benchmark/src/production_bank.ts` | 正式题库版本的唯一来源；界面、默认任务和入图都从这里读取 |
+| `benchmark/src/production_bank.ts` | 正式题库版本列表（`2.0`、`1.0`）、界面默认版本（`2.0`）与程序化回退默认版本（`1.0`） |
 | `benchmark/src/assessment_answer_protocol.ts` | 可选的 `submit-answer-tool-v1`：逐题 `answer_schema`，以最后一次有效提交评分，未提交计 0 分；新题库应采用 |
 | `benchmark/src/client.ts` | Responses HTTP 客户端，不做 Chat Completions 回退 |
 | `benchmark/src/bench_routes.ts`、`benchmark/src/bench_adapter.ts` | 显式路由与通用适配器接口 |
@@ -97,7 +97,7 @@ bun benchmark/tools/import_assessment_baseline.ts --help
 
 ## 基线与证据
 
-- 只对生产 Assessment 1.0 接受 `assessment-baseline-v1`。完整 12 题、全部预定轮次、任务快照、当前全部源码哈希、Thinking 与逐样本协议必须通过 `build_assessment_baseline` 校验。
+- 只对正式发布的 Assessment 1.0 与 2.0 题库接受 `assessment-baseline-v1`。对应版本的完整 12 题、全部预定轮次、任务快照、当前全部源码/扩展哈希、Thinking 与逐样本协议必须通过对应 `bank_version` 的 `build_assessment_baseline` 校验。
 - `bank_scope=subset` 不可提升为完整基线。缺失来源、不可评分和旧 schema 不能靠补默认值或改版本号升级。
 - 原始调用、失败尝试和工具轨迹先落盘，再评分。Token 和费用缺失保持 `null`；汇总包括工具后续请求，估算不是账单。
 - 个人工作区初始为空，不自动将外部基线加载到服务或分析界面。需要观察记录的浏览器测试应显式填充自己的临时数据目录。

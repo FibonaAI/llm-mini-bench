@@ -2,7 +2,12 @@ import { readFileSync } from 'node:fs';
 import { assessment_task_snapshot, type AssessmentBank, type AssessmentTaskSnapshot } from './assessment_bank.ts';
 import { assessment_hash, canonicalAssessmentJson, parseAssessmentJson } from './assessment_json.ts';
 import { assessment_sample_protocol, execution_protocol_hash, type ExecutionProtocol } from './run_protocol.ts';
-import { create_assessment_source_context, type AssessmentSourceContext } from './assessment_provenance.ts';
+import {
+    assessment_execution_source_paths,
+    create_assessment_source_context,
+    type AssessmentSourceContext
+} from './assessment_provenance.ts';
+import { PRODUCTION_BANK_VERSION, is_released_bank_version } from './production_bank.ts';
 import { project_assessment_observation, type AssessmentObservation } from './assessment_observations.ts';
 import type { BenchRouteMetadata } from './bench_routes.ts';
 
@@ -44,7 +49,8 @@ interface BaselineSample extends Evidence {
     usage?: { input_tokens: number; output_tokens: number };
     estimated_uncached_cost_usd?: number;
 }
-type BankSnapshot = Pick<AssessmentBank, 'version' | 'task_ids' | 'task_sha256' | 'source_sha256'>;
+type BankSnapshot = Pick<AssessmentBank, 'version' | 'task_ids' | 'task_sha256' | 'source_sha256'> &
+    Partial<Pick<AssessmentBank, 'extension_sha256'>>;
 type ProtocolLimits = Record<'max_output_tokens' | 'max_turns' | 'max_tool_calls', number | null> & {
     timeout: number;
     max_api_retries?: number;
@@ -108,9 +114,14 @@ export function build_assessment_baseline(
 }
 
 function buildBaselineWithContext(run: unknown, target_id: string, context: AssessmentSourceContext): AssessmentBaseline {
-    const bank = context.production_bank();
+    const requestedVersion =
+        object(run) && object(run.plan) && is_released_bank_version(run.plan.bank_version)
+            ? run.plan.bank_version
+            : PRODUCTION_BANK_VERSION;
+    const bank = context.bank_for_version ? context.bank_for_version(requestedVersion) : context.production_bank();
+    const getCards = context.cards_for_version ? () => context.cards_for_version!(requestedVersion) : context.production_cards;
     try {
-        return buildBaseline(run as BaselineRun, target_id, bank, context.production_cards);
+        return buildBaseline(run as BaselineRun, target_id, bank, getCards);
     } catch (error) {
         if (error instanceof Error && error.message.startsWith('Assessment baseline:')) throw error;
         throw new TypeError('Assessment baseline: malformed run evidence', { cause: error });
@@ -122,13 +133,27 @@ function requireProvenanceSources(sources: unknown, bank: AssessmentBank, prefix
     requireBaseline(
         object(sources) &&
             Object.entries(bank.source_sha256).every(([key, value]) => sources[key] === value) &&
-            Object.entries(bank.extension_sha256 ?? {}).every(([key, value]) => !Object.hasOwn(sources, key) || sources[key] === value),
+            (bank.version !== '1.0' ||
+                Object.entries(bank.extension_sha256 ?? {}).every(
+                    ([key, value]) => !Object.hasOwn(sources, key) || sources[key] === value
+                )),
         tag + 'task source hashes are missing or stale'
     );
-    requireBaseline(
-        ['calibrate_assessment.ts', 'src/run_protocol.ts', 'src/client.ts'].every(key => Object.hasOwn(sources, key)),
-        tag + 'execution source provenance is missing'
-    );
+    if (bank.version !== '1.0') {
+        requireBaseline(
+            Object.entries(bank.extension_sha256 ?? {}).every(([key, value]) => sources[key] === value),
+            tag + 'extension source hashes are missing or stale'
+        );
+        requireBaseline(
+            assessment_execution_source_paths(bank).every(key => Object.hasOwn(sources, key)),
+            tag + 'execution source provenance is missing'
+        );
+    } else {
+        requireBaseline(
+            ['calibrate_assessment.ts', 'src/run_protocol.ts', 'src/client.ts'].every(key => Object.hasOwn(sources, key)),
+            tag + 'execution source provenance is missing'
+        );
+    }
     requireBaseline(
         Object.values(sources).every(value => typeof value === 'string' && /^[0-9a-f]{64}$/.test(value)),
         tag + 'invalid source digest'
@@ -173,11 +198,19 @@ function buildBaseline(
     const plan = run.plan;
     requireBaseline(run.status === 'completed', 'run must be completed');
     requireBaseline(typeof run.id === 'string' && run.id, 'run identity is missing');
-    requireBaseline(plan.bank_version === '1.0' && plan.bank_scope === 'whole', 'only the whole Assessment 1.0 bank is eligible');
+    requireBaseline(
+        is_released_bank_version(plan.bank_version) && plan.bank_version === bank.version && plan.bank_scope === 'whole',
+        'only whole released Mini Bench banks are eligible'
+    );
     const ids = bank.task_ids;
     requireBaseline(ids.length === 12 && same(plan.task_ids, ids), 'all 12 tasks are required in bank order');
     for (const key of ['version', 'task_ids', 'task_sha256', 'source_sha256'] as const)
         requireBaseline(same(plan.bank_snapshot[key], bank[key]), 'current bank provenance mismatch: ' + key);
+    if (bank.version !== '1.0' || plan.bank_snapshot.extension_sha256 !== undefined)
+        requireBaseline(
+            same(plan.bank_snapshot.extension_sha256, bank.extension_sha256),
+            'current bank provenance mismatch: extension_sha256'
+        );
     const cards = getCards();
     requireBaseline(same(plan.task_snapshots, cards), 'task snapshots differ from current bank');
     const sources = plan.source_sha256;
@@ -262,7 +295,7 @@ function buildBaseline(
     const snapshot: AssessmentBaseline = {
         id: '',
         schema: ASSESSMENT_BASELINE_SCHEMA,
-        bank_version: '1.0',
+        bank_version: bank.version,
         run_id: run.id,
         created_at: run.created_at,
         target_id,
@@ -273,7 +306,8 @@ function buildBaseline(
             version: bank.version,
             task_ids: structuredClone(bank.task_ids),
             task_sha256: bank.task_sha256,
-            source_sha256: structuredClone(bank.source_sha256)
+            source_sha256: structuredClone(bank.source_sha256),
+            ...(bank.version !== '1.0' && bank.extension_sha256 ? { extension_sha256: structuredClone(bank.extension_sha256) } : {})
         },
         task_snapshots: structuredClone(cards),
         source_sha256: structuredClone(sources),

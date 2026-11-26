@@ -604,7 +604,7 @@ test('real Bun server binds random loopback port and serves without subprocesses
         });
         expect(response.status).toBe(200);
         expect(response.headers.get('Access-Control-Allow-Origin')).toBe('null');
-        expect(((await response.json()) as { banks: unknown[] }).banks).toHaveLength(1);
+        expect(((await response.json()) as { banks: Array<{ version: string }> }).banks.map(b => b.version)).toEqual(['2.0', '1.0']);
     } finally {
         await running.stop();
         await running.stop();

@@ -7,6 +7,10 @@ benchmark/src/assessment_interactive.ts
 benchmark/src/assessment_blackbox.ts
 benchmark/src/assessment_documents.ts
 benchmark/src/assessment_delegated_release.ts
+benchmark/src/assessment_interactive_v2.ts
+benchmark/src/assessment_blackbox_v2.ts
+benchmark/src/assessment_documents_v2.ts
+benchmark/src/assessment_delegated_release_v2.ts
 # Browser acceptance steps are statement fragments of one async function, not standalone modules.
 # Data, evidence and prose keep their exact bytes.
 benchmark/banks/

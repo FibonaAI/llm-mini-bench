@@ -1,4 +1,4 @@
-import { PRODUCTION_BANK_VERSION } from '../src/production_bank.ts';
+import { DEFAULT_UI_BANK_VERSION, RELEASED_BANK_VERSIONS } from '../src/production_bank.ts';
 import { lstatSync, readFileSync, realpathSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { dirname, extname, join, relative, resolve } from 'node:path';
@@ -366,22 +366,26 @@ export class BenchService {
     cached_banks_payload(): { body: string; gzip: Uint8Array<ArrayBuffer> | null } {
         const sourceSig = assessment_source_signature();
         if (this._banks_cache?.key === sourceSig) return this._banks_cache;
-        const bank = load_assessment_bank(PRODUCTION_BANK_VERSION);
-        const tasks = bank.tasks.map(task => Object.fromEntries(Object.entries(task).filter(([, value]) => typeof value !== 'function')));
+        const banks = RELEASED_BANK_VERSIONS.map(version => {
+            const bank = load_assessment_bank(version);
+            const tasks = bank.tasks.map(task =>
+                Object.fromEntries(Object.entries(task).filter(([, value]) => typeof value !== 'function'))
+            );
+            return {
+                id: 'assessment-' + bank.version,
+                version: bank.version,
+                default: bank.version === DEFAULT_UI_BANK_VERSION,
+                production: true,
+                kind: 'assessment',
+                title: 'Mini Bench',
+                task_sha256: bank.task_sha256,
+                tasks,
+                scoring_policy: bank.scoring_policy
+            };
+        });
         const body = JSON.stringify({
             execution_policy: 'sample-timeout-v1',
-            banks: [
-                {
-                    id: 'assessment-' + bank.version,
-                    version: bank.version,
-                    production: true,
-                    kind: 'assessment',
-                    title: 'Mini Bench',
-                    task_sha256: bank.task_sha256,
-                    tasks,
-                    scoring_policy: bank.scoring_policy
-                }
-            ]
+            banks
         });
         this._banks_cache = { key: sourceSig, body, gzip: null };
         return this._banks_cache;

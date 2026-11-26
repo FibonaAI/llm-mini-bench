@@ -20,6 +20,20 @@
   }
   console.log('Tooltip geometry: '+JSON.stringify(tooltipChecks));
   await page.setViewportSize({width:1440,height:1000});await page.evaluate(()=>{document.documentElement.dataset.theme='light';document.activeElement?.blur();});
+  // Verify mouse crosshair tracking and click-to-pin on data points.
+  const svgBox=await page.locator('.score-cost-svg').boundingBox();
+  const crosshair=page.locator('.score-cost-crosshair');
+  await page.mouse.move(svgBox.x+svgBox.width*0.45,svgBox.y+svgBox.height*0.45);
+  require(await crosshair.getAttribute('data-visible')==='true'&&await crosshair.getAttribute('data-pinned')==='false','Hovering inside plot area must show unpinned crosshair');
+  await point('remote-history-unmarked').evaluate(node=>node.dispatchEvent(new MouseEvent('click',{bubbles:true})));
+  require(await crosshair.getAttribute('data-visible')==='true'&&await crosshair.getAttribute('data-pinned')==='true'&&await crosshair.getAttribute('data-record-id')==='remote-history-unmarked','Clicking a data point must pin crosshair to that point');
+  const pinnedCoords=await crosshair.evaluate(node=>({x:node.querySelector('.score-cost-crosshair-v')?.getAttribute('x1'),y:node.querySelector('.score-cost-crosshair-h')?.getAttribute('y1')}));
+  await page.mouse.move(svgBox.x+svgBox.width*0.7,svgBox.y+svgBox.height*0.3);
+  const afterMoveCoords=await crosshair.evaluate(node=>({x:node.querySelector('.score-cost-crosshair-v')?.getAttribute('x1'),y:node.querySelector('.score-cost-crosshair-h')?.getAttribute('y1')}));
+  require(pinnedCoords.x===afterMoveCoords.x&&pinnedCoords.y===afterMoveCoords.y,'Pinned crosshair drifted when moving mouse elsewhere');
+  await page.locator('#score-cost-chart').screenshot({path:ARTIFACTS+'/analysis-crosshair-pinned.png'});
+  await point('remote-history-unmarked').evaluate(node=>node.dispatchEvent(new MouseEvent('click',{bubbles:true})));
+  require(await crosshair.getAttribute('data-pinned')==='false'&&await crosshair.getAttribute('data-visible')==='false','Clicking pinned point again must clear crosshair');
   await openFacet('provider');
   const historyFacetText=await facet('provider').innerText();require(['remote-A / openai','remote-B / openai'].every(name=>historyFacetText.includes(name)),'Historical explicit remote metadata lost');
   require(await page.locator('#analysis-picker .dp-quota-cards').count()===0,'Live accounts backfilled into history');

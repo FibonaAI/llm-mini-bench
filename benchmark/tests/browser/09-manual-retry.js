@@ -93,9 +93,10 @@
     // Channel-level promotion marks remaining healthy run in third-relay while skipping timed-out sibling.
     await page.locator('#bench-task-detail [data-baseline-level="channel"][data-baseline-promote-runs="b-rel-hi"]').click();
     await page.waitForFunction(()=>(document.querySelector('.history-entry.is-expanded .task-count-pill.is-baseline')?.textContent||'').includes('基线 3'));
-    // Completed ineligible run keeps visible aria-disabled baseline button in run detail header and explains why.
+    // Completed ineligible run keeps visible aria-disabled baseline button in run detail header and explains why on click.
     await page.locator('#bench-task-detail [data-preview-run-id="b-rel-to"]').click();
-    await page.waitForFunction(()=>document.querySelector('#bench-run-detail').textContent.includes('不可设为基线：含 1 个超时样本'));
+    await page.waitForFunction(()=>document.querySelector('#bench-run-detail')?.textContent.includes('b-rel-to')&&document.querySelector('#bench-baseline-run')?.getAttribute('aria-disabled')==='true');
+    require(await page.locator('#bench-run-detail .run-baseline-note').count()===0,'Run detail should not render inline baseline-ineligible banner');
     require(await page.locator('#bench-baseline-run').isVisible()&&(await page.locator('#bench-baseline-run').getAttribute('aria-disabled'))==='true'&&await page.locator('#bench-unbaseline-run').isHidden(),'Timed-out run must show aria-disabled baseline button with reason');
     await page.locator('#bench-baseline-run').click({force:true});
     await page.locator('#baseline-reason-popover').waitFor({state:'visible'});

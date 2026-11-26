@@ -213,11 +213,111 @@ h3 {
   box-shadow: var(--seg-edge);
   color: var(--fg);
 }
+/* Bank version dropdown sits in the top-right action bar, flush with .btn height. */
+.version-switch {
+  position: relative;
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+}
+.version-trigger {
+  display: inline-flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px;
+  min-inline-size: 62px;
+  padding: 4px 8px 4px 10px;
+  font-variant-numeric: tabular-nums;
+  color: var(--fg);
+}
+.version-trigger:hover {
+  background: var(--pill-hover);
+}
+.version-trigger[aria-expanded='true'] {
+  border-color: var(--accent);
+  color: var(--fg);
+}
+.version-trigger-label {
+  font-weight: 500;
+}
+.version-trigger[data-has-update='true'] {
+  border-color: color-mix(in srgb, var(--accent) 45%, var(--line));
+}
+.version-new-badge,
+.version-option-badge {
+  display: inline-flex;
+  align-items: center;
+  padding: 0 5px;
+  border-radius: 999px;
+  background: var(--accent-soft);
+  color: var(--accent);
+  font-size: 10.5px;
+  font-weight: 600;
+  line-height: 16px;
+  white-space: nowrap;
+}
+.version-chevron {
+  flex: none;
+  color: var(--ctl-fg);
+}
+.version-menu {
+  position: absolute;
+  top: calc(100% + 4px);
+  right: 0;
+  z-index: 60;
+  min-inline-size: 100%;
+  inline-size: max-content;
+  padding: 4px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--card);
+  box-shadow: var(--shadow);
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+.version-option {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px;
+  inline-size: 100%;
+  min-block-size: 30px;
+  padding: 4px 8px;
+  border: 0;
+  border-radius: 5px;
+  background: transparent;
+  color: var(--fg-2);
+  font-size: 12.5px;
+  font-variant-numeric: tabular-nums;
+  text-align: left;
+  white-space: nowrap;
+}
+.version-option:hover,
+.version-option:focus-visible {
+  background: var(--pill);
+  color: var(--fg);
+}
+.version-option[aria-selected='true'] {
+  background: var(--sel);
+  color: var(--fg);
+  font-weight: 500;
+}
+@media (forced-colors: active) {
+  .version-option[aria-selected='true'] {
+    background: Highlight;
+    color: HighlightText;
+    outline: 1px solid ButtonText;
+  }
+}
 .actions {
   margin-left: auto;
   display: flex;
   align-items: center;
   gap: 6px;
+}
+.actions .muted {
+  margin-inline-end: 2px;
 }
 .btn {
   min-height: var(--control-height);
@@ -319,7 +419,6 @@ h3 {
   gap: 8px;
   margin-bottom: 10px;
 }
-.filter-bar > label,
 .chart-tools > label {
   display: inline-flex;
   align-items: center;
@@ -327,10 +426,9 @@ h3 {
   color: var(--ctl-fg);
   font-size: 12px;
 }
-.filter-bar > label {
+.filter-bar > #analysis-reset {
   margin-left: auto;
 }
-.filter-bar select,
 .chart-tools select {
   min-height: var(--control-height);
   border-color: var(--line);
@@ -2232,6 +2330,9 @@ th {
     border-color: var(--accent);
     filter: brightness(0.97);
   }
+  .version-btn[aria-pressed='true']:hover:not(:disabled) {
+    background: var(--seg-thumb);
+  }
 }
 @media (max-width: 760px) {
   .top {
@@ -2286,17 +2387,19 @@ th {
     margin: 10px 14px;
   }
 }
-@media (max-width: 440px) {
-  .top .brand {
-    font-size: 13px;
+@media (max-width: 500px) {
+  .top .tabs {
+    margin-left: auto;
   }
   .top .actions {
     width: 100%;
     justify-content: flex-end;
     flex-wrap: wrap;
   }
-  .tabs {
-    margin-left: auto;
+}
+@media (max-width: 440px) {
+  .top .brand {
+    font-size: 13px;
   }
   .run-config-grid {
     grid-template-columns: 1fr;
@@ -3015,17 +3118,6 @@ th {
   outline: 2px solid var(--accent);
   outline-offset: 1px;
 }
-.run-baseline-note {
-  margin: 8px 0 0;
-  padding: 6px 10px;
-  border: 1px dashed color-mix(in srgb, var(--amber, #b45309) 36%, var(--line));
-  border-radius: 7px;
-  background: color-mix(in srgb, var(--amber-soft, rgba(180, 83, 9, 0.1)) 65%, var(--card));
-  color: var(--fg-2);
-  font-size: 11.5px;
-  line-height: 1.5;
-  overflow-wrap: anywhere;
-}
 .baseline-reason-popover {
   position: fixed;
   z-index: 90;
@@ -3170,12 +3262,6 @@ th {
   font-variant-numeric: tabular-nums;
 }
 @media (max-width: 760px) {
-  .filter-bar > label {
-    margin-left: 0;
-  }
-  .filter-bar > #analysis-reset {
-    margin-left: auto;
-  }
   .run-config-grid {
     grid-template-columns: 1fr;
   }

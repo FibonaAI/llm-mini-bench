@@ -7,7 +7,7 @@ This file is for code maintainers and coding agents. User instructions belong in
 ## Project boundaries
 
 - TypeScript backend on Bun, plain HTML/CSS/JavaScript frontend, and a TypeScript Magpie plugin entry point. No runtime npm dependencies or frontend build step. TypeScript, `@types/bun` and Prettier are development-only dependencies. Run `bun run format` before committing; `.prettierignore` excludes the byte-hashed bank grader/simulator sources, banks, evidence and prose, which must never be reformatted.
-- Assessment 1.0, with 12 tasks across six domains, is the sole production question bank. Earlier prototype and test banks, fingerprint tools, and compatibility APIs remain deleted.
+- Assessment 2.0 (default in the UI) and Assessment 1.0, each with 12 tasks across six domains, are the official released question banks served side-by-side with strictly isolated grading, charts, baselines, and task histories over shared infrastructure. Earlier prototype and test banks, fingerprint tools, and compatibility APIs remain deleted.
 - Preserve content scores, instruction checks, tool checks, and execution status per task. The analysis display may use the approved equal-weight mean of all 12 tasks across every planned round, multiplied by 100, against total estimated USD, total input plus output tokens, or total elapsed time, divided by rounds. Plot only completed records with the exact 12 task IDs, 1 to 3 complete unique rounds, finite scores from 0 to 1, and known nonnegative usage or duration for the chosen axis. Zero-cost records plot on the left axis in both logarithmic and linear cost views without joining the Pareto frontier; zero usage on token/duration axes is valid on linear axes and hidden on logarithmic axes. An attempt that sent no request (empty `calls`) is a known zero, not unknown usage. Whole-sample timeouts score `0` and let the run complete while remaining retryable; records with sample timeouts, post-submission aborts (`ended_after_submission`), missing `submit_answer` calls (`no_submission`), or incomplete usage plotted at its known lower bound (optional chart setting, on by default) carry a distinct anomaly badge, never join the Pareto frontier, and never present partial usage as complete totals (timed-out and incomplete-usage runs also never feed baselines). Different Thinking protocols do not disable comparisons or the visible-point Pareto frontier. Color defaults to the model/channel/account combination, with optional cross-channel model, model-family, or evaluation-date grouping for presentation only. Keep the color legend compact with an on-demand single-column list; legend search and highlight must not filter records or alter metrics. Runs use circles and baselines use squares; connect Thinking levels only within recorded batch/channel/account/model groups. Do not add arbitrary weights, impute API failures or missing/ungradable results as zero, or select best-of results. This display metric changes neither grading nor the bank protocol or hashes.
 - Task prompts and model answers are data. Do not execute model-generated code. Tools run only the project's fixed in-memory simulators.
 
@@ -23,11 +23,11 @@ TypeScript implements the assessment engine and HTTP service on Bun; plain brows
 
 | Location | Responsibility |
 | --- | --- |
-| `benchmark/banks/assessment-1.0.json` | Production release manifest; fixes task order, task hash, grading descriptors, and source hashes |
-| `benchmark/banks/assessment-1.0.questions.json` | Complete serializable 12-task export for Assessment 1.0 |
+| `benchmark/banks/assessment-2.0.json`, `assessment-1.0.json` | Official release manifests for 2.0 and 1.0; fix task order, task hash, grading descriptors, and source hashes |
+| `benchmark/banks/assessment-2.0.questions.json`, `assessment-1.0.questions.json` | Complete serializable 12-task exports for Assessment 2.0 and 1.0 |
 | `benchmark/src/assessment_bank.ts` | Validates the bank manifest and loads runnable tasks |
 | `benchmark/src/assessment_data.ts` | Shared data-defined exact-field grading (`assessment-exact-fields-v1`); participates in task hashes |
-| `benchmark/src/assessment_interactive.ts` | Interactive tool task builder dispatching to the fixed in-memory simulators |
+| `benchmark/src/assessment_interactive.ts`, `benchmark/src/assessment_interactive_v2.ts` | Interactive tool task builders dispatching to fixed `v1` (1.0) and evidence-gated `v2` (2.0) in-memory simulators |
 | `benchmark/src/assessment_documents.ts` | Bounded document investigation simulator (`assessment-documents-v1`) |
 | `benchmark/src/assessment_blackbox.ts` | Finite-candidate adaptive probe fault-diagnosis simulator (`assessment-blackbox-v1`) |
 | `benchmark/src/assessment_delegated_release.ts` | Immutable authorization chains, shared ancestor uses, and release-completion grading (`assessment-delegated-release-v1`) |
@@ -37,7 +37,7 @@ TypeScript implements the assessment engine and HTTP service on Bun; plain brows
 | `benchmark/src/assessment_provenance.ts` | Unified execution source closure and byte/hash capture; includes unconditional loader dependencies even for production 1.0 |
 | `benchmark/src/run_protocol.ts` | Request configuration normalization and shared sample protocol identity, retaining omitted/null/stream semantics |
 | `benchmark/src/assessment_response.ts` | Visible answer extraction and explicit unit price parsing |
-| `benchmark/src/production_bank.ts` | Single source of the production bank version; UI, default tasks and the chart read it |
+| `benchmark/src/production_bank.ts` | Official released bank list (`2.0`, `1.0`), default UI version (`2.0`), and programmatic fallback (`1.0`) |
 | `benchmark/src/assessment_answer_protocol.ts` | Opt-in `submit-answer-tool-v1`: per-task `answer_schema`, last valid submission graded, no submission scores zero; new banks should adopt it |
 | `benchmark/src/client.ts` | Responses HTTP client; no Chat Completions fallback |
 | `benchmark/src/bench_routes.ts`, `benchmark/src/bench_adapter.ts` | Explicit routes and generic adapter contract |
@@ -98,7 +98,7 @@ The standalone backend entry point is `bun benchmark/bench.ts serve --port 3481`
 
 ## Baselines and evidence
 
-- Accept only `assessment-baseline-v1` for the production Assessment 1.0 bank. All 12 tasks, every planned round, task snapshots, all current source hashes, Thinking, and per-sample protocols must pass `build_assessment_baseline` validation.
+- Accept only `assessment-baseline-v1` for the official released Assessment 1.0 and 2.0 banks. All 12 tasks of that bank, every planned round, task snapshots, all current source/extension hashes, Thinking, and per-sample protocols must pass `build_assessment_baseline` validation against its matching `bank_version`.
 - `bank_scope=subset` cannot be promoted to a complete baseline. Missing provenance, ungradable results, and old schemas cannot be upgraded by filling in defaults or changing version numbers.
 - Persist raw calls, failed attempts, and tool traces before grading. Missing token counts and costs remain `null`. Aggregates include tool continuation requests; estimates are not bills.
 - Personal workspaces start empty: do not automatically load external baselines into the service or analysis display. Browser tests that need observations must seed their temporary data directories explicitly.
