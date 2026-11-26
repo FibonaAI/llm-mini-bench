@@ -4,6 +4,7 @@ import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { build_assessment_data_task } from './assessment_data.ts';
 import { ASSESSMENT_INTERACTIVE_SOURCE_PATHS, build_assessment_interactive_task } from './assessment_interactive.ts';
+import { ASSESSMENT_INTERACTIVE_V2_SOURCE_PATHS, build_assessment_interactive_v2_task } from './assessment_interactive_v2.ts';
 import type { AssessmentTask } from './assessment_tasks.ts';
 import { assessment_hash, parseAssessmentJson } from './assessment_json.ts';
 
@@ -13,6 +14,11 @@ export const ASSESSMENT_PROJECT_ROOT = dirname(dirname(fileURLToPath(import.meta
 export const ASSESSMENT_BANK_DIRECTORY = join(ASSESSMENT_PROJECT_ROOT, 'banks');
 /** Shared grading, simulator and strict JSON sources pinned by every bank manifest. */
 export const ASSESSMENT_BANK_SOURCE_PATHS = ['src/assessment_tasks.ts', 'src/assessment_json.ts', 'src/assessment_data.ts'] as const;
+/** Full simulator closure when a bank uses v2 interactive graders built atop v1 state machines. */
+export const ASSESSMENT_INTERACTIVE_V2_CLOSURE_PATHS = [
+    ...ASSESSMENT_INTERACTIVE_SOURCE_PATHS,
+    ...ASSESSMENT_INTERACTIVE_V2_SOURCE_PATHS
+] as const;
 type BankObject = Record<string, unknown>;
 /** Serializable task fields retain their identifiers when runtime functions are removed. */
 export interface AssessmentTaskSnapshot extends BankObject {
@@ -86,16 +92,25 @@ export function load_assessment_bank(version: string = '1.0', manifest_path?: st
             'source hash mismatch: ' + path
         );
     }
+    const usesV2Interactive =
+        object(bank.grading) &&
+        Object.values(bank.grading).some(entry => object(entry) && typeof entry.type === 'string' && entry.type.endsWith('-v2'));
+    const expectedExtensionPaths = usesV2Interactive ? ASSESSMENT_INTERACTIVE_V2_CLOSURE_PATHS : ASSESSMENT_INTERACTIVE_SOURCE_PATHS;
     if (bank.extension_sha256 !== undefined) {
         requireBank(
-            object(bank.extension_sha256) && keysMatch(bank.extension_sha256, ASSESSMENT_INTERACTIVE_SOURCE_PATHS),
+            object(bank.extension_sha256) && keysMatch(bank.extension_sha256, expectedExtensionPaths),
             'extension_sha256 must contain exactly the optional interactive source paths'
         );
-        for (const path of ASSESSMENT_INTERACTIVE_SOURCE_PATHS) {
+        for (const path of expectedExtensionPaths) {
             const actual = createHash('sha256')
                 .update(readFileSync(join(ASSESSMENT_PROJECT_ROOT, path)))
                 .digest('hex');
-            requireBank(bank.extension_sha256[path] === actual, 'extension source hash mismatch: ' + path);
+            requireBank(
+                typeof bank.extension_sha256[path] === 'string' &&
+                    /^[0-9a-f]{64}$/.test(bank.extension_sha256[path]) &&
+                    bank.extension_sha256[path] === actual,
+                'extension source hash mismatch: ' + path
+            );
         }
     }
     requireBank(nonempty(bank.title), 'title must be a nonempty string');
@@ -117,7 +132,9 @@ export function load_assessment_bank(version: string = '1.0', manifest_path?: st
             object(card) && nonempty(card.id) && Object.hasOwn(bank.grading, card.id),
             'task_file contains an unknown or malformed task ID'
         );
-        const interactive = build_assessment_interactive_task(card as AssessmentTask, bank.grading[card.id]);
+        const interactive =
+            build_assessment_interactive_task(card as AssessmentTask, bank.grading[card.id]) ??
+            build_assessment_interactive_v2_task(card as AssessmentTask, bank.grading[card.id]);
         if (interactive) {
             requireBank(object(bank.extension_sha256), 'interactive tasks require extension source hashes');
             return interactive;

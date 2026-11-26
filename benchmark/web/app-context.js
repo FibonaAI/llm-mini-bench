@@ -34,6 +34,7 @@
  *   'mini-bench:targets-changed': undefined, // Selection/catalog changed.
  *   'mini-bench:routes-changed': undefined, // Catalog changed; not historical identity.
  *   'mini-bench:history-changed': undefined, // Run-to-task membership refreshed.
+ *   'mini-bench:recorded-banks-changed': {source: string, versions: string[]}, // Recorded bank versions refreshed.
  *   'mini-bench:observations-changed': undefined, // Persisted observations need reloading.
  *   'mini-bench:refresh': undefined, // Explicit user refresh.
  *   'mini-bench:theme-changed': undefined, // Presentation-only invalidation.
@@ -51,6 +52,8 @@ export function createAppContext(services, eventTarget) {
   let bank = null;
   let targets = Object.freeze({ routes: Object.freeze([]), leaves: Object.freeze([]), selectedKeys: Object.freeze([]) });
   let runTaskIds = new Map();
+  const recordedBankSources = new Map();
+  let recordedBankVersions = new Set();
   let targetActions = null;
   let maskAccounts = false;
   /** Subscribe to one documented event; callers may dispose the returned subscription. */
@@ -75,6 +78,9 @@ export function createAppContext(services, eventTarget) {
     },
     get maskAccounts() {
       return maskAccounts;
+    },
+    get recordedBankVersions() {
+      return new Set(recordedBankVersions);
     },
     getTaskId: runId => runTaskIds.get(runId),
     /** Presentation-only account masking state; never mutates recorded identities. */
@@ -108,6 +114,24 @@ export function createAppContext(services, eventTarget) {
       if (next.size === runTaskIds.size && [...next].every(([runId, taskId]) => runTaskIds.get(runId) === taskId)) return;
       runTaskIds = next;
       emit('mini-bench:history-changed');
+    },
+    /** Record bank versions observed in one workspace source (e.g. history or observations). */
+    setRecordedBankVersions(source, versions) {
+      const key = String(source || '');
+      if (!key) return;
+      const firstFromSource = !recordedBankSources.has(key);
+      const nextSource = new Set();
+      for (const version of versions || []) {
+        if (typeof version === 'string' && version) nextSource.add(version);
+      }
+      recordedBankSources.set(key, nextSource);
+      const nextAll = new Set();
+      for (const bucket of recordedBankSources.values()) {
+        for (const version of bucket) nextAll.add(version);
+      }
+      const changed = nextAll.size !== recordedBankVersions.size || [...nextAll].some(version => !recordedBankVersions.has(version));
+      recordedBankVersions = nextAll;
+      if (changed || firstFromSource) emit('mini-bench:recorded-banks-changed', { source: key, versions: [...nextAll] });
     },
     /** Install the target controller once, before task configuration is initialized. */
     bindTargetActions(actions) {

@@ -10,10 +10,20 @@ class TestNode {
     constructor(value = '') {
         this.value = value;
         this.handlers = {};
+        this.attributes = {};
         this.hidden = false;
         this.disabled = false;
         this.innerHTML = '';
         this.textContent = '';
+    }
+    setAttribute(name, value) {
+        this.attributes[name] = String(value);
+    }
+    removeAttribute(name) {
+        delete this.attributes[name];
+    }
+    getAttribute(name) {
+        return Object.prototype.hasOwnProperty.call(this.attributes, name) ? this.attributes[name] : null;
     }
     addEventListener(type, handler) {
         (this.handlers[type] ||= []).push(handler);
@@ -71,16 +81,16 @@ function fixture() {
     let failStart = false,
         failRetry = false;
     let submissionGate;
+    let banksCatalog = [{ version: '1.0', tasks: Array(14).fill({}) }];
     let historyTasks = [],
-        historyRuns = [{ id: 'created', status: 'completed', targets: [], samples: [] }];
+        historyRuns = [{ id: 'created', bank_version: '1.0', status: 'completed', targets: [], samples: [] }];
     const details = new Map();
     const key = record => JSON.stringify([record.providerId, record.accountId, record.model, record.think]);
     const request = async (path, options) => {
         calls.push({ path, options });
         if (path.split('?')[0].endsWith('/routes')) return { routes };
         if (path.split('?')[0].endsWith('/quota-cards')) return { status: 'available', cards: [] };
-        if (path.endsWith('/banks'))
-            return { execution_policy: 'sample-timeout-v1', banks: [{ version: '1.0', tasks: Array(14).fill({}) }] };
+        if (path.endsWith('/banks')) return { execution_policy: 'sample-timeout-v1', banks: banksCatalog };
         if (path.endsWith('/task-plans')) throw Error('UI must not request manual plans');
         if (path.endsWith('/retry')) {
             if (failRetry) throw Error('timeout');
@@ -112,7 +122,7 @@ function fixture() {
         const basePath = path.split('?')[0];
         if (details.has(path)) return details.get(path);
         if (details.has(basePath)) return details.get(basePath);
-        return { id: 'created', status: 'completed', targets: [], samples: [] };
+        return { id: 'created', bank_version: '1.0', status: 'completed', targets: [], samples: [] };
     };
     const mini = {
         byId: element,
@@ -172,6 +182,7 @@ function fixture() {
     }
     return {
         mini,
+        app: context.getAppContext(),
         element,
         calls,
         messages,
@@ -181,6 +192,7 @@ function fixture() {
         setFailStart: value => (failStart = value),
         setFailRetry: value => (failRetry = value),
         setRoutes: value => (routes = value),
+        setBanks: value => (banksCatalog = value),
         setSubmissionGate: value => (submissionGate = value),
         setHistory: (tasks, runs) => {
             historyTasks = tasks;
@@ -381,11 +393,13 @@ test('new task history excludes child runs from top level and retains old record
     };
     const task = {
         id: 'parent-task',
+        bank_version: '1.0',
         status: 'running',
-        plan: { targets: [target], run_count: 1, sample_count: 42, run_concurrency: 3, sample_concurrency: 6 },
+        plan: { bank_version: '1.0', targets: [target], run_count: 1, sample_count: 42, run_concurrency: 3, sample_concurrency: 6 },
         children: [
             {
                 run_id: 'child-run',
+                bank_version: '1.0',
                 target,
                 status: 'running',
                 sample_count: 42,
@@ -396,11 +410,12 @@ test('new task history excludes child runs from top level and retains old record
     const child = {
         id: 'child-run',
         task_id: task.id,
+        bank_version: '1.0',
         status: 'running',
-        plan: { targets: [target] },
+        plan: { bank_version: '1.0', targets: [target] },
         samples: [{ sample_id: 'sample-a', task: 'math', thinking: 'high', round: 1, status: 'completed', grade: { content_score: 1 } }]
     };
-    f.setHistory([task], [child, { id: 'old-run', status: 'completed', targets: [target], sample_count: 14 }]);
+    f.setHistory([task], [child, { id: 'old-run', bank_version: '1.0', status: 'completed', targets: [target], sample_count: 14 }]);
     f.setDetail('./api/bench/tasks/parent-task', task);
     f.setDetail('./api/bench/runs/child-run', child);
     await f.load();
@@ -428,10 +443,10 @@ test('late run details do not overwrite a more recent selection', async () => {
     await f.load();
     let release;
     f.setDetail('./api/bench/runs/slow', new Promise(resolve => (release = resolve)));
-    f.setDetail('./api/bench/runs/fast', { id: 'fast', status: 'completed', samples: [] });
+    f.setDetail('./api/bench/runs/fast', { id: 'fast', bank_version: '1.0', status: 'completed', samples: [] });
     const pending = f.window.dispatchEvent({ type: 'mini-bench:select-run', detail: 'slow' });
     await f.window.dispatchEvent({ type: 'mini-bench:select-run', detail: 'fast' });
-    release({ id: 'slow', status: 'completed', samples: [] });
+    release({ id: 'slow', bank_version: '1.0', status: 'completed', samples: [] });
     await pending;
     expect(f.element('bench-run-detail').innerHTML).toContain('fast');
     expect(f.element('bench-run-detail').innerHTML).not.toContain('slow');
@@ -538,6 +553,7 @@ test('copy a task selects exact current leaves and restores all limits without r
     const f = fixture();
     const task = {
         id: 'copy-task',
+        bank_version: '1.0',
         status: 'incomplete',
         plan: {
             targets: [
@@ -574,7 +590,14 @@ test('copy a task selects exact current leaves and restores all limits without r
 });
 test('manual retry requires confirmation, reuses uncertain id and refreshes analysis', async () => {
     const f = fixture(),
-        run = { id: 'retry-run', status: 'failed', retryable_samples: 1, plan: { targets: [] }, samples: [] };
+        run = {
+            id: 'retry-run',
+            bank_version: '1.0',
+            status: 'failed',
+            retryable_samples: 1,
+            plan: { bank_version: '1.0', targets: [] },
+            samples: []
+        };
     f.setHistory([], [run]);
     f.setDetail('./api/bench/runs/retry-run', run);
     await f.load();
@@ -610,7 +633,7 @@ test('historical classifications distinguish API errors, capability limits and n
         status,
         historical_outcome_classification: { reason }
     }));
-    const run = { id: 'history-classified', status: 'failed', plan: { targets: [] }, samples };
+    const run = { id: 'history-classified', bank_version: '1.0', status: 'failed', plan: { bank_version: '1.0', targets: [] }, samples };
     f.setHistory([], [run]);
     f.setDetail('./api/bench/runs/history-classified', run);
     await f.load();
@@ -648,6 +671,7 @@ test('copy never substitutes a changed account binding on the same route', async
     ]);
     const task = {
         id: 'bound-task',
+        bank_version: '1.0',
         status: 'completed',
         plan: { targets: [{ route_id: 'same-route', thinking: 'high', binding_ref: 'old-binding' }] },
         children: []
@@ -661,6 +685,118 @@ test('copy never substitutes a changed account binding on the same route', async
     expect(f.calls.filter(call => call.options?.method === 'POST')).toHaveLength(0);
 });
 
+test('switching bank versions while task creation POST is in flight never binds the old bank task onto the new bank view', async () => {
+    const f = fixture();
+    f.setBanks([
+        { version: '2.0', default: true, tasks: Array(12).fill({}) },
+        { version: '1.0', default: false, tasks: Array(12).fill({}) }
+    ]);
+    const v1Task = {
+        id: 'existing-v1',
+        bank_version: '1.0',
+        status: 'completed',
+        plan: { bank_version: '1.0', targets: [] },
+        children: []
+    };
+    f.setHistory([v1Task], []);
+    f.setDetail('./api/bench/tasks/existing-v1', v1Task);
+    await f.load();
+    // Workspace with only 1.0 history starts on 1.0; switch to 2.0 first to test an in-flight 2.0 POST.
+    expect(f.element('bench-bank').value).toBe('1.0');
+    await f.element('bench-version-switch').emit('click', {
+        target: { closest: selector => (selector === '[data-bank-version]' ? { dataset: { bankVersion: '2.0' } } : null) }
+    });
+    expect(f.element('bench-bank').value).toBe('2.0');
+
+    const key = f.key(f.mini.runState.leaves[0]);
+    f.mini.runState.setTaskSelection([key]);
+    let release;
+    f.setSubmissionGate(new Promise(resolve => (release = resolve)));
+    const pendingPost = f.element('start-run').emit('click');
+
+    // Switch to 1.0 before the 2.0 POST returns.
+    await f.element('bench-version-switch').emit('click', {
+        target: { closest: selector => (selector === '[data-bank-version]' ? { dataset: { bankVersion: '1.0' } } : null) }
+    });
+    expect(f.element('bench-bank').value).toBe('1.0');
+
+    // Now the 2.0 POST resolves with id: 'task-created'. It must NOT overwrite the active 1.0 view selection.
+    release();
+    await pendingPost;
+    expect(f.element('bench-run-list').innerHTML).toContain('data-bench-task-id="existing-v1"');
+    expect(f.element('bench-run-list').innerHTML).not.toContain('task-created');
+    expect(f.calls.some(call => call.path.includes('/tasks/task-created'))).toBe(false);
+});
+
+test('default bank version prefers latest for new or upgraded users, stays on 1.0 with update badge for 1.0-only users', async () => {
+    const dualBanks = [
+        { version: '2.0', default: true, tasks: Array(12).fill({}) },
+        { version: '1.0', default: false, tasks: Array(12).fill({}) }
+    ];
+
+    // 1. New user (empty workspace) -> defaults to latest (2.0), no update badge on trigger.
+    const fresh = fixture();
+    fresh.setBanks(dualBanks);
+    fresh.setHistory([], []);
+    await fresh.load();
+    expect(fresh.element('bench-bank').value).toBe('2.0');
+    expect(fresh.element('bench-version-badge').hidden).toBe(true);
+    expect(fresh.element('bench-version-trigger').getAttribute('data-has-update')).toBeNull();
+
+    // 2. Legacy 1.0-only user (tasks/runs) -> defaults to 1.0 with update badge and "新版本" label on 2.0 option.
+    const legacy = fixture();
+    legacy.setBanks(dualBanks);
+    legacy.setHistory(
+        [{ id: 't1', bank_version: '1.0', status: 'completed', plan: { bank_version: '1.0', targets: [] }, children: [] }],
+        []
+    );
+    await legacy.load();
+    expect(legacy.element('bench-bank').value).toBe('1.0');
+    expect(legacy.element('bench-version-badge').hidden).toBe(false);
+    expect(legacy.element('bench-version-trigger').getAttribute('data-has-update')).toBe('true');
+    expect(legacy.element('bench-version-menu').innerHTML).toContain('新版本');
+
+    // Manually switching to 2.0 hides the trigger badge and stays pinned across refresh.
+    await legacy.element('bench-version-switch').emit('click', {
+        target: { closest: selector => (selector === '[data-bank-version]' ? { dataset: { bankVersion: '2.0' } } : null) }
+    });
+    expect(legacy.element('bench-bank').value).toBe('2.0');
+    expect(legacy.element('bench-version-badge').hidden).toBe(true);
+    expect(legacy.element('bench-version-trigger').getAttribute('data-has-update')).toBeNull();
+    legacy.app.setRecordedBankVersions('observations', ['1.0']);
+    expect(legacy.element('bench-bank').value).toBe('2.0');
+
+    // 3. Legacy 1.0-only user via observations (e.g. baseline-only workspace) -> switches to 1.0 once observations load.
+    const baselineOnly = fixture();
+    baselineOnly.setBanks(dualBanks);
+    baselineOnly.setHistory([], []);
+    await baselineOnly.load();
+    expect(baselineOnly.element('bench-bank').value).toBe('2.0');
+    baselineOnly.app.setRecordedBankVersions('observations', ['1.0']);
+    expect(baselineOnly.element('bench-bank').value).toBe('1.0');
+    expect(baselineOnly.element('bench-version-badge').hidden).toBe(false);
+
+    // 4. User with both 1.0 and 2.0 records -> defaults to 2.0 with no update badge even if switched back to 1.0.
+    const both = fixture();
+    both.setBanks(dualBanks);
+    both.setHistory(
+        [
+            { id: 't1', bank_version: '1.0', status: 'completed', plan: { bank_version: '1.0', targets: [] }, children: [] },
+            { id: 't2', bank_version: '2.0', status: 'completed', plan: { bank_version: '2.0', targets: [] }, children: [] }
+        ],
+        []
+    );
+    await both.load();
+    expect(both.element('bench-bank').value).toBe('2.0');
+    expect(both.element('bench-version-badge').hidden).toBe(true);
+    await both.element('bench-version-switch').emit('click', {
+        target: { closest: selector => (selector === '[data-bank-version]' ? { dataset: { bankVersion: '1.0' } } : null) }
+    });
+    expect(both.element('bench-bank').value).toBe('1.0');
+    expect(both.element('bench-version-badge').hidden).toBe(true);
+    expect(both.element('bench-version-menu').innerHTML).not.toContain('新版本');
+});
+
 test('web UI avoids native form submission so sandboxed iframes without allow-forms can start tasks', () => {
     const html = readFileSync(join(import.meta.dir, '../web/index.html'), 'utf8');
     expect(html).not.toMatch(/<form\b/i);
@@ -671,6 +807,7 @@ test('task, channel-pod, and single-run baseline controls promote and demote wit
     const f = fixture();
     const task = {
         id: 'batch-task',
+        bank_version: '1.0',
         status: 'completed',
         plan: {
             targets: [
@@ -738,6 +875,7 @@ test('task, channel-pod, and single-run baseline controls promote and demote wit
     const runDetail = {
         id: 'run-a',
         task_id: 'batch-task',
+        bank_version: '1.0',
         status: 'completed',
         updated_at: '2026-11-24T00:00:00Z',
         plan: { targets: [task.children[0].target] },

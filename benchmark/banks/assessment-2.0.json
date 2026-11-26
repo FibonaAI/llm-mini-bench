@@ -1,0 +1,799 @@
+{
+  "version": "2.0",
+  "title": "Assessment 2.0",
+  "status": "released",
+  "released_on": "2026-11-26",
+  "task_ids": [
+    "K25_IPv4_BitReverse_Abduction",
+    "K25_FIDE_Perft_EdgeCases",
+    "R25_Shifted_Pinyin_Abduction",
+    "R25_Morse_Sentence_Camouflage",
+    "C25_FourSlot_Readback",
+    "C25_Clock_Belady_Anomaly",
+    "X25_Checkout_Credit_Audit",
+    "E25_Tight_Budget_Deductive_Audit",
+    "I25_SOP_MinStep_Protocol",
+    "I25_Bilingual_Custody_Discrepancy",
+    "T25_Deceptive_Relay_Matrix",
+    "T25_Delegated_Manifest_Dispatch"
+  ],
+  "task_sha256": "84feeda2dbeef6cf75ecdb281ff0fcff0e0200f669f13682a735a66ed3a724a3",
+  "source_sha256": {
+    "src/assessment_tasks.ts": "70b61dd60d56a3f4abe31e50f046402bcd256f0b0070b4a7d93b76df873886ca",
+    "src/assessment_json.ts": "5787bc63c240f41f65d4ef5d6966aac76e85c6454ae335304a863d64ec58e7cf",
+    "src/assessment_data.ts": "a02fc097fd134b6260018662e3d72709ed0fb121523e5933649e738c3bc6a742"
+  },
+  "extension_sha256": {
+    "src/assessment_interactive.ts": "7de3ebd494c14e269bab965e912829f9ebe707ae3a33dab05a7fa2a58ce91427",
+    "src/assessment_blackbox.ts": "d2239b280902e97499c18ff6e8703f3a61f779f025e0e453298bca08b24d7a77",
+    "src/assessment_documents.ts": "f41c7b488bf864caa64c7f32f167f3256f960531d28b677d964b688921639675",
+    "src/assessment_delegated_release.ts": "a921b8b3669aef0d587109b32ecc0519999b513d88bcfbc1f56154c3fb283873",
+    "src/assessment_interactive_v2.ts": "ff82f7592b18aa1622b4e07856ea59bbe8d5b4e58fadaf70c1cfbd45fc02db41",
+    "src/assessment_blackbox_v2.ts": "8b9d9f1dfabb57786d628577ae4cad7aaac9e58ea14e587509a654c7380ec2f3",
+    "src/assessment_documents_v2.ts": "1f7dba8725669dfb6dca506c48c28245ceb11b6f72f795f3bd8bb0a0c69de84e",
+    "src/assessment_delegated_release_v2.ts": "ea0b973f217eddec1507c3df7e410e2ea5c60c937275bcdcd2357d6f454dfc4a"
+  },
+  "task_file": "assessment-2.0.questions.json",
+  "selection": {
+    "K25_IPv4_BitReverse_Abduction": {
+      "role": "knowledge_text",
+      "reason": "Abduct 8-bit serial LSB/MSB bit-reversal of uppercase ASCII country tags disguised as IPv4 dotted quads with no mechanism hint."
+    },
+    "K25_FIDE_Perft_EdgeCases": {
+      "role": "knowledge_text",
+      "reason": "Count exact FIDE legal moves and checking moves across two compact FEN positions combining horizontal en passant pin, diagonal pin, promotion checks, and castling legality edge cases."
+    },
+    "R25_Shifted_Pinyin_Abduction": {
+      "role": "reasoning_text",
+      "reason": "Recover a short Chinese message across composed physical key displacement and Pinyin syllable segmentation without mechanism hints."
+    },
+    "R25_Morse_Sentence_Camouflage": {
+      "role": "reasoning_text",
+      "reason": "Abduct ITU Morse dot/dash polarity inversion across five camouflaged real English words with no radio or encoding hint."
+    },
+    "C25_FourSlot_Readback": {
+      "role": "code_text",
+      "reason": "Determine minimal total atomic interleaving steps for ascending (a<b) and descending (a>b) torn readbacks in a 4-slot ring store with checkpoint/rollback recovery and dual head guards."
+    },
+    "C25_Clock_Belady_Anomaly": {
+      "role": "code_text",
+      "reason": "Find the shortest lexicographically first request sequence exhibiting a capacity-3 vs capacity-2 Belady anomaly in a second-chance (Clock) cache implementation."
+    },
+    "X25_Checkout_Credit_Audit": {
+      "role": "context_text",
+      "reason": "Settle a two-site rider using customer-level failure fractions despite retry traffic and staggered rollback."
+    },
+    "E25_Tight_Budget_Deductive_Audit": {
+      "role": "context_interactive",
+      "reason": "Resolve a cold-chain freight tariff and final invoice balance within a strict 5-fetch budget by resisting the unverified BRIEF note and eliminating LOG_A via arithmetic from INDEX before fetching TAR_C."
+    },
+    "I25_SOP_MinStep_Protocol": {
+      "role": "instruction_text",
+      "reason": "Compute the minimum-step startup toggle sequence and lexicographically first tie-break across five strictly load-bearing valve interlock and cooldown rules."
+    },
+    "I25_Bilingual_Custody_Discrepancy": {
+      "role": "instruction_text",
+      "reason": "Classify independent entailed events, preserving quantifier scope, entity, timing and the difference between permission and action."
+    },
+    "T25_Deceptive_Relay_Matrix": {
+      "role": "tool_use_interactive",
+      "reason": "Ten of eleven balanced 8:8 openings strand a branch; isolating any of 16 revisions within 4 probes requires the unique certified opening I and unique feasible second probes."
+    },
+    "T25_Delegated_Manifest_Dispatch": {
+      "role": "tool_use_interactive",
+      "reason": "Leaf scopes, signed ancestry and handle membership rule out two consignments. Saturating both an intermediate and a higher allocation requires reserving different chains."
+    }
+  },
+  "scoring_policy": {
+    "content": "Equal weight across all 12 tasks and all prespecified rounds; each task grades its exact semantic answer fields or within-budget interactive simulator target.",
+    "instruction": "JSON-only, exact top-level fields and tool-use checks remain separate from content scores.",
+    "missing": "A missing or ungradable sample leaves the whole-bank total null. Partial observed means are labeled separately; API failures are never imputed zero.",
+    "repeats": "Preserve all prespecified rounds and failed attempts. Never select best-of results or substitute screening answers.",
+    "identity": "Record exact catalog route claims, requested thinking, source/task hashes and per-sample execution protocol. Route labels do not verify the serving model.",
+    "scope": "Official Assessment 2.0 12-task bank, isolated from Assessment 1.0 records, baselines and charts while sharing execution and SQLite infrastructure."
+  },
+  "grading": {
+    "K25_IPv4_BitReverse_Abduction": {
+      "type": "assessment-exact-fields-v1",
+      "name": "grade",
+      "expected": {
+        "first": {
+          "$aliases": [
+            "Peru",
+            "PERU",
+            "peru"
+          ]
+        },
+        "second": {
+          "$aliases": [
+            "Cuba",
+            "CUBA",
+            "cuba"
+          ]
+        }
+      }
+    },
+    "K25_FIDE_Perft_EdgeCases": {
+      "type": "assessment-exact-fields-v1",
+      "name": "grade",
+      "expected": {
+        "pos1_legal_moves": 15,
+        "pos1_checking_moves": 4,
+        "pos2_legal_moves": 19
+      }
+    },
+    "R25_Shifted_Pinyin_Abduction": {
+      "type": "assessment-exact-fields-v1",
+      "name": "grade",
+      "expected": {
+        "message": {
+          "$aliases": [
+            "把坏卡退回给客户",
+            "把坏卡退回给客户。",
+            "把坏卡退回给客户！"
+          ]
+        }
+      }
+    },
+    "R25_Morse_Sentence_Camouflage": {
+      "type": "assessment-exact-fields-v1",
+      "name": "grade",
+      "expected": {
+        "message": {
+          "$aliases": [
+            "NO ONE GOT GAME TIME",
+            "No one got game time",
+            "No one got game time.",
+            "no one got game time",
+            "NO ONE GOT GAME TIME."
+          ]
+        }
+      }
+    },
+    "C25_FourSlot_Readback": {
+      "type": "assessment-exact-fields-v1",
+      "name": "grade",
+      "expected": {
+        "steps": [
+          12,
+          16
+        ]
+      }
+    },
+    "C25_Clock_Belady_Anomaly": {
+      "type": "assessment-exact-fields-v1",
+      "name": "grade",
+      "expected": {
+        "sequence": [
+          1,
+          1,
+          2,
+          2,
+          3,
+          4,
+          3
+        ],
+        "misses": [
+          4,
+          5
+        ]
+      }
+    },
+    "X25_Checkout_Credit_Audit": {
+      "type": "assessment-exact-fields-v1",
+      "name": "grade",
+      "expected": {
+        "build": "k6",
+        "credit_usd": 75
+      }
+    },
+    "E25_Tight_Budget_Deductive_Audit": {
+      "type": "assessment-documents-v2",
+      "name": "investigate",
+      "config": {
+        "entry_document": "INDEX",
+        "documents": {
+          "INDEX": {
+            "content": "Cold-chain freight file 409. Carrier: Northline. Consignment: 18 crates of frozen fillets, 72 kg net per crate (plus 110 kg pallet tare). Dispatched 03 Oct; delivered 05 Oct. Governing tariff rules: RULE. Preliminary desk note: BRIEF. All dates fall in the same year."
+          },
+          "BRIEF": {
+            "content": "Preliminary desk note (unverified): Assumes 1,180 kg net cargo and suggests checking LOG_A and TAR_B. Superseded by file 409 crate count and RULE."
+          },
+          "RULE": {
+            "content": "Cold-chain shipments use TAR_B only if ALL three conditions hold: (1) temperature log LOG_A has no reading above 4 C, (2) total net cargo weight is at most 1,200 kg, and (3) carrier endorsement in CERT was active on the dispatch date. If condition (3) holds for a cold-chain shipment but (1) or (2) fails, use TAR_C. If condition (3) fails, use TAR_A. Pull itemized figures from LEDGER."
+          },
+          "LOG_A": {
+            "content": "Temperature logger 409: continuous readings between 1.8 C and 3.4 C; zero excursions above 4 C."
+          },
+          "CERT": {
+            "content": "Endorsement register (effective inclusive):\nNorthline cold-chain endorsement #88: active 01 Oct through 04 Oct (suspended 05 Oct).\nSouthway cold-chain endorsement #91: active 04 Oct through 31 Oct."
+          },
+          "LEDGER": {
+            "content": "File 409 ledger (USD): Base freight 9,400. Cold-chain handling 1,850. Prepayment received 2,600. Pending unverified damage notice 900 (not settled; excluded from invoice)."
+          },
+          "TAR_A": {
+            "content": "Schedule TAR_A (Code DM-1): Invoice equals base freight minus prepayment received."
+          },
+          "TAR_B": {
+            "content": "Schedule TAR_B (Code CC-3): Invoice equals base freight plus cold-chain handling minus prepayment received."
+          },
+          "TAR_C": {
+            "content": "Schedule TAR_C (Code CC-7): Invoice equals base freight plus cold-chain handling plus a 15% surcharge on base freight only, minus prepayment received."
+          }
+        },
+        "query_limit": 5,
+        "required_evidence_documents": [
+          "INDEX",
+          "RULE",
+          "CERT",
+          "LEDGER",
+          "TAR_C"
+        ],
+        "evidence_gated_fields": [
+          "tariff_code",
+          "balance_usd"
+        ],
+        "expected": {
+          "tariff_code": {
+            "$aliases": [
+              "CC-7",
+              "Code CC-7"
+            ]
+          },
+          "balance_usd": 10060
+        }
+      }
+    },
+    "I25_SOP_MinStep_Protocol": {
+      "type": "assessment-exact-fields-v1",
+      "name": "grade",
+      "expected": {
+        "min_steps": 13,
+        "sequence": "CADACEACADADB"
+      }
+    },
+    "I25_Bilingual_Custody_Discrepancy": {
+      "type": "assessment-exact-fields-v1",
+      "name": "grade",
+      "expected": {
+        "entries": [
+          "G:N/U",
+          "S:U/N",
+          "T:N/H",
+          "F:H/U",
+          "P:U/H"
+        ]
+      }
+    },
+    "T25_Deceptive_Relay_Matrix": {
+      "type": "assessment-blackbox-v2",
+      "name": "identify",
+      "config": {
+        "candidates": {
+          "M0": {
+            "outputs": {
+              "A": 0,
+              "B": 0,
+              "C": 1,
+              "D": 0,
+              "E": 0,
+              "F": 1,
+              "G": 0,
+              "H": 0,
+              "I": 0,
+              "J": 0,
+              "K": 0,
+              "L": 0
+            }
+          },
+          "M1": {
+            "outputs": {
+              "A": 0,
+              "B": 0,
+              "C": 0,
+              "D": 0,
+              "E": 1,
+              "F": 0,
+              "G": 1,
+              "H": 0,
+              "I": 0,
+              "J": 1,
+              "K": 1,
+              "L": 0
+            }
+          },
+          "M2": {
+            "outputs": {
+              "A": 0,
+              "B": 0,
+              "C": 0,
+              "D": 1,
+              "E": 0,
+              "F": 0,
+              "G": 0,
+              "H": 0,
+              "I": 1,
+              "J": 1,
+              "K": 1,
+              "L": 1
+            }
+          },
+          "M3": {
+            "outputs": {
+              "A": 1,
+              "B": 1,
+              "C": 0,
+              "D": 1,
+              "E": 0,
+              "F": 0,
+              "G": 1,
+              "H": 1,
+              "I": 0,
+              "J": 1,
+              "K": 1,
+              "L": 1
+            }
+          },
+          "M4": {
+            "outputs": {
+              "A": 0,
+              "B": 0,
+              "C": 1,
+              "D": 1,
+              "E": 1,
+              "F": 1,
+              "G": 0,
+              "H": 1,
+              "I": 0,
+              "J": 0,
+              "K": 0,
+              "L": 0
+            }
+          },
+          "M5": {
+            "outputs": {
+              "A": 1,
+              "B": 1,
+              "C": 1,
+              "D": 0,
+              "E": 0,
+              "F": 1,
+              "G": 1,
+              "H": 1,
+              "I": 1,
+              "J": 0,
+              "K": 1,
+              "L": 1
+            }
+          },
+          "M6": {
+            "outputs": {
+              "A": 0,
+              "B": 0,
+              "C": 1,
+              "D": 0,
+              "E": 1,
+              "F": 1,
+              "G": 0,
+              "H": 1,
+              "I": 0,
+              "J": 0,
+              "K": 0,
+              "L": 1
+            }
+          },
+          "M7": {
+            "outputs": {
+              "A": 1,
+              "B": 1,
+              "C": 1,
+              "D": 0,
+              "E": 0,
+              "F": 1,
+              "G": 1,
+              "H": 1,
+              "I": 1,
+              "J": 0,
+              "K": 1,
+              "L": 0
+            }
+          },
+          "M8": {
+            "outputs": {
+              "A": 0,
+              "B": 1,
+              "C": 1,
+              "D": 0,
+              "E": 1,
+              "F": 0,
+              "G": 0,
+              "H": 1,
+              "I": 0,
+              "J": 1,
+              "K": 0,
+              "L": 0
+            }
+          },
+          "M9": {
+            "outputs": {
+              "A": 0,
+              "B": 1,
+              "C": 0,
+              "D": 1,
+              "E": 1,
+              "F": 0,
+              "G": 1,
+              "H": 0,
+              "I": 1,
+              "J": 0,
+              "K": 0,
+              "L": 1
+            }
+          },
+          "M10": {
+            "outputs": {
+              "A": 1,
+              "B": 1,
+              "C": 0,
+              "D": 1,
+              "E": 0,
+              "F": 1,
+              "G": 0,
+              "H": 0,
+              "I": 1,
+              "J": 1,
+              "K": 0,
+              "L": 0
+            }
+          },
+          "M11": {
+            "outputs": {
+              "A": 1,
+              "B": 0,
+              "C": 0,
+              "D": 0,
+              "E": 1,
+              "F": 0,
+              "G": 1,
+              "H": 0,
+              "I": 0,
+              "J": 1,
+              "K": 1,
+              "L": 1
+            }
+          },
+          "M12": {
+            "outputs": {
+              "A": 1,
+              "B": 1,
+              "C": 0,
+              "D": 1,
+              "E": 0,
+              "F": 0,
+              "G": 1,
+              "H": 0,
+              "I": 0,
+              "J": 1,
+              "K": 0,
+              "L": 0
+            }
+          },
+          "M13": {
+            "outputs": {
+              "A": 1,
+              "B": 1,
+              "C": 1,
+              "D": 1,
+              "E": 0,
+              "F": 1,
+              "G": 1,
+              "H": 1,
+              "I": 1,
+              "J": 1,
+              "K": 1,
+              "L": 0
+            }
+          },
+          "M14": {
+            "outputs": {
+              "A": 0,
+              "B": 0,
+              "C": 1,
+              "D": 0,
+              "E": 1,
+              "F": 1,
+              "G": 0,
+              "H": 1,
+              "I": 1,
+              "J": 0,
+              "K": 0,
+              "L": 0
+            }
+          },
+          "M15": {
+            "outputs": {
+              "A": 1,
+              "B": 0,
+              "C": 0,
+              "D": 1,
+              "E": 1,
+              "F": 0,
+              "G": 0,
+              "H": 0,
+              "I": 1,
+              "J": 0,
+              "K": 1,
+              "L": 0
+            }
+          }
+        },
+        "expected_candidate": "M5",
+        "query_limit": 4
+      }
+    },
+    "T25_Delegated_Manifest_Dispatch": {
+      "type": "assessment-delegated-release-v2",
+      "name": "release",
+      "config": {
+        "root_id": "Port",
+        "queue": [
+          "Ash",
+          "Bay",
+          "Coil",
+          "Dune",
+          "Elm",
+          "Fir",
+          "Gull",
+          "Hull"
+        ],
+        "ledger": [
+          {
+            "seq": 1,
+            "kind": "grant",
+            "id": "Port",
+            "parent": null,
+            "scope": [
+              "Ash",
+              "Bay",
+              "Coil",
+              "Dune",
+              "Elm",
+              "Fir",
+              "Gull",
+              "Hull"
+            ],
+            "uses": 8,
+            "operation": "release"
+          },
+          {
+            "seq": 2,
+            "kind": "grant",
+            "id": "Outer",
+            "parent": "Port",
+            "scope": [
+              "Bay"
+            ],
+            "uses": 2,
+            "operation": "release",
+            "label": "Channel office"
+          },
+          {
+            "seq": 3,
+            "kind": "grant",
+            "id": "North",
+            "parent": "Port",
+            "scope": [
+              "Ash",
+              "Coil",
+              "Dune",
+              "Fir",
+              "Hull"
+            ],
+            "uses": 3,
+            "operation": "release",
+            "label": "Outer"
+          },
+          {
+            "seq": 4,
+            "kind": "grant",
+            "id": "South",
+            "parent": "Port",
+            "scope": [
+              "Bay",
+              "Coil",
+              "Elm",
+              "Gull"
+            ],
+            "uses": 3,
+            "operation": "release"
+          },
+          {
+            "seq": 5,
+            "kind": "grant",
+            "id": "Crane",
+            "parent": "North",
+            "scope": [
+              "Dune",
+              "Fir",
+              "Hull"
+            ],
+            "uses": 2,
+            "operation": "release"
+          },
+          {
+            "seq": 6,
+            "kind": "grant",
+            "id": "Moor",
+            "parent": "North",
+            "scope": [
+              "Coil",
+              "Dune"
+            ],
+            "uses": 2,
+            "operation": "release"
+          },
+          {
+            "seq": 7,
+            "kind": "grant",
+            "id": "Slip",
+            "parent": "South",
+            "scope": [
+              "Bay",
+              "Coil",
+              "Elm"
+            ],
+            "uses": 2,
+            "operation": "release"
+          },
+          {
+            "seq": 8,
+            "kind": "grant",
+            "id": "Ramp",
+            "parent": "South",
+            "scope": [
+              "Gull"
+            ],
+            "uses": 1,
+            "operation": "release"
+          },
+          {
+            "seq": 9,
+            "kind": "grant",
+            "id": "Seal",
+            "parent": "South",
+            "scope": [
+              "Bay"
+            ],
+            "uses": 2,
+            "operation": "verify"
+          },
+          {
+            "seq": 10,
+            "kind": "grant",
+            "id": "Keys",
+            "parent": "Outer",
+            "scope": [
+              "Bay"
+            ],
+            "uses": 1,
+            "operation": "release"
+          },
+          {
+            "seq": 11,
+            "kind": "grant",
+            "id": "Alder",
+            "parent": "Crane",
+            "scope": [
+              "Dune",
+              "Fir",
+              "Hull"
+            ],
+            "uses": 3,
+            "operation": "release"
+          },
+          {
+            "seq": 12,
+            "kind": "grant",
+            "id": "Larch",
+            "parent": "Moor",
+            "scope": [
+              "Coil",
+              "Dune"
+            ],
+            "uses": 3,
+            "operation": "release"
+          },
+          {
+            "seq": 13,
+            "kind": "grant",
+            "id": "Birch",
+            "parent": "Slip",
+            "scope": [
+              "Coil",
+              "Elm"
+            ],
+            "uses": 3,
+            "operation": "release"
+          },
+          {
+            "seq": 14,
+            "kind": "grant",
+            "id": "Finch",
+            "parent": "Ramp",
+            "scope": [
+              "Gull"
+            ],
+            "uses": 1,
+            "operation": "release"
+          },
+          {
+            "seq": 15,
+            "kind": "grant",
+            "id": "Otter",
+            "parent": "Crane",
+            "scope": [
+              "Ash"
+            ],
+            "uses": 1,
+            "operation": "release"
+          },
+          {
+            "seq": 16,
+            "kind": "grant",
+            "id": "Reed",
+            "parent": "Keys",
+            "scope": [
+              "Bay"
+            ],
+            "uses": 1,
+            "operation": "release"
+          },
+          {
+            "seq": 17,
+            "kind": "grant",
+            "id": "Vine",
+            "parent": "Seal",
+            "scope": [
+              "Bay"
+            ],
+            "uses": 1,
+            "operation": "release"
+          },
+          {
+            "seq": 18,
+            "kind": "grant",
+            "id": "Spare",
+            "parent": "Slip",
+            "scope": [
+              "Bay"
+            ],
+            "uses": 1,
+            "operation": "release"
+          },
+          {
+            "seq": 19,
+            "kind": "revoke",
+            "id": "Outer"
+          }
+        ],
+        "memo": {
+          "source": "unsigned truck sheet",
+          "text": "Coil via Larch, Dune via Alder, Elm via Birch, Fir via Alder, Gull via Finch. Hull can take Alder on the return."
+        },
+        "approval_handles": [
+          "Alder",
+          "Larch",
+          "Birch",
+          "Finch",
+          "Otter",
+          "Reed",
+          "Vine"
+        ],
+        "expected_pending": [
+          "Ash",
+          "Bay"
+        ]
+      }
+    }
+  }
+}

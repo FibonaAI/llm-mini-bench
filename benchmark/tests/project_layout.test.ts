@@ -30,7 +30,7 @@ describe('TypeScript-only project layout', () => {
         }
     });
 
-    test('keeps 1.0 as the sole production bank', () => {
+    test('keeps 1.0 and 2.0 as the official released banks', () => {
         const pkg = JSON.parse(readFileSync(join(root, 'package.json'), 'utf8'));
         expect(pkg.name).toBe('llm-mini-bench');
         expect(pkg.main).toBe('./magpie/index.ts');
@@ -39,7 +39,7 @@ describe('TypeScript-only project layout', () => {
             readdirSync(join(root, 'benchmark/banks'))
                 .filter(name => name.endsWith('.json') && !name.endsWith('.questions.json'))
                 .sort()
-        ).toEqual(['assessment-1.0.json']);
+        ).toEqual(['assessment-1.0.json', 'assessment-2.0.json']);
         for (const name of ['src', 'backend', 'web', 'banks', 'baselines', 'tools', 'tests', 'examples']) {
             expect(existsSync(join(root, 'benchmark', name))).toBe(true);
             expect(existsSync(join(root, name))).toBe(false);

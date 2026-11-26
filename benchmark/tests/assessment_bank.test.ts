@@ -273,6 +273,63 @@ describe('assessment bank manifest', () => {
             /from ['"].*(?:calibrate|backend)/
         );
     });
+    test('official 2.0 release validates 12 tasks across 6 domains with strict schemas and v2 closure hashes', () => {
+        const bank2 = load_assessment_bank('2.0');
+        expect(bank2.version).toBe('2.0');
+        expect(bank2.status).toBe('released');
+        expect(bank2.task_ids).toHaveLength(12);
+        expect(bank2.task_sha256).toBe('84feeda2dbeef6cf75ecdb281ff0fcff0e0200f669f13682a735a66ed3a724a3');
+        expect(new Set(bank2.tasks.map(task => task.domain))).toEqual(
+            new Set(['knowledge', 'reasoning', 'code', 'context', 'instruction', 'tool_use'])
+        );
+        for (const domain of ['knowledge', 'reasoning', 'code', 'context', 'instruction', 'tool_use']) {
+            expect(bank2.tasks.filter(task => task.domain === domain)).toHaveLength(2);
+        }
+        expect(bank2.tasks.filter(task => task.kind === 'tool')).toHaveLength(3);
+        expect(bank2.tasks.filter(task => task.kind === 'text')).toHaveLength(9);
+        expect(Object.keys(bank2.extension_sha256 ?? {})).toHaveLength(8);
+        const allowedSchemaKeys = new Set([
+            'type',
+            'properties',
+            'required',
+            'additionalProperties',
+            'items',
+            'enum',
+            'description',
+            'anyOf',
+            'oneOf'
+        ]);
+        const assertStrictSchemaNode = (node: Record<string, any>) => {
+            for (const key of Object.keys(node)) expect(allowedSchemaKeys.has(key)).toBe(true);
+            if (node.type === 'object') {
+                const keys = Object.keys(node.properties ?? {});
+                expect(keys.length).toBeGreaterThan(0);
+                expect(node.additionalProperties).toBe(false);
+                expect([...(node.required ?? [])].sort()).toEqual([...keys].sort());
+                for (const child of Object.values(node.properties as Record<string, any>)) assertStrictSchemaNode(child);
+            } else if (node.type === 'array') {
+                expect(typeof node.items).toBe('object');
+                assertStrictSchemaNode(node.items);
+            } else if (Array.isArray(node.type)) {
+                expect(node.type.length).toBeGreaterThan(0);
+                for (const t of node.type) expect(['string', 'integer', 'number', 'boolean', 'null']).toContain(t);
+            } else {
+                expect(['string', 'integer', 'number', 'boolean']).toContain(node.type);
+            }
+        };
+        for (const task of bank2.tasks) {
+            expect(task_answer_protocol(task)).toBe(SUBMIT_ANSWER_PROTOCOL);
+            const schema = task_answer_schema(task);
+            expect((schema.required as string[]).length).toBeGreaterThanOrEqual(1);
+            expect((schema.required as string[]).length).toBeLessThanOrEqual(3);
+            assertStrictSchemaNode(schema);
+        }
+        // Corrupting any v2 simulator hash in 2.0 manifest is rejected.
+        const raw2 = JSON.parse(readFileSync(join(ASSESSMENT_PROJECT_ROOT, 'banks/assessment-2.0.json'), 'utf8'));
+        const cards2 = JSON.parse(readFileSync(join(ASSESSMENT_PROJECT_ROOT, 'banks/assessment-2.0.questions.json'), 'utf8'));
+        raw2.extension_sha256['src/assessment_blackbox_v2.ts'] = '0'.repeat(64);
+        expect(() => load_assessment_bank('2.0', writeManifest(raw2, false, cards2))).toThrow('extension source hash mismatch');
+    });
 });
 
 describe('version-independent exact-fields task data', () => {

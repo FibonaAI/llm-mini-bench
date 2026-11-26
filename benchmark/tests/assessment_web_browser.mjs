@@ -21,12 +21,18 @@ function loadStatic(directory, prefix = '') {
     }
 }
 loadStatic(web);
-const loadedBank = load_assessment_bank();
+const loadedBank = load_assessment_bank('1.0');
 const bank = {
     ...loadedBank,
     tasks: loadedBank.tasks.map(task => Object.fromEntries(Object.entries(task).filter(([, value]) => typeof value !== 'function')))
 };
+const loadedBank2 = load_assessment_bank('2.0');
+const bank2 = {
+    ...loadedBank2,
+    tasks: loadedBank2.tasks.map(task => Object.fromEntries(Object.entries(task).filter(([, value]) => typeof value !== 'function')))
+};
 assert.equal(bank.tasks.length, 12);
+assert.equal(bank2.tasks.length, 12);
 // The acceptance is one sequential browser session split into named steps under tests/browser/.
 // Steps share state in order (later steps rely on earlier ones), so they are concatenated into one
 // script; a failure reports its step name and saves a failure screenshot for that step.
@@ -39,7 +45,7 @@ const body = steps
     .map(name => `step = ${JSON.stringify(name.slice(3, -3))};\n${readFileSync(join(stepsDirectory, name), 'utf8')}`)
     .join('\n');
 const script = `async page => {
-const ARTIFACTS = ${JSON.stringify(artifacts)}, STATIC_FILES = ${JSON.stringify(staticFiles)}, BANK = ${JSON.stringify(bank)};
+const ARTIFACTS = ${JSON.stringify(artifacts)}, STATIC_FILES = ${JSON.stringify(staticFiles)}, BANK = ${JSON.stringify(bank)}, BANK_2_0 = ${JSON.stringify(bank2)};
 let step = '';
 try {
 ${body}

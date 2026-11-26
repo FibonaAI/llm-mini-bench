@@ -57,7 +57,7 @@ bun benchmark/tools/import_assessment_baseline.ts --run-id RUN_ID [--data-dir DI
   --target-id TARGET_ID --output-dir benchmark/baselines
 ```
 
-Or pass a standalone exported run JSON file instead of `--run-id`. The tool validates all 12 tasks in Assessment 1.0, every planned round, the bank hash, source code, and per-sample execution protocols. It accepts only completed, gradable results.
+Or pass a standalone exported run JSON file instead of `--run-id`. The tool validates all 12 tasks in the run's released bank (Assessment 2.0 or 1.0), every planned round, the bank/extension hashes, execution source closure, and per-sample execution protocols. It accepts only completed, gradable results.
 
 The output filename is generated from the content hash of the full snapshot. Importing the same evidence again does not overwrite different content. Save personal baselines through the plugin page instead to avoid writing personal data into the project.
 

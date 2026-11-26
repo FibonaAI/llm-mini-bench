@@ -188,4 +188,4 @@ bun benchmark/bench.ts serve --port 3481
 
 保存基线要求完整 12 题、全部预定轮次完成且可评分、任务与执行协议证据一致。个人基线保存到数据目录的 `mini-bench.sqlite`，不覆盖原运行。查看已有个人运行和已通过校验的基线无需重新发模型请求。来源不兼容的运行不能提升为基线。
 
-计划和启动使用相同请求结构。目录里的题库 ID 为 `assessment-1.0`，请求中的 `bank_version` 为 `1.0`，这是唯一可用的题库。
+计划和启动使用相同请求结构。`GET /api/bench/banks` 同时提供两套正式题库：`assessment-2.0`（`bank_version: "2.0"`，Web 界面默认选中）与 `assessment-1.0`（`bank_version: "1.0"`，CLI/API 省略 `bank_version` 时的回退默认值）。分析图表、任务历史与基线均按 `bank_version` 严格隔离。

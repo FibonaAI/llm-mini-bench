@@ -24,8 +24,38 @@
         ><button class="tab" type="button" data-view-link="runs">任务</button>
       </nav>
       <div class="actions">
-        <span id="connection-status" class="muted">本地工作区</span
-        ><button
+        <span id="connection-status" class="muted">本地工作区</span>
+        <div class="version-switch" id="bench-version-switch" hidden>
+          <button
+            class="btn version-trigger"
+            id="bench-version-trigger"
+            type="button"
+            aria-haspopup="listbox"
+            aria-expanded="false"
+            aria-controls="bench-version-menu"
+            aria-label="题库版本"
+          >
+            <span class="version-trigger-label" id="bench-version-label"></span
+            ><span class="version-new-badge" id="bench-version-badge" hidden>新</span
+            ><svg
+              class="version-chevron"
+              width="13"
+              height="13"
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              stroke-width="2"
+              stroke-linecap="round"
+              stroke-linejoin="round"
+              aria-hidden="true"
+            >
+              <path d="m7 15 5 5 5-5"></path>
+              <path d="m7 9 5-5 5 5"></path>
+            </svg>
+          </button>
+          <div class="version-menu" id="bench-version-menu" role="listbox" aria-label="选择题库版本" hidden></div>
+        </div>
+        <button
           class="btn mask-accounts-btn"
           id="mask-accounts"
           type="button"

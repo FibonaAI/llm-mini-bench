@@ -124,5 +124,11 @@ export function execution_task_summary(
         for (const [status, count] of Object.entries(child.sample_status_counts))
             sample_status_counts[status] = (sample_status_counts[status] ?? 0) + count;
     }
-    return { ...(cloneOutput ? clone(task) : task), children, run_status_counts, sample_status_counts };
+    return {
+        ...(cloneOutput ? clone(task) : task),
+        bank_version: task.plan.bank_version,
+        children,
+        run_status_counts,
+        sample_status_counts
+    };
 }

@@ -76,9 +76,10 @@ function fixture() {
         tasks: [
             {
                 id: 'task',
+                bank_version: '1.0',
                 status: 'completed',
-                plan: { targets: [target], run_count: 1 },
-                children: [{ run_id: 'run', target, status: 'completed' }]
+                plan: { bank_version: '1.0', targets: [target], run_count: 1 },
+                children: [{ run_id: 'run', bank_version: '1.0', target, status: 'completed' }]
             }
         ],
         runs: [],
@@ -86,8 +87,9 @@ function fixture() {
         runDetail: {
             id: 'run',
             task_id: 'task',
+            bank_version: '1.0',
             status: 'completed',
-            plan: { targets: [target] },
+            plan: { bank_version: '1.0', targets: [target] },
             samples: [
                 { sample_id: 'sample-one', task: 'one', round: 1, thinking: 'high', status: 'completed', grade: { content_score: 0.5 } },
                 { sample_id: 'sample-two', task: 'two', round: 1, thinking: 'high', status: 'api_failure' }
@@ -95,6 +97,7 @@ function fixture() {
         }
     };
     const app = {
+        bank: { version: '1.0' },
         services: {
             byId,
             escapeHtml: value => String(value ?? ''),
@@ -253,6 +256,7 @@ test('failed samples show journaled call diagnoses, never-sent attempts and a ta
     const requests = [];
     const byId = id => nodes.get(id) ?? nodes.set(id, new HistoryNode(id)).get(id);
     const app = {
+        bank: { version: '1.0' },
         services: {
             byId,
             escapeHtml: value => String(value ?? ''),
@@ -305,8 +309,9 @@ test('queued and running records omit unknown usage warnings and duplicate cost 
     state.tasks = [
         {
             id: 'task',
+            bank_version: '1.0',
             status: 'running',
-            plan: { targets: [target], run_count: 2 },
+            plan: { bank_version: '1.0', targets: [target], run_count: 2 },
             children: [
                 {
                     run_id: 'run',
@@ -362,8 +367,9 @@ test('history search filters both task list and expanded child runs without leak
     state.tasks = [
         {
             id: 'task-mixed',
+            bank_version: '1.0',
             status: 'completed',
-            plan: { targets: [devin, opencode], run_count: 2 },
+            plan: { bank_version: '1.0', targets: [devin, opencode], run_count: 2 },
             children: [
                 { run_id: 'run-devin', target: devin, status: 'completed', sample_status_counts: { completed: 12 } },
                 { run_id: 'run-opencode', target: opencode, status: 'failed', sample_status_counts: { api_failure: 2, completed: 10 } }
@@ -438,6 +444,7 @@ test('outer task cards show model names and expanded tasks render a model-groupe
     state.tasks = [
         {
             id: 'task-single',
+            bank_version: '1.0',
             status: 'running',
             plan: {
                 targets: [
@@ -467,6 +474,7 @@ test('outer task cards show model names and expanded tasks render a model-groupe
         },
         {
             id: 'task-seven',
+            bank_version: '1.0',
             status: 'completed',
             plan: { targets: manyTargets, run_count: 7, rounds: 3, sample_count: 252 },
             children: manyTargets.map((target, index) => ({
@@ -498,6 +506,7 @@ test('run detail defers raw JSON formatting until a disclosure is opened', () =>
     const { state, view, nodes } = fixture();
     const run = {
         id: 'run-lazy',
+        bank_version: '1.0',
         status: 'completed',
         plan: { targets: [{ id: 't1', model: 'gpt-test', thinking: 'high' }], limits: { timeout: 600 } },
         budget: { requests: 1, estimated_uncached_cost_usd: 0.01 },
@@ -649,6 +658,7 @@ test('task preview labels gateway-binding accounts as 自动分配 and single-pi
     const { state, view, nodes } = fixture();
     const pinnedTask = {
         id: 'task-single-pin',
+        bank_version: '1.0',
         status: 'completed',
         plan: { run_count: 1, rounds: 1 },
         children: [
@@ -671,6 +681,7 @@ test('task preview labels gateway-binding accounts as 自动分配 and single-pi
     };
     const mixedDefaultTask = {
         id: 'task-mixed-auto',
+        bank_version: '1.0',
         status: 'completed',
         plan: { run_count: 2, rounds: 1 },
         children: [
@@ -725,6 +736,7 @@ test('task card surfaces channel badges, non-zero status pills, and channel-pod 
     const { state, view, nodes } = fixture();
     const multiChannelTask = {
         id: 'ea058bae56394729aee044cb7c83e0e2',
+        bank_version: '1.0',
         status: 'running',
         created_at: '2026-11-22T01:14:24Z',
         plan: { run_count: 5, rounds: 3, sample_count: 180, run_concurrency: 2, sample_concurrency: 4 },
@@ -844,6 +856,7 @@ test('large task history paginates to 40 cards, expands for deep selection, and 
     const target = { model: 'model', route_id: 'fixed', thinking: 'high', account_ref: 'account' };
     state.tasks = Array.from({ length: 55 }, (_, index) => ({
         id: `task-${String(index).padStart(3, '0')}`,
+        bank_version: '1.0',
         status: 'completed',
         created_at: new Date(2026, 10, 1, 12, 0, index).toISOString(),
         plan: { targets: [target], run_count: 1, rounds: 1 },
@@ -917,6 +930,7 @@ test('task history renders task, channel-pod, and run baseline actions, badges, 
     ];
     const task = {
         id: 'baseline-task',
+        bank_version: '1.0',
         status: 'completed',
         plan: { targets: children.map(c => c.target), run_count: 4, rounds: 3 },
         children
@@ -928,6 +942,7 @@ test('task history renders task, channel-pod, and run baseline actions, badges, 
     state.runDetail = {
         id: 'ref-promoted',
         task_id: 'baseline-task',
+        bank_version: '1.0',
         status: 'completed',
         updated_at: '2026-11-24T00:00:00Z',
         plan: { targets: [children[0].target] },
@@ -975,6 +990,7 @@ test('task history renders task, channel-pod, and run baseline actions, badges, 
     state.runDetail = {
         id: 'third-timeout',
         task_id: 'baseline-task',
+        bank_version: '1.0',
         status: 'completed',
         updated_at: '2026-11-24T00:00:00Z',
         sample_status_counts: { completed: 34, timeout: 2 },
@@ -987,8 +1003,8 @@ test('task history renders task, channel-pod, and run baseline actions, badges, 
     expect(nodes.get('bench-baseline-run').dataset.baselineIneligibleReason).toBe('含 2 个超时样本');
     expect(nodes.get('bench-baseline-run').title).toBe('不可设为基线：含 2 个超时样本');
     expect(nodes.get('bench-unbaseline-run').hidden).toBe(true);
-    expect(nodes.get('bench-run-detail').innerHTML).toContain('run-baseline-note');
-    expect(nodes.get('bench-run-detail').innerHTML).toContain('不可设为基线：含 2 个超时样本');
+    expect(nodes.get('bench-run-detail').innerHTML).not.toContain('run-baseline-note');
+    expect(nodes.get('bench-run-detail').innerHTML).not.toContain('不可设为基线：含 2 个超时样本');
 });
 
 test('abnormal tasks support healthy channel/model promotion without cluttering chips or ineligible scopes', () => {
@@ -1077,6 +1093,7 @@ test('cancelling and queued states render distinct non-running tones across card
     const { nodes, state, view } = fixture();
     const cancellingTask = {
         id: 'task-cancelling',
+        bank_version: '1.0',
         status: 'cancelling',
         created_at: '2026-11-25T07:00:00Z',
         plan: {
@@ -1107,6 +1124,7 @@ test('cancelling and queued states render distinct non-running tones across card
     };
     const queuedTask = {
         id: 'task-queued',
+        bank_version: '1.0',
         status: 'queued',
         created_at: '2026-11-25T06:59:00Z',
         plan: {
@@ -1152,4 +1170,30 @@ test('cancelling and queued states render distinct non-running tones across card
     expect(detailHtml).toContain('取消中 12/36');
     expect(detailHtml).not.toContain('task-preview-chip-fill');
     expect(detailHtml).toContain('class="task-preview-legend-item"><i class="task-dot is-cancelling" aria-hidden="true"></i>取消中');
+});
+
+test('history entries fail closed when active bank is unloaded or record lacks bank_version', () => {
+    const { state } = fixture();
+    const byId = id => new HistoryNode(id);
+    const appHolder = {
+        bank: null,
+        services: {
+            byId,
+            escapeHtml: value => String(value ?? ''),
+            activeStatus: () => false,
+            statusText: value => value,
+            formatDate: value => value
+        }
+    };
+    state.tasks = [
+        { id: 'v2-task', bank_version: '2.0', status: 'completed', plan: { targets: [] }, children: [] },
+        { id: 'v1-task', bank_version: '1.0', status: 'completed', plan: { targets: [] }, children: [] },
+        { id: 'missing-ver', status: 'completed', plan: { targets: [] }, children: [] }
+    ];
+    const view = createTaskHistoryView({ app: appHolder, state, retryRequests: new Map(), retrying: new Set() });
+    expect(view.historyEntries()).toEqual([]);
+    appHolder.bank = { version: '2.0' };
+    expect(view.historyEntries().map(e => e.record.id)).toEqual(['v2-task']);
+    appHolder.bank = { version: '1.0' };
+    expect(view.historyEntries().map(e => e.record.id)).toEqual(['v1-task']);
 });

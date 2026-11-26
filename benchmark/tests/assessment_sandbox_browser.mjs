@@ -22,8 +22,10 @@ delete process.env.MAGPIE_BENCH_ROUTES_FILE;
 const adapter = new MagpieBenchAdapter('http://127.0.0.1:1/never-contact', 'offline-test');
 const service = new BenchService({ token, data_dir: join(artifacts, 'data'), adapter });
 // Seed this isolated acceptance workspace explicitly; production workspaces stay empty.
-const seededBank = load_assessment_bank();
+const seededBank = load_assessment_bank('2.0');
 const seededCards = seededBank.tasks.map(assessment_task_snapshot);
+const seededBank1 = load_assessment_bank('1.0');
+const seededCards1 = seededBank1.tasks.map(assessment_task_snapshot);
 const seededLimits = {
     max_output_tokens: null,
     max_turns: null,
@@ -49,7 +51,7 @@ const seededBaseline = build_assessment_baseline(
         status: 'completed',
         created_at: '2026-11-11T00:00:00Z',
         plan: {
-            bank_version: '1.0',
+            bank_version: '2.0',
             bank_scope: 'whole',
             bank_snapshot: seededBankSnapshot,
             task_ids: seededBank.task_ids,
@@ -85,6 +87,49 @@ const seededBaseline = build_assessment_baseline(
     seededTarget.id
 );
 service.save_baseline(seededBaseline);
+const { tasks: _seededTasks1, ...seededBankSnapshot1 } = seededBank1;
+const seededBaseline1 = build_assessment_baseline(
+    {
+        id: 'sandbox-baseline-run-1-0',
+        status: 'completed',
+        created_at: '2026-11-10T00:00:00Z',
+        plan: {
+            bank_version: '1.0',
+            bank_scope: 'whole',
+            bank_snapshot: seededBankSnapshot1,
+            task_ids: seededBank1.task_ids,
+            task_snapshots: seededCards1,
+            source_sha256: capture_assessment_sources(seededBank1).hashes,
+            targets: [seededTarget],
+            rounds: 1,
+            limits: seededLimits
+        },
+        samples: seededCards1.map(card => {
+            const { execution_protocol, assessment_protocol_sha256 } = assessment_sample_protocol(card, 'high', seededLimits, false);
+            return {
+                sample_id: `${card.id}-1`,
+                run_id: 'sandbox-baseline-run-1-0',
+                target_id: seededTarget.id,
+                route_id: seededTarget.route_id,
+                account_ref: seededTarget.account_ref,
+                task: card.id,
+                round: 1,
+                model: seededTarget.model,
+                thinking: 'high',
+                status: 'completed',
+                ok: true,
+                usage: { input_tokens: 120, output_tokens: 240 },
+                estimated_uncached_cost_usd: 0.02,
+                execution_protocol,
+                execution_protocol_sha256: execution_protocol_hash(execution_protocol),
+                assessment_protocol_sha256,
+                grade: { content_score: 0.9, instruction_checks: { submit_answer: true }, outcome: 'correct' }
+            };
+        })
+    },
+    seededTarget.id
+);
+service.save_baseline(seededBaseline1);
 adapter.models = async () =>
     [
         ...['remote-A', 'remote-B'].map(owner => ({
@@ -193,7 +238,7 @@ writeFileSync(
  try { await frame.locator('#analysis-picker .af-search').waitFor({timeout:8000}); await frame.locator('.score-cost-point').first().waitFor({timeout:8000}); } catch(error){readyError=String(error);}
  const state=await frame.evaluate(()=>{
   let storageDenied=false;try{localStorage.getItem('opaque-origin-test');}catch(error){storageDenied=error.name==='SecurityError';}
-  return {origin:self.origin,storageDenied,inlinePicker:document.querySelectorAll('#task-picker .dp-popup.dp-inline').length,analysisFilters:document.querySelectorAll('#analysis-picker details.af-facet').length,chart:!!document.querySelector('#score-cost-chart svg'),points:document.querySelectorAll('.score-cost-point').length,bank:document.querySelector('#bench-bank-label')?.textContent,connection:document.querySelector('#connection-status')?.textContent,title:document.title};
+  return {origin:self.origin,storageDenied,inlinePicker:document.querySelectorAll('#task-picker .dp-popup.dp-inline').length,pickers:document.querySelectorAll('#task-picker .dp-popup.dp-inline:not([hidden])').length,triggerCount:document.querySelectorAll('#task-picker .dp-trigger').length,analysisFilters:document.querySelectorAll('#analysis-picker details.af-facet').length,chart:!!document.querySelector('#score-cost-chart svg'),points:document.querySelectorAll('.score-cost-point').length,bank:document.querySelector('#bench-bank-label')?.textContent,connection:document.querySelector('#connection-status')?.textContent,title:document.title};
  });
  const legendState={inline:await frame.locator('.chart-legend').isVisible(),singleGroup:await frame.locator('.chart-legend-item').count()===1,collapsed:await frame.locator('.chart-legend-disclosure').getAttribute('open')===null,searchHidden:await frame.locator('.chart-legend input').isHidden()};
  await frame.locator('.chart-legend-item').focus();legendState.highlight=await frame.locator('.score-cost-point[data-legend-highlight="true"]').count()===state.points;
@@ -206,6 +251,12 @@ writeFileSync(
  analysisState.resultCount=await frame.locator('#analysis-results [data-inspect-observation]').count()===state.points;
  // Keyboard activation avoids opaque-iframe pointer coordinate drift after nested scrolling.
  await frame.locator('#close-analysis-results').focus();analysisState.closeFocus=await frame.locator('#close-analysis-results').evaluate(node=>node===document.activeElement);await frame.locator('#close-analysis-results').press('Enter');await frame.locator('#analysis-results').waitFor({state:'hidden'});analysisState.focusRestored=await frame.locator('#analysis-result-count').evaluate(node=>node===document.activeElement);analysisState.resultsClose=await frame.locator('#analysis-results').isHidden();
+ await frame.locator('#bench-version-trigger').click();
+ await frame.locator('#bench-version-menu [data-bank-version="1.0"]').click();
+ const switched10={points:await frame.locator('.score-cost-point').count()===1,summary:(await frame.locator('#dataset-summary').innerText()).includes('Mini Bench 1.0')};
+ await frame.locator('#bench-version-trigger').click();
+ await frame.locator('#bench-version-menu [data-bank-version="2.0"]').click();
+ const switched20={points:await frame.locator('.score-cost-point').count()===1,summary:(await frame.locator('#dataset-summary').innerText()).includes('Mini Bench 2.0')};
  await frame.locator('[data-view-link="runs"]').click();
  const popup=frame.locator('#task-picker .dp-popup.dp-inline:not([hidden])');
  await popup.waitFor({state:'visible'});
@@ -231,7 +282,7 @@ writeFileSync(
  const maskedRestored=await frame.locator('#mask-accounts').getAttribute('aria-pressed')==='false'&&await frame.evaluate(()=>!document.body.classList.contains('masked'));
  const sandboxMask={maskedPressed,maskedRestored};
  await page.screenshot({path:${JSON.stringify(join(artifacts, 'sandbox.png'))},fullPage:true});
- return {passed:state.origin==='null'&&state.storageDenied&&state.inlinePicker===1&&state.analysisFilters>=4&&Object.values(legendState).every(Boolean)&&Object.values(analysisState).every(Boolean)&&state.chart&&state.points>0&&state.bank.includes('12')&&svg.ok&&svg.svg&&taskState.configCollapsed&&taskState.sampleConcurrency==='6'&&taskState.runConcurrency==='3'&&taskState.rounds==='3'&&taskState.planDisabled&&taskState.startDisabled&&Object.values(remoteState).every(Boolean)&&Object.values(sandboxSubmit).every(Boolean)&&Object.values(sandboxMask).every(Boolean)&&!errors.length&&!consoleErrors.length&&!failures.length,state,legendState,analysisState,taskState,remoteState,sandboxSubmit,sandboxMask,svg,readyError,errors,consoleErrors,failures};
+ return {passed:state.origin==='null'&&state.storageDenied&&state.inlinePicker===1&&state.pickers===1&&state.triggerCount===0&&state.analysisFilters===5&&Object.values(legendState).every(Boolean)&&Object.values(analysisState).every(Boolean)&&Object.values(switched10).every(Boolean)&&Object.values(switched20).every(Boolean)&&state.chart&&state.points===1&&state.bank.includes('Mini Bench 2.0')&&state.bank.includes('12')&&svg.ok&&svg.svg&&taskState.configCollapsed&&taskState.sampleConcurrency==='6'&&taskState.runConcurrency==='3'&&taskState.rounds==='3'&&taskState.planDisabled&&taskState.startDisabled&&Object.values(remoteState).every(Boolean)&&Object.values(sandboxSubmit).every(Boolean)&&Object.values(sandboxMask).every(Boolean)&&!errors.length&&!consoleErrors.length&&!failures.length,state,switched10,switched20,legendState,analysisState,taskState,remoteState,sandboxSubmit,sandboxMask,svg,readyError,errors,consoleErrors,failures};
 }`
 );
 let opened = false;
@@ -260,6 +311,7 @@ try {
                 request.origin === 'null' &&
                 request.authenticated &&
                 request.status === 202 &&
+                request.body?.bank_version === '2.0' &&
                 Array.isArray(request.body?.targets) &&
                 request.body.targets.length === 1 &&
                 typeof request.body.targets[0].route_id === 'string' &&

@@ -190,4 +190,4 @@ Run summaries and task child summaries include a read-only `result_quality` proj
 
 Saving a baseline requires all 12 tasks, completion and gradability of every planned round, and consistent task and execution protocol evidence. Personal baselines are saved in `mini-bench.sqlite` under the data directory without overwriting the original run. Viewing existing personal runs and accepted baselines requires no new model requests. Runs with incompatible source provenance cannot be promoted to baselines.
 
-Planning and starting use the same request structure. The bank ID in the catalog is `assessment-1.0`; the request's `bank_version` is `1.0`. This is the only available bank.
+Planning and starting use the same request structure. `GET /api/bench/banks` serves both official banks: `assessment-2.0` (`bank_version: "2.0"`, default in the web UI) and `assessment-1.0` (`bank_version: "1.0"`, default when CLI/API requests omit `bank_version`). Analysis views, task histories, and baselines are strictly isolated by `bank_version`.

@@ -10,6 +10,9 @@ import { createTaskSubmission } from './task-submission.js';
   createTaskTargets(app);
   const state = {
     banks: [],
+    selectedBankVersion: null,
+    bankVersionPinned: false,
+    observationsBankChecked: false,
     submissionUncertain: false,
     tasks: [],
     runs: [],
@@ -30,15 +33,32 @@ import { createTaskSubmission } from './task-submission.js';
     baselineBusy = new Set();
   let pendingRevealRunId = null;
   let pendingForceFresh = false;
-  const { element, historyEntries, renderDetails, inProgress, canCancel, fixedTargets, runBaselineTargets, taskSection, runSection } =
-    createTaskHistoryView({
-      app,
-      state,
-      retryRequests,
-      retrying,
-      baselineBusy
-    });
-  const { updateTaskPreview, renderBanks } = createTaskSubmission({
+  const {
+    element,
+    historyEntries,
+    renderDetails,
+    inProgress,
+    canCancel,
+    fixedTargets,
+    runBaselineTargets,
+    taskSection,
+    runSection,
+    recordBankVersion = record => record?.bank_version ?? record?.plan?.bank_version ?? null,
+    matchesBankVersion = (record, active = app.bank?.version ?? null) => Boolean(active) && recordBankVersion(record) === active
+  } = createTaskHistoryView({
+    app,
+    state,
+    retryRequests,
+    retrying,
+    baselineBusy
+  });
+  const {
+    updateTaskPreview,
+    renderBanks,
+    renderVersionSwitcher = () => {},
+    reconcileDefaultBank = () => {},
+    selectBankVersion = () => {}
+  } = createTaskSubmission({
     app,
     state,
     element,
@@ -182,6 +202,12 @@ import { createTaskSubmission } from './task-submission.js';
           state.runs = runs.runs;
           state.runsEtag = typeof runs.etag === 'string' ? runs.etag : null;
         }
+        if (!tasksUnchanged || !runsUnchanged) {
+          app.setRecordedBankVersions?.(
+            'history',
+            [...state.tasks, ...state.runs].map(record => recordBankVersion(record))
+          );
+        }
         const runsVisible = !element('runs-view')?.hidden;
         if (runsVisible && !state.historyClosed && !state.selectedTaskId && !state.selectedRunId) {
           const first = historyEntries()[0];
@@ -230,16 +256,19 @@ import { createTaskSubmission } from './task-submission.js';
   async function load(event) {
     if (!available) return;
     const refresh = event?.type === 'mini-bench:refresh';
-    const loadBanks = async () => {
+    const initialBankLoad = !state.selectedBankVersion;
+    const fetchBanks = async () => {
       try {
         const data = await request('./api/bench/banks');
         if (!Array.isArray(data.banks)) throw new Error('题库目录格式无效');
         state.timeoutPolicyReady = data.execution_policy === 'sample-timeout-v1';
         state.banks = data.banks;
-        renderBanks();
+        if (!initialBankLoad) renderBanks();
         if (!state.timeoutPolicyReady) notify('服务仍在执行旧任务，更新完成前暂不接收新任务。', true);
+        return true;
       } catch (error) {
         notify(`无法加载 Mini Bench 题库：${error.message}`, true);
+        return false;
       }
     };
     const loadRoutes = async () => {
@@ -252,7 +281,8 @@ import { createTaskSubmission } from './task-submission.js';
         notify(`无法加载路由目录：${error.message}`, true);
       }
     };
-    await Promise.all([loadBanks(), loadRoutes(), refreshHistory(refresh)]);
+    const [banksLoaded] = await Promise.all([fetchBanks(), loadRoutes(), refreshHistory(refresh)]);
+    if (initialBankLoad && banksLoaded) renderBanks();
   }
   function ensureRunMounted(runId) {
     if (!runId) return;
@@ -349,14 +379,22 @@ import { createTaskSubmission } from './task-submission.js';
     try {
       const task = await request(taskDetailUrl(taskId));
       if (version !== state.selectionVersion) return;
+      if (!matchesBankVersion(task, app.bank?.version)) {
+        if (state.selectedTaskId === taskId) {
+          state.selectedTaskId = null;
+          state.taskDetail = null;
+          renderDetails();
+        }
+        return;
+      }
       state.taskDetail = task;
       renderDetails();
     } catch (error) {
       if (version === state.selectionVersion) notify(`无法加载任务详情：${error.message}`, true);
     }
   }
-  async function selectAssessmentRun(runId) {
-    if (state.selectedRunId === runId && state.runDetail?.id === runId) {
+  async function selectAssessmentRun(runId, { allowBankSwitch = false } = {}) {
+    if (state.selectedRunId === runId && state.runDetail?.id === runId && matchesBankVersion(state.runDetail, app.bank?.version)) {
       revealSelectedRun();
       return;
     }
@@ -369,6 +407,27 @@ import { createTaskSubmission } from './task-submission.js';
     else if (state.taskDetail) state.taskDetail = null;
     const cached = cachedRunDetail(runId);
     if (cached) {
+      const cachedVersion = recordBankVersion(cached) ?? recordBankVersion(parent);
+      if (
+        allowBankSwitch &&
+        cachedVersion &&
+        cachedVersion !== app.bank?.version &&
+        state.banks.some(bank => bank?.version === cachedVersion)
+      ) {
+        suppressBankAutoSelect = true;
+        try {
+          selectBankVersion(cachedVersion);
+        } finally {
+          suppressBankAutoSelect = false;
+        }
+      } else if (!matchesBankVersion(cached, app.bank?.version)) {
+        state.selectedRunId = null;
+        state.selectedTaskId = null;
+        state.taskDetail = null;
+        state.runDetail = null;
+        renderDetails();
+        return;
+      }
       state.runDetail = cached;
       renderDetails();
       revealSelectedRun();
@@ -379,6 +438,30 @@ import { createTaskSubmission } from './task-submission.js';
     try {
       const run = await fetchRunDetail(runId);
       if (version !== state.selectionVersion) return;
+      const loadedVersion = recordBankVersion(run) ?? recordBankVersion(findTaskSummary(run.task_id));
+      if (
+        allowBankSwitch &&
+        loadedVersion &&
+        loadedVersion !== app.bank?.version &&
+        state.banks.some(bank => bank?.version === loadedVersion)
+      ) {
+        suppressBankAutoSelect = true;
+        try {
+          selectBankVersion(loadedVersion);
+        } finally {
+          suppressBankAutoSelect = false;
+        }
+      } else if (!matchesBankVersion(run, app.bank?.version)) {
+        if (state.selectedRunId === runId) {
+          pendingRevealRunId = null;
+          state.selectedRunId = null;
+          state.selectedTaskId = null;
+          state.taskDetail = null;
+          state.runDetail = null;
+          renderDetails();
+        }
+        return;
+      }
       state.runDetail = run;
       state.selectedTaskId = run.task_id || parent?.id || null;
       if (state.selectedTaskId && state.taskDetail?.id !== state.selectedTaskId) {
@@ -693,10 +776,60 @@ import { createTaskSubmission } from './task-submission.js';
   element('bench-cancel-task').addEventListener('click', () => cancelExecution('task', state.selectedTaskId));
   element('bench-cancel-run').addEventListener('click', () => cancelExecution('run', state.selectedRunId));
   app.on('mini-bench:baselines-changed', () => refreshHistory(true));
+  // Selection belongs to one bank version; switching versions drops selections from the other bank.
+  let suppressBankAutoSelect = false;
+  function runBankVersion(runId) {
+    if (!runId) return null;
+    const parent = state.tasks.find(task => task.children?.some(child => child.run_id === runId));
+    const standalone = state.runs.find(run => run.id === runId);
+    const detail = state.runDetail?.id === runId ? state.runDetail : null;
+    return (
+      recordBankVersion(findRunSummary(runId)) ?? recordBankVersion(parent) ?? recordBankVersion(standalone) ?? recordBankVersion(detail)
+    );
+  }
+  function selectedHistoryRecord() {
+    if (state.selectedTaskId)
+      return findTaskSummary(state.selectedTaskId) || (state.taskDetail?.id === state.selectedTaskId ? state.taskDetail : null);
+    if (!state.selectedRunId) return null;
+    const runId = state.selectedRunId;
+    return (
+      state.tasks.find(task => task.children?.some(child => child.run_id === runId)) ||
+      state.runs.find(run => run.id === runId) ||
+      (state.runDetail?.id === runId ? state.runDetail : null)
+    );
+  }
+  app.on('mini-bench:banks-changed', event => {
+    closeBaselineReasonPopover();
+    const version = event.detail?.version ?? null;
+    const hasSelection = Boolean(state.selectedTaskId || state.selectedRunId);
+    if (hasSelection && !matchesBankVersion(selectedHistoryRecord(), version)) {
+      pendingRevealRunId = null;
+      state.selectionVersion++;
+      state.selectedTaskId = null;
+      state.selectedRunId = null;
+      state.taskDetail = null;
+      state.runDetail = null;
+    }
+    if (!suppressBankAutoSelect && !element('runs-view')?.hidden && !state.historyClosed && !state.selectedTaskId && !state.selectedRunId) {
+      const first = historyEntries()[0];
+      if (first?.kind === 'task') void selectAssessmentTask(first.record.id);
+      else if (first) void selectAssessmentRun(first.record.id);
+    }
+    renderDetails();
+  });
   app.on('mini-bench:select-run', event => {
     closeBaselineReasonPopover();
+    const runVersion = runBankVersion(event.detail);
+    if (runVersion && runVersion !== app.bank?.version && state.banks.some(bank => bank?.version === runVersion)) {
+      suppressBankAutoSelect = true;
+      try {
+        selectBankVersion(runVersion);
+      } finally {
+        suppressBankAutoSelect = false;
+      }
+    }
     pendingRevealRunId = event.detail;
-    return selectAssessmentRun(event.detail);
+    return selectAssessmentRun(event.detail, { allowBankSwitch: true });
   });
   app.on('mini-bench:view', event => {
     closeBaselineReasonPopover();
@@ -707,6 +840,16 @@ import { createTaskSubmission } from './task-submission.js';
       else if (first) void selectAssessmentRun(first.record.id);
     }
     revealSelectedRun();
+  });
+  app.on('mini-bench:recorded-banks-changed', event => {
+    const firstObservations = event.detail?.source === 'observations' && !state.observationsBankChecked;
+    if (firstObservations) state.observationsBankChecked = true;
+    if (!state.banks.length || !state.selectedBankVersion) return;
+    if (firstObservations) {
+      reconcileDefaultBank();
+      return;
+    }
+    renderVersionSwitcher();
   });
   app.on('mini-bench:refresh', load);
   updateTaskPreview();

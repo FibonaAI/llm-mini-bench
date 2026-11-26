@@ -1,0 +1,1268 @@
+[
+  {
+    "id": "K25_IPv4_BitReverse_Abduction",
+    "title": "Dotted-quad country tags",
+    "version": "assessment-2.0",
+    "domain": "knowledge",
+    "kind": "text",
+    "prompt": "同一批国家名标签中，有两张被印成了 `10.162.74.170` 和 `194.170.66.130`。这两张原本分别是什么英文国家名？",
+    "answer_protocol": "submit-answer-tool-v1",
+    "answer_schema": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "first",
+        "second"
+      ],
+      "properties": {
+        "first": {
+          "type": "string",
+          "description": "Original English country name for 10.162.74.170."
+        },
+        "second": {
+          "type": "string",
+          "description": "Original English country name for 194.170.66.130."
+        }
+      }
+    },
+    "source": [
+      "Original hardware/protocol abduction item: uppercase 4-letter ASCII country names encoded via 8-bit LSB-to-MSB bit reversal and formatted as IPv4 dotted quads."
+    ],
+    "difficulty_intent": "Reject superficial IPv4 subnet interpretation and abduct 8-bit serial LSB/MSB bit-reversal of uppercase ASCII country tags with no mechanism hint.",
+    "measurement": {
+      "status": "released",
+      "necessary_operations": [
+        "Recognize that the dotted-quad octets represent bit-reversed uppercase ASCII bytes rather than network addresses.",
+        "Reverse the 8 bits of each octet and decode both 4-letter English country names."
+      ],
+      "confounds": "Each dotted quad maps uniquely to a standard 4-letter uppercase ASCII English country name; case variations are accepted via aliases."
+    },
+    "scoring_rule": "Equal-weight mean of exact case-insensitive matches on first and second.",
+    "grading": {
+      "type": "assessment-exact-fields-v1",
+      "name": "grade",
+      "expected": {
+        "first": {
+          "$aliases": [
+            "Peru",
+            "PERU",
+            "peru"
+          ]
+        },
+        "second": {
+          "$aliases": [
+            "Cuba",
+            "CUBA",
+            "cuba"
+          ]
+        }
+      }
+    }
+  },
+  {
+    "id": "K25_FIDE_Perft_EdgeCases",
+    "title": "FIDE legal move and check boundary counts",
+    "version": "assessment-2.0",
+    "domain": "knowledge",
+    "kind": "text",
+    "prompt": "Under standard FIDE Laws of Chess, count exact legal moves for White in each of the two FEN positions below (each distinct pawn promotion piece Q/R/B/N counts as a separate legal move):\n\nPosition 1: 2n3k1/3P4/8/K3Pp1r/8/2B5/3b4/8 w - f6 0 1\nPosition 2: 1r4k1/4r3/8/8/8/7b/3PN3/R3K2R w KQ - 0 1\n\nReport pos1_legal_moves (total legal moves for White in Position 1), pos1_checking_moves (how many of Position 1's legal moves put the Black king in check), and pos2_legal_moves (total legal moves for White in Position 2).",
+    "answer_protocol": "submit-answer-tool-v1",
+    "answer_schema": {
+      "type": "object",
+      "properties": {
+        "pos1_legal_moves": {
+          "type": "integer"
+        },
+        "pos1_checking_moves": {
+          "type": "integer"
+        },
+        "pos2_legal_moves": {
+          "type": "integer"
+        }
+      },
+      "required": [
+        "pos1_legal_moves",
+        "pos1_checking_moves",
+        "pos2_legal_moves"
+      ],
+      "additionalProperties": false
+    },
+    "source": [
+      "Original FIDE Laws of Chess 1-ply legal move and check boundary item combining horizontal en passant pin, diagonal pin, promotion checks, and castling through vs past attacked squares."
+    ],
+    "difficulty_intent": "Apply exact FIDE legality rules across two compact FEN positions where horizontal en passant pin, diagonal pin, promotion checks, castling-through-check prohibition, and rook-crossing-attacked-square legality interact.",
+    "measurement": {
+      "status": "released",
+      "necessary_operations": [
+        "Reject the illegally pinned horizontal en passant capture and off-diagonal moves of the diagonally pinned bishop in Position 1 while counting all promotion checks.",
+        "Allow queenside castling when only b1 is attacked while rejecting kingside castling through attacked f1, accounting for the pinned knight and rook capture on h3 in Position 2."
+      ],
+      "confounds": "Independent dual FIDE move generators validated against Kiwipete and Perft positions 3–5 certify 15 legal moves / 4 checks in Position 1 and 19 legal moves in Position 2."
+    },
+    "scoring_rule": "Equal-weight mean of exact integer matches on pos1_legal_moves, pos1_checking_moves, and pos2_legal_moves.",
+    "grading": {
+      "type": "assessment-exact-fields-v1",
+      "name": "grade",
+      "expected": {
+        "pos1_legal_moves": 15,
+        "pos1_checking_moves": 4,
+        "pos2_legal_moves": 19
+      }
+    }
+  },
+  {
+    "id": "R25_Shifted_Pinyin_Abduction",
+    "title": "Shifted Pinyin message recovery",
+    "version": "assessment-2.0",
+    "domain": "reasoning",
+    "kind": "text",
+    "prompt": "下面这条异常消息原本想发的一句话是什么？\n把交拉题哦机哦个哦了机",
+    "answer_protocol": "submit-answer-tool-v1",
+    "answer_schema": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "message"
+      ],
+      "properties": {
+        "message": {
+          "type": "string",
+          "description": "还原后的中文原句（不含标点）。"
+        }
+      }
+    },
+    "source": [
+      "Original corrupted short message fixture; US QWERTY right-hand one-key rightward displacement into standard Mandarin Pinyin input."
+    ],
+    "difficulty_intent": "Recover a short Chinese message across composed physical key displacement and Pinyin syllable segmentation without mechanism hints.",
+    "measurement": {
+      "status": "released",
+      "necessary_operations": [
+        "Convert surface Chinese characters back to their Pinyin letter stream.",
+        "Infer uniform one-key rightward displacement of right-hand QWERTY keys from repeated '-o' vowel endings.",
+        "Invert the key displacement and recover the unique coherent Mandarin instruction."
+      ],
+      "confounds": "Compact 11-character everyday IME artifact; injective key displacement eliminates hand-boundary preimage collisions."
+    },
+    "scoring_rule": "Exact match on the restored Chinese sentence with punctuation aliases.",
+    "grading": {
+      "type": "assessment-exact-fields-v1",
+      "name": "grade",
+      "expected": {
+        "message": {
+          "$aliases": [
+            "把坏卡退回给客户",
+            "把坏卡退回给客户。",
+            "把坏卡退回给客户！"
+          ]
+        }
+      }
+    }
+  },
+  {
+    "id": "R25_Morse_Sentence_Camouflage",
+    "title": "Corrupted five-word dispatch",
+    "version": "assessment-2.0",
+    "domain": "reasoning",
+    "kind": "text",
+    "prompt": "下面这条 5 词英文异常消息原本想发的一句正常英文是什么？\n`AS SAT USE UNIT EMIT`",
+    "answer_protocol": "submit-answer-tool-v1",
+    "answer_schema": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "message"
+      ],
+      "properties": {
+        "message": {
+          "type": "string",
+          "description": "Original five-word English sentence."
+        }
+      }
+    },
+    "source": [
+      "Original camouflaged Morse polarity-inversion item: every token on both sides is a common English word with no radio or encoding hint."
+    ],
+    "difficulty_intent": "Reject semantic, anagram, and surface-editing interpretations of five real English words and abduct ITU Morse dot/dash polarity inversion without domain hints.",
+    "measurement": {
+      "status": "released",
+      "necessary_operations": [
+        "Abduct the ITU Morse dot-dash complement transformation across all five English tokens.",
+        "Invert every letter cleanly and verify the resulting five-word English sentence."
+      ],
+      "confounds": "Every letter has a unique valid ITU Morse complement; case and optional trailing period are normalized via aliases."
+    },
+    "scoring_rule": "Exact case-insensitive match on message.",
+    "grading": {
+      "type": "assessment-exact-fields-v1",
+      "name": "grade",
+      "expected": {
+        "message": {
+          "$aliases": [
+            "NO ONE GOT GAME TIME",
+            "No one got game time",
+            "No one got game time.",
+            "no one got game time",
+            "NO ONE GOT GAME TIME."
+          ]
+        }
+      }
+    }
+  },
+  {
+    "id": "C25_FourSlot_Readback",
+    "title": "Four-slot frame store readback",
+    "version": "assessment-2.0",
+    "domain": "code",
+    "kind": "text",
+    "prompt": "A four-slot store starts all zeros. One writer takes frames n=1,2,3,4 in order; one reader runs once. Each indented line is one atomic step. P and X may interleave arbitrarily. X drops a started but unfinished frame; the reader and slots survive.\n```\nwrite(n):\n A[(h+1)%4]=n\n B[(h+1)%4]=n\n h=(h+1)%4\nread():\n s=h\n a=A[s]\n require h==s\n b=B[s]\n if h==s: emit(a,b)\nP():\n d=h\nX():\n h=d\n```\nFrom startup, what are the minimum total step counts to emit a<b and to emit a>b, respectively?",
+    "answer_protocol": "submit-answer-tool-v1",
+    "answer_schema": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "steps"
+      ],
+      "properties": {
+        "steps": {
+          "type": "array",
+          "items": {
+            "type": "integer"
+          },
+          "description": "Two-element array [minStepsForALessThanB, minStepsForAGreaterThanB]."
+        }
+      }
+    },
+    "source": [
+      "Original 4-slot atomic ring-store concurrency model with checkpoint/rollback recovery and dual head-guard checks."
+    ],
+    "difficulty_intent": "Distinguish checkpoint-assisted ascending torn readback (12 steps) from full 4-slot wraparound descending torn readback (16 steps) under the intermediate h==s guard.",
+    "measurement": {
+      "status": "released",
+      "necessary_operations": [
+        "Model atomic interleavings of writer, reader, checkpoint P, and rollback X across all four ring slots.",
+        "Respect both h==s guards and the dropped-unfinished-frame semantics of X to certify minimal step counts for a<b and a>b."
+      ],
+      "confounds": "Finite state space with exact step counting from all-zero startup; independent full-state BFS certifies [12, 16]."
+    },
+    "scoring_rule": "Exact match on the two-element step count array [a<b, a>b].",
+    "grading": {
+      "type": "assessment-exact-fields-v1",
+      "name": "grade",
+      "expected": {
+        "steps": [
+          12,
+          16
+        ]
+      }
+    }
+  },
+  {
+    "id": "C25_Clock_Belady_Anomaly",
+    "title": "Second-chance cache capacity anomaly",
+    "version": "assessment-2.0",
+    "domain": "code",
+    "kind": "text",
+    "prompt": "Find the shortest request sequence of integers from `{1, 2, 3, 4}` (lexicographically first on ties) for which `misses(seq, 3) > misses(seq, 2)`. Report the sequence and `[misses(seq, 2), misses(seq, 3)]`.\n```js\nfunction misses(seq, cap) {\n  const q = [];\n  let m = 0;\n  for (const p of seq) {\n    const h = q.find(x => x.p === p);\n    if (h) { h.r = 1; continue; }\n    m++;\n    if (q.length === cap) {\n      while (q[0].r) { const x = q.shift(); x.r = 0; q.push(x); }\n      q.shift();\n    }\n    q.push({ p, r: 0 });\n  }\n  return m;\n}\n```",
+    "answer_protocol": "submit-answer-tool-v1",
+    "answer_schema": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "sequence",
+        "misses"
+      ],
+      "properties": {
+        "sequence": {
+          "type": "array",
+          "items": {
+            "type": "integer"
+          },
+          "description": "Shortest lexicographically first request sequence."
+        },
+        "misses": {
+          "type": "array",
+          "items": {
+            "type": "integer"
+          },
+          "description": "[misses(seq, 2), misses(seq, 3)]."
+        }
+      }
+    },
+    "source": [
+      "Original ECMAScript second-chance (Clock) page replacement implementation exhibiting a minimal length-7 Belady anomaly between capacities 2 and 3."
+    ],
+    "difficulty_intent": "Discover how uncleared reference bits in a capacity-3 Clock queue defeat stack inclusion relative to capacity 2 and locate the unique shortest lexicographically first length-7 witness.",
+    "measurement": {
+      "status": "released",
+      "necessary_operations": [
+        "Trace the exact queue rotation and reference-bit clearing rules of misses(seq, cap).",
+        "Identify why cap=3 can suffer more misses than cap=2 and find the shortest lexicographically first witness over {1,2,3,4}."
+      ],
+      "confounds": "Exhaustive search over all 4^1..4^7 sequences certifies [1,1,2,2,3,4,3] with [4,5] as the unique shortest lexicographically first witness."
+    },
+    "scoring_rule": "Equal-weight mean of exact matches on sequence and misses.",
+    "grading": {
+      "type": "assessment-exact-fields-v1",
+      "name": "grade",
+      "expected": {
+        "sequence": [
+          1,
+          1,
+          2,
+          2,
+          3,
+          4,
+          3
+        ],
+        "misses": [
+          4,
+          5
+        ]
+      }
+    }
+  },
+  {
+    "id": "X25_Checkout_Credit_Audit",
+    "title": "Settle a checkout incident",
+    "version": "assessment-2.0",
+    "domain": "context",
+    "kind": "text",
+    "prompt": "All times exact. Deploy UTC: 02:00 k6 edge quota, 02:01 p9 origin pool; both sites.\nSupport UTC+8: 10:02 ticket opened. Fault traces end in quota denial before origin. 10:04 “Rollback complete.” Correction: east reverted both builds at 10:04; west at 10:07.\nGateway UTC: minute buckets labeled by end (02:03 covers [02:02,02:03)). At each end 02:02 through 02:08, each site logged 110 raw requests. Failed checkouts in that order: east 12,10,10,2,2,2,2; west 12,6,6,10,10,12,2. One original request per checkout. Every initial denial triggers one same-second retry, denied again; no other retries or failures.\nCredit rider: $15 per full minute from ticket opening with at least 10% of distinct checkouts failing at either site still on the faulting build; pay once per minute. Post build and USD.",
+    "answer_protocol": "submit-answer-tool-v1",
+    "answer_schema": {
+      "type": "object",
+      "properties": {
+        "build": {
+          "type": "string"
+        },
+        "credit_usd": {
+          "type": "integer"
+        }
+      },
+      "required": [
+        "build",
+        "credit_usd"
+      ],
+      "additionalProperties": false
+    },
+    "source": [
+      "Original fictional fixture for Assessment 2.0; all evidence is supplied locally."
+    ],
+    "difficulty_intent": "Settle a two-site rider using customer-level failure fractions despite retry traffic and staggered rollback.",
+    "measurement": {
+      "status": "released",
+      "necessary_operations": [
+        "Identify the responsible deployed component from the fault traces.",
+        "Convert local support times and intersect full UTC intervals with the corrected active window per site.",
+        "Remove duplicate requests before testing the site threshold and settling the union."
+      ],
+      "confounds": "Seven one-minute buckets, exact boundaries, uniform raw request count, no unstated retries."
+    },
+    "scoring_rule": "Equal-weight exact checks of the faulting build and posted credit.",
+    "grading": {
+      "type": "assessment-exact-fields-v1",
+      "name": "grade",
+      "expected": {
+        "build": "k6",
+        "credit_usd": 75
+      }
+    }
+  },
+  {
+    "id": "E25_Tight_Budget_Deductive_Audit",
+    "title": "Deductive cold-chain tariff audit under strict fetch budget",
+    "version": "assessment-2.0",
+    "domain": "context",
+    "kind": "tool",
+    "answer_protocol": "submit-answer-tool-v1",
+    "source": [
+      "Original fictional freight-file fixture for Assessment 2.0; all evidence is supplied locally."
+    ],
+    "prompt": "Determine the final invoice balance in USD and applicable tariff code for freight file 409. Start at INDEX. The archive allows at most five document fetches for this file.",
+    "answer_schema": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "tariff_code",
+        "balance_usd"
+      ],
+      "properties": {
+        "tariff_code": {
+          "type": "string"
+        },
+        "balance_usd": {
+          "type": "integer"
+        }
+      }
+    },
+    "tools": [
+      {
+        "type": "function",
+        "name": "fetch_document",
+        "description": "Fetch the full content of one public document ID.",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "document_id": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "document_id"
+          ],
+          "additionalProperties": false
+        },
+        "strict": true
+      }
+    ],
+    "difficulty_intent": "Zero-slack 5-fetch archive investigation where an unverified preliminary brief (BRIEF) and a redundant temperature log (LOG_A) must be skipped via exact cargo-weight arithmetic from INDEX so the governing tariff schedule TAR_C can be fetched within budget.",
+    "measurement": {
+      "status": "released",
+      "necessary_operations": [
+        "Skip the unverified BRIEF note and compute 18 x 72 = 1,296 kg > 1,200 kg from INDEX to eliminate LOG_A without fetching it.",
+        "Verify dispatch-date endorsement in CERT, pull figures from LEDGER, and retrieve governing schedule TAR_C (Code CC-7, 15% base-freight surcharge) within five total fetches."
+      ],
+      "confounds": "Fetching either BRIEF or LOG_A exhausts the strict 5-fetch limit before TAR_C can be read; both tariff_code and balance_usd are evidence-gated on INDEX, RULE, CERT, LEDGER, and TAR_C."
+    },
+    "scoring_rule": "Evidence-gated equal-weight exact checks on tariff_code and balance_usd within 5 valid document fetches.",
+    "grading": {
+      "type": "assessment-documents-v2",
+      "name": "investigate",
+      "config": {
+        "entry_document": "INDEX",
+        "documents": {
+          "INDEX": {
+            "content": "Cold-chain freight file 409. Carrier: Northline. Consignment: 18 crates of frozen fillets, 72 kg net per crate (plus 110 kg pallet tare). Dispatched 03 Oct; delivered 05 Oct. Governing tariff rules: RULE. Preliminary desk note: BRIEF. All dates fall in the same year."
+          },
+          "BRIEF": {
+            "content": "Preliminary desk note (unverified): Assumes 1,180 kg net cargo and suggests checking LOG_A and TAR_B. Superseded by file 409 crate count and RULE."
+          },
+          "RULE": {
+            "content": "Cold-chain shipments use TAR_B only if ALL three conditions hold: (1) temperature log LOG_A has no reading above 4 C, (2) total net cargo weight is at most 1,200 kg, and (3) carrier endorsement in CERT was active on the dispatch date. If condition (3) holds for a cold-chain shipment but (1) or (2) fails, use TAR_C. If condition (3) fails, use TAR_A. Pull itemized figures from LEDGER."
+          },
+          "LOG_A": {
+            "content": "Temperature logger 409: continuous readings between 1.8 C and 3.4 C; zero excursions above 4 C."
+          },
+          "CERT": {
+            "content": "Endorsement register (effective inclusive):\nNorthline cold-chain endorsement #88: active 01 Oct through 04 Oct (suspended 05 Oct).\nSouthway cold-chain endorsement #91: active 04 Oct through 31 Oct."
+          },
+          "LEDGER": {
+            "content": "File 409 ledger (USD): Base freight 9,400. Cold-chain handling 1,850. Prepayment received 2,600. Pending unverified damage notice 900 (not settled; excluded from invoice)."
+          },
+          "TAR_A": {
+            "content": "Schedule TAR_A (Code DM-1): Invoice equals base freight minus prepayment received."
+          },
+          "TAR_B": {
+            "content": "Schedule TAR_B (Code CC-3): Invoice equals base freight plus cold-chain handling minus prepayment received."
+          },
+          "TAR_C": {
+            "content": "Schedule TAR_C (Code CC-7): Invoice equals base freight plus cold-chain handling plus a 15% surcharge on base freight only, minus prepayment received."
+          }
+        },
+        "query_limit": 5,
+        "required_evidence_documents": [
+          "INDEX",
+          "RULE",
+          "CERT",
+          "LEDGER",
+          "TAR_C"
+        ],
+        "evidence_gated_fields": [
+          "tariff_code",
+          "balance_usd"
+        ],
+        "expected": {
+          "tariff_code": {
+            "$aliases": [
+              "CC-7",
+              "Code CC-7"
+            ]
+          },
+          "balance_usd": 10060
+        }
+      }
+    }
+  },
+  {
+    "id": "I25_SOP_MinStep_Protocol",
+    "title": "Five-valve safety interlock startup",
+    "version": "assessment-2.0",
+    "domain": "instruction",
+    "kind": "text",
+    "prompt": "Five valves `A, B, C, D, E` all start closed. In each step, toggle exactly one valve (closed ↔ open). Reach the state where all five valves are open in the minimum possible number of steps while obeying every safety rule below:\n- You may toggle `B` only if (`A` is open and `D` is closed) or `E` is open.\n- You may toggle `D` only if `C` is open and `B` is closed.\n- You may toggle `E` only if `D` is open and `A` is closed.\n- No intermediate or final state may have `B` and `E` both open while `C` is closed.\n- You may never toggle the same valve twice in a row, nor toggle two alphabetically adjacent valves (`A-B`, `B-C`, `C-D`, `D-E`) in consecutive steps.\nReport the minimum number of steps and the lexicographically first shortest toggle sequence (e.g. `\"CAD...\"`).",
+    "answer_protocol": "submit-answer-tool-v1",
+    "answer_schema": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "min_steps",
+        "sequence"
+      ],
+      "properties": {
+        "min_steps": {
+          "type": "integer",
+          "description": "Minimum number of single-valve toggle steps."
+        },
+        "sequence": {
+          "type": "string",
+          "description": "Lexicographically first shortest sequence of valve letters."
+        }
+      }
+    },
+    "source": [
+      "Original five-valve safety interlock startup procedure with state preconditions, forbidden state invariant, and same-and-adjacent cooldown."
+    ],
+    "difficulty_intent": "Plan an exact minimum-length 13-step toggle sequence and break ties lexicographically across five strictly load-bearing interlock and cooldown constraints.",
+    "measurement": {
+      "status": "released",
+      "necessary_operations": [
+        "Track the 5-valve open/closed bitmask together with the previous toggled valve.",
+        "Enforce all three toggle preconditions, the forbidden (B,E without C) state invariant, and the same/adjacent cooldown to find the lexicographically first 13-step sequence."
+      ],
+      "confounds": "Exact state-space BFS certifies min_steps=13 with exactly two shortest sequences (CADACEACADADB < CADAEBEACACEA); removing any single rule strictly reduces min_steps."
+    },
+    "scoring_rule": "Equal-weight mean of exact matches on min_steps and sequence.",
+    "grading": {
+      "type": "assessment-exact-fields-v1",
+      "name": "grade",
+      "expected": {
+        "min_steps": 13,
+        "sequence": "CADACEACADADB"
+      }
+    }
+  },
+  {
+    "id": "I25_Bilingual_Custody_Discrepancy",
+    "title": "Museum handoff register",
+    "version": "assessment-2.0",
+    "domain": "instruction",
+    "kind": "text",
+    "prompt": "These notes describe one eight-hour shift. Read each independently. H: it entails physical custody of this crate passed to the carrier during the shift. N: it entails no such transfer. U: both outcomes fit. Log only disagreements as ID:EN/ZH in order.\nG | Every handoff to the carrier used a pass issued this shift. None was issued. | 木箱交承运人须凭出门条；本班未查见无条交箱。\nS | Nothing went to the carrier without a release countersigned by Conservation. | 除修复室会签单外，未向承运人移交任何物品。\nT | The vault kept sole custody of the crate throughout the shift. | 本班结束前二十分钟，库房把木箱交给了承运人。\nL | The carrier took the crate, not its list. | 承运人接收的不是清单，而是木箱。\nF | The empty frame stayed; the carrier took the crate. | 空架没交给承运人；木箱另页登记。\nP | The carrier was cleared to collect the crate. | 承运人接走木箱时，尚未获准开箱。",
+    "answer_protocol": "submit-answer-tool-v1",
+    "answer_schema": {
+      "type": "object",
+      "properties": {
+        "entries": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      },
+      "required": [
+        "entries"
+      ],
+      "additionalProperties": false
+    },
+    "source": [
+      "Original parallel English and Simplified Chinese museum shift notes."
+    ],
+    "difficulty_intent": "Classify independent entailed events, preserving quantifier scope, entity, timing and the difference between permission and action.",
+    "measurement": {
+      "status": "released",
+      "necessary_operations": [
+        "Evaluate each language separately against the shift-specific custody event.",
+        "Distinguish conditions, transfer of documents and actual transfer of the crate.",
+        "Project truth conditions to H/N/U, filter equal pairs, and preserve register order."
+      ],
+      "confounds": "Six independent pairs in a fixed shift; the crate, form and frame are distinct objects."
+    },
+    "scoring_rule": "Exact match on the single answer field.",
+    "grading": {
+      "type": "assessment-exact-fields-v1",
+      "name": "grade",
+      "expected": {
+        "entries": [
+          "G:N/U",
+          "S:U/N",
+          "T:N/H",
+          "F:H/U",
+          "P:U/H"
+        ]
+      }
+    }
+  },
+  {
+    "id": "T25_Deceptive_Relay_Matrix",
+    "title": "Identify the relay on the deceptive bench",
+    "version": "assessment-2.0",
+    "domain": "tool_use",
+    "kind": "tool",
+    "answer_protocol": "submit-answer-tool-v1",
+    "source": [
+      "Original fictional fixture for Assessment 2.0; all evidence is supplied locally."
+    ],
+    "prompt": "A returned relay is missing its revision label. The bench allows four single-contact readings. The bench procedure must identify any listed revision within that allowance. Which revision is fitted? The reference sheet gives the readings in contact order.\n    ABCDEFGHIJKL\nM0  001001000000\nM1  000010100110\nM2  000100001111\nM3  110100110111\nM4  001111010000\nM5  111001111011\nM6  001011010001\nM7  111001111010\nM8  011010010100\nM9  010110101001\nM10 110101001100\nM11 100010100111\nM12 110100100100\nM13 111101111110\nM14 001011011000\nM15 100110001010",
+    "answer_schema": {
+      "type": "object",
+      "properties": {
+        "candidate_id": {
+          "type": "string",
+          "description": "Identified relay revision ID (e.g. M0)."
+        }
+      },
+      "required": [
+        "candidate_id"
+      ],
+      "additionalProperties": false
+    },
+    "tools": [
+      {
+        "type": "function",
+        "name": "probe_case",
+        "description": "Return the hidden output for one public case ID.",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "case_id": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "case_id"
+          ],
+          "additionalProperties": false
+        },
+        "strict": true
+      }
+    ],
+    "difficulty_intent": "Eleven of twelve contacts split 8:8, but ten are deceptive traps that strand at least one branch; only contact I certifies every revision within four probes, with a unique feasible step-2 probe on each branch.",
+    "measurement": {
+      "necessary_operations": [
+        "Reject greedy 8:8 opening traps by verifying full 4-probe worst-case feasibility across all 16 revisions.",
+        "Choose the unique certified opening contact I and condition subsequent probes to isolate the fitted revision within four valid calls."
+      ],
+      "confounds": "Sixteen noiseless 12-contact signatures; labels and bit polarities carry no prior information about the fitted revision.",
+      "status": "released"
+    },
+    "scoring_rule": "Credit requires a universally feasible opening, a singleton on the observed readings, its exact revision ID and at most four valid calls.",
+    "grading": {
+      "type": "assessment-blackbox-v2",
+      "name": "identify",
+      "config": {
+        "candidates": {
+          "M0": {
+            "outputs": {
+              "A": 0,
+              "B": 0,
+              "C": 1,
+              "D": 0,
+              "E": 0,
+              "F": 1,
+              "G": 0,
+              "H": 0,
+              "I": 0,
+              "J": 0,
+              "K": 0,
+              "L": 0
+            }
+          },
+          "M1": {
+            "outputs": {
+              "A": 0,
+              "B": 0,
+              "C": 0,
+              "D": 0,
+              "E": 1,
+              "F": 0,
+              "G": 1,
+              "H": 0,
+              "I": 0,
+              "J": 1,
+              "K": 1,
+              "L": 0
+            }
+          },
+          "M2": {
+            "outputs": {
+              "A": 0,
+              "B": 0,
+              "C": 0,
+              "D": 1,
+              "E": 0,
+              "F": 0,
+              "G": 0,
+              "H": 0,
+              "I": 1,
+              "J": 1,
+              "K": 1,
+              "L": 1
+            }
+          },
+          "M3": {
+            "outputs": {
+              "A": 1,
+              "B": 1,
+              "C": 0,
+              "D": 1,
+              "E": 0,
+              "F": 0,
+              "G": 1,
+              "H": 1,
+              "I": 0,
+              "J": 1,
+              "K": 1,
+              "L": 1
+            }
+          },
+          "M4": {
+            "outputs": {
+              "A": 0,
+              "B": 0,
+              "C": 1,
+              "D": 1,
+              "E": 1,
+              "F": 1,
+              "G": 0,
+              "H": 1,
+              "I": 0,
+              "J": 0,
+              "K": 0,
+              "L": 0
+            }
+          },
+          "M5": {
+            "outputs": {
+              "A": 1,
+              "B": 1,
+              "C": 1,
+              "D": 0,
+              "E": 0,
+              "F": 1,
+              "G": 1,
+              "H": 1,
+              "I": 1,
+              "J": 0,
+              "K": 1,
+              "L": 1
+            }
+          },
+          "M6": {
+            "outputs": {
+              "A": 0,
+              "B": 0,
+              "C": 1,
+              "D": 0,
+              "E": 1,
+              "F": 1,
+              "G": 0,
+              "H": 1,
+              "I": 0,
+              "J": 0,
+              "K": 0,
+              "L": 1
+            }
+          },
+          "M7": {
+            "outputs": {
+              "A": 1,
+              "B": 1,
+              "C": 1,
+              "D": 0,
+              "E": 0,
+              "F": 1,
+              "G": 1,
+              "H": 1,
+              "I": 1,
+              "J": 0,
+              "K": 1,
+              "L": 0
+            }
+          },
+          "M8": {
+            "outputs": {
+              "A": 0,
+              "B": 1,
+              "C": 1,
+              "D": 0,
+              "E": 1,
+              "F": 0,
+              "G": 0,
+              "H": 1,
+              "I": 0,
+              "J": 1,
+              "K": 0,
+              "L": 0
+            }
+          },
+          "M9": {
+            "outputs": {
+              "A": 0,
+              "B": 1,
+              "C": 0,
+              "D": 1,
+              "E": 1,
+              "F": 0,
+              "G": 1,
+              "H": 0,
+              "I": 1,
+              "J": 0,
+              "K": 0,
+              "L": 1
+            }
+          },
+          "M10": {
+            "outputs": {
+              "A": 1,
+              "B": 1,
+              "C": 0,
+              "D": 1,
+              "E": 0,
+              "F": 1,
+              "G": 0,
+              "H": 0,
+              "I": 1,
+              "J": 1,
+              "K": 0,
+              "L": 0
+            }
+          },
+          "M11": {
+            "outputs": {
+              "A": 1,
+              "B": 0,
+              "C": 0,
+              "D": 0,
+              "E": 1,
+              "F": 0,
+              "G": 1,
+              "H": 0,
+              "I": 0,
+              "J": 1,
+              "K": 1,
+              "L": 1
+            }
+          },
+          "M12": {
+            "outputs": {
+              "A": 1,
+              "B": 1,
+              "C": 0,
+              "D": 1,
+              "E": 0,
+              "F": 0,
+              "G": 1,
+              "H": 0,
+              "I": 0,
+              "J": 1,
+              "K": 0,
+              "L": 0
+            }
+          },
+          "M13": {
+            "outputs": {
+              "A": 1,
+              "B": 1,
+              "C": 1,
+              "D": 1,
+              "E": 0,
+              "F": 1,
+              "G": 1,
+              "H": 1,
+              "I": 1,
+              "J": 1,
+              "K": 1,
+              "L": 0
+            }
+          },
+          "M14": {
+            "outputs": {
+              "A": 0,
+              "B": 0,
+              "C": 1,
+              "D": 0,
+              "E": 1,
+              "F": 1,
+              "G": 0,
+              "H": 1,
+              "I": 1,
+              "J": 0,
+              "K": 0,
+              "L": 0
+            }
+          },
+          "M15": {
+            "outputs": {
+              "A": 1,
+              "B": 0,
+              "C": 0,
+              "D": 1,
+              "E": 1,
+              "F": 0,
+              "G": 0,
+              "H": 0,
+              "I": 1,
+              "J": 0,
+              "K": 1,
+              "L": 0
+            }
+          }
+        },
+        "expected_candidate": "M5",
+        "query_limit": 4
+      }
+    }
+  },
+  {
+    "id": "T25_Delegated_Manifest_Dispatch",
+    "title": "Dispatch the port manifest",
+    "version": "assessment-2.0",
+    "domain": "tool_use",
+    "kind": "tool",
+    "prompt": "The port manifest is ready for dispatch. Read the queue and signed ledger, then release as many records as the grants permit without any rejection. Report the final queue state with both record lists in alphabetical order.",
+    "answer_protocol": "submit-answer-tool-v1",
+    "answer_schema": {
+      "type": "object",
+      "properties": {
+        "released": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "pending": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "root_uses_remaining": {
+          "type": "integer"
+        }
+      },
+      "required": [
+        "released",
+        "pending",
+        "root_uses_remaining"
+      ],
+      "additionalProperties": false
+    },
+    "tools": [
+      {
+        "type": "function",
+        "name": "inspect_queue",
+        "description": "Read complete released and pending records, remaining root uses and the unsigned background note. Free and repeatable.",
+        "parameters": {
+          "type": "object",
+          "properties": {},
+          "required": [],
+          "additionalProperties": false
+        },
+        "strict": true
+      },
+      {
+        "type": "function",
+        "name": "read_authorizations",
+        "description": "Read the complete signed event ledger in sequence order and current consumed uses. Free and repeatable.",
+        "parameters": {
+          "type": "object",
+          "properties": {},
+          "required": [],
+          "additionalProperties": false
+        },
+        "strict": true
+      },
+      {
+        "type": "function",
+        "name": "release_record",
+        "description": "Irreversibly release one pending record using an allowed approval handle. Every active ancestor must authorize the operation and record and have a remaining use. Success consumes one use from every chain grant; rejection changes no queue or counter.",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "record_id": {
+              "type": "string"
+            },
+            "approval_handle": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "record_id",
+            "approval_handle"
+          ],
+          "additionalProperties": false
+        },
+        "strict": true
+      }
+    ],
+    "source": [
+      "Original fictional fixture for Assessment 2.0; all evidence is supplied locally."
+    ],
+    "difficulty_intent": "Leaf scopes, signed ancestry and handle membership rule out two consignments. Saturating both an intermediate and a higher allocation requires reserving different chains.",
+    "measurement": {
+      "necessary_operations": [
+        "Verify the full signed ancestry of each offered handle.",
+        "Reserve limited shared uses for records with no alternative.",
+        "Execute the feasible assignment and report the resulting ledger state."
+      ],
+      "confounds": "All record IDs and grant IDs are distinct. Compatible releases commute; the signed ledger is complete.",
+      "status": "released"
+    },
+    "scoring_rule": "One atomic check requires evidence before release, no invalid attempts, the target terminal set and all three truthful state fields.",
+    "grading": {
+      "type": "assessment-delegated-release-v2",
+      "name": "release",
+      "config": {
+        "root_id": "Port",
+        "queue": [
+          "Ash",
+          "Bay",
+          "Coil",
+          "Dune",
+          "Elm",
+          "Fir",
+          "Gull",
+          "Hull"
+        ],
+        "ledger": [
+          {
+            "seq": 1,
+            "kind": "grant",
+            "id": "Port",
+            "parent": null,
+            "scope": [
+              "Ash",
+              "Bay",
+              "Coil",
+              "Dune",
+              "Elm",
+              "Fir",
+              "Gull",
+              "Hull"
+            ],
+            "uses": 8,
+            "operation": "release"
+          },
+          {
+            "seq": 2,
+            "kind": "grant",
+            "id": "Outer",
+            "parent": "Port",
+            "scope": [
+              "Bay"
+            ],
+            "uses": 2,
+            "operation": "release",
+            "label": "Channel office"
+          },
+          {
+            "seq": 3,
+            "kind": "grant",
+            "id": "North",
+            "parent": "Port",
+            "scope": [
+              "Ash",
+              "Coil",
+              "Dune",
+              "Fir",
+              "Hull"
+            ],
+            "uses": 3,
+            "operation": "release",
+            "label": "Outer"
+          },
+          {
+            "seq": 4,
+            "kind": "grant",
+            "id": "South",
+            "parent": "Port",
+            "scope": [
+              "Bay",
+              "Coil",
+              "Elm",
+              "Gull"
+            ],
+            "uses": 3,
+            "operation": "release"
+          },
+          {
+            "seq": 5,
+            "kind": "grant",
+            "id": "Crane",
+            "parent": "North",
+            "scope": [
+              "Dune",
+              "Fir",
+              "Hull"
+            ],
+            "uses": 2,
+            "operation": "release"
+          },
+          {
+            "seq": 6,
+            "kind": "grant",
+            "id": "Moor",
+            "parent": "North",
+            "scope": [
+              "Coil",
+              "Dune"
+            ],
+            "uses": 2,
+            "operation": "release"
+          },
+          {
+            "seq": 7,
+            "kind": "grant",
+            "id": "Slip",
+            "parent": "South",
+            "scope": [
+              "Bay",
+              "Coil",
+              "Elm"
+            ],
+            "uses": 2,
+            "operation": "release"
+          },
+          {
+            "seq": 8,
+            "kind": "grant",
+            "id": "Ramp",
+            "parent": "South",
+            "scope": [
+              "Gull"
+            ],
+            "uses": 1,
+            "operation": "release"
+          },
+          {
+            "seq": 9,
+            "kind": "grant",
+            "id": "Seal",
+            "parent": "South",
+            "scope": [
+              "Bay"
+            ],
+            "uses": 2,
+            "operation": "verify"
+          },
+          {
+            "seq": 10,
+            "kind": "grant",
+            "id": "Keys",
+            "parent": "Outer",
+            "scope": [
+              "Bay"
+            ],
+            "uses": 1,
+            "operation": "release"
+          },
+          {
+            "seq": 11,
+            "kind": "grant",
+            "id": "Alder",
+            "parent": "Crane",
+            "scope": [
+              "Dune",
+              "Fir",
+              "Hull"
+            ],
+            "uses": 3,
+            "operation": "release"
+          },
+          {
+            "seq": 12,
+            "kind": "grant",
+            "id": "Larch",
+            "parent": "Moor",
+            "scope": [
+              "Coil",
+              "Dune"
+            ],
+            "uses": 3,
+            "operation": "release"
+          },
+          {
+            "seq": 13,
+            "kind": "grant",
+            "id": "Birch",
+            "parent": "Slip",
+            "scope": [
+              "Coil",
+              "Elm"
+            ],
+            "uses": 3,
+            "operation": "release"
+          },
+          {
+            "seq": 14,
+            "kind": "grant",
+            "id": "Finch",
+            "parent": "Ramp",
+            "scope": [
+              "Gull"
+            ],
+            "uses": 1,
+            "operation": "release"
+          },
+          {
+            "seq": 15,
+            "kind": "grant",
+            "id": "Otter",
+            "parent": "Crane",
+            "scope": [
+              "Ash"
+            ],
+            "uses": 1,
+            "operation": "release"
+          },
+          {
+            "seq": 16,
+            "kind": "grant",
+            "id": "Reed",
+            "parent": "Keys",
+            "scope": [
+              "Bay"
+            ],
+            "uses": 1,
+            "operation": "release"
+          },
+          {
+            "seq": 17,
+            "kind": "grant",
+            "id": "Vine",
+            "parent": "Seal",
+            "scope": [
+              "Bay"
+            ],
+            "uses": 1,
+            "operation": "release"
+          },
+          {
+            "seq": 18,
+            "kind": "grant",
+            "id": "Spare",
+            "parent": "Slip",
+            "scope": [
+              "Bay"
+            ],
+            "uses": 1,
+            "operation": "release"
+          },
+          {
+            "seq": 19,
+            "kind": "revoke",
+            "id": "Outer"
+          }
+        ],
+        "memo": {
+          "source": "unsigned truck sheet",
+          "text": "Coil via Larch, Dune via Alder, Elm via Birch, Fir via Alder, Gull via Finch. Hull can take Alder on the return."
+        },
+        "approval_handles": [
+          "Alder",
+          "Larch",
+          "Birch",
+          "Finch",
+          "Otter",
+          "Reed",
+          "Vine"
+        ],
+        "expected_pending": [
+          "Ash",
+          "Bay"
+        ]
+      }
+    }
+  }
+]

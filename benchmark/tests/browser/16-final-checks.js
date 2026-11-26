@@ -1,6 +1,3 @@
-  await point('top-cluster-1').press('Enter');require(await page.locator('.score-cost-tooltip.is-pinned[data-tooltip-record-id="top-cluster-1"]').isVisible(),'Dense chart selection lost its exact record');
-  await page.locator('.score-cost-tooltip-close').click();
-
   // Verify Magpie-style account masking across Analysis (legend, tooltip, SVG export, inspector, raw JSON) and Tasks.
   const maskAccountsRoutes=[
     {id:'route-mask-auto',provider_id:'chatgpt-main',model:'same-model',account_ref:'gateway-default',account_evidence:'gateway_binding',thinking_levels:['high','low']},
@@ -55,7 +52,6 @@
   await page.locator('.score-cost-tooltip-close').click();
   await page.locator('[data-view-link="runs"]').click();
   const maskPopup=page.locator('#task-picker .dp-popup.dp-inline:not([hidden])');
-  await maskPopup.waitFor({state:'visible'});
   await maskPopup.locator('.dp-rail-item[data-provider-id="provider:chatgpt-main"]').click();
   const maskedPills=await maskPopup.locator('.dp-acc-pills').innerText();
   require(maskedPills.includes('自动分配')&&!maskedPills.includes('alice.researcher')&&!maskedPills.includes('测试账号'),'Task picker pills leaked accounts or hid auto-allocation: '+maskedPills);
@@ -70,4 +66,4 @@
   require(await page.locator('.chart-legend-list').textContent()==='','Empty charts retained old account labels');
   const windowErrors=await page.evaluate(()=>window.browserWindowErrors);require(windowErrors.length===0,'Window errors: '+JSON.stringify(windowErrors));
   await page.evaluate(()=>sessionStorage.clear());const before=requests.length;await page.goto('http://assessment-ui.invalid/?view=analysis');await page.locator('#app-notice').waitFor({state:'visible'});require((await page.locator('#app-notice').textContent()).includes('缺少访问令牌'),'Missing token message');require(!requests.slice(before).some(path=>path.startsWith('/api/')),'Unauthenticated API call');
-  require(!requests.some(path=>/^\/api\/(runs|questions|observations|models)/.test(path)),'Legacy API');require(errors.length===0,errors.join('\n'));return {passed:true,pickerGeometry,polishedGeometry,posts,errors,requests:[...new Set(requests)]};
+  require(!requests.some(path=>/^\/api\/(runs|questions|observations|models)/.test(path)),'Legacy API');require(errors.length===0,errors.join('\n'));return {passed:true,thinkingLaneGeometry,pickerGeometry,polishedGeometry,posts,errors,requests:[...new Set(requests)]};

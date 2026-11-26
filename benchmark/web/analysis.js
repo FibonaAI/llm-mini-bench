@@ -99,8 +99,21 @@ function presentedRecords() {
   });
 }
 
+// Analysis covers one bank version at a time; the scoped list stays reference-stable between rebuilds.
+let scopedRawObservations = null,
+  scopedBankVersion = undefined,
+  scopedObservationList = [];
+function scopedObservations() {
+  const version = app.bank?.version ?? null;
+  if (scopedRawObservations === state.observations && scopedBankVersion === version) return scopedObservationList;
+  scopedRawObservations = state.observations;
+  scopedBankVersion = version;
+  scopedObservationList = version ? state.observations.filter(record => record?.bank_version === version) : [];
+  return scopedObservationList;
+}
+
 function rebuildAnalysisRecords() {
-  model.setObservations(state.observations);
+  model.setObservations(scopedObservations());
   state.records = presentedRecords();
   chart.registerCatalog(state.records);
   rebuildHistoryFilterScope();
@@ -231,8 +244,10 @@ function renderObservations() {
     `${modeLabel}，${records.length} 条匹配记录，${plotted} 个数据点，${records.length - plotted} 个未入图`;
   renderResultDisclosure(records);
   renderInsights(records);
+  const scoped = scopedObservations();
+  const bankPrefix = app.bank?.version ? `Mini Bench ${app.bank.version}` : 'Mini Bench';
   element('dataset-summary').textContent =
-    `Mini Bench · ${state.observations.filter(record => record.source === 'baseline').length} 份基线 · ${state.observations.filter(record => record.source === 'run').length} 个运行目标`;
+    `${bankPrefix} · ${scoped.filter(record => record.source === 'baseline').length} 份基线 · ${scoped.filter(record => record.source === 'run').length} 个运行目标`;
   const colorDescription = {
     series: '颜色区分供应商-模型组合（保留账号区分）',
     account: '颜色区分渠道与账号 / Key 组合，同账号或 Key 下不同模型同色',
@@ -604,6 +619,10 @@ async function loadObservations() {
       if (!Array.isArray(data.observations)) throw new Error('Mini Bench 观察列表格式无效');
       state.observations = data.observations;
       state.observationsEtag = typeof data.etag === 'string' ? data.etag : null;
+      app.setRecordedBankVersions?.(
+        'observations',
+        state.observations.map(record => record?.bank_version)
+      );
       rebuildAnalysisRecords();
     }
     element('connection-status').textContent = '本地数据已同步';
@@ -874,7 +893,16 @@ app.on('mini-bench:observations-changed', () => {
   if (element('analysis-view')?.hidden) return;
   return loadObservations();
 });
+let lastBankVersion = app.bank?.version ?? null;
 app.on('mini-bench:banks-changed', event => {
+  const nextVersion = event.detail?.version ?? null;
+  if (lastBankVersion !== null && nextVersion !== lastBankVersion) {
+    state.selectedId = null;
+    state.disclosure = null;
+    state.historyIds.clear();
+    chart.resetZoom();
+  }
+  lastBankVersion = nextVersion;
   model.setBank(event.detail);
   rebuildAnalysisRecords();
 });

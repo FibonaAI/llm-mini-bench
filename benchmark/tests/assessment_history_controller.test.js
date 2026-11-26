@@ -22,15 +22,18 @@ function fixture() {
     const tasks = [
         {
             id: 'task',
+            bank_version: '1.0',
             status: 'completed',
             children: [
-                { run_id: 'child', target, status: 'completed' },
-                { run_id: 'other', target, status: 'completed' }
+                { run_id: 'child', bank_version: '1.0', target, status: 'completed' },
+                { run_id: 'other', bank_version: '1.0', target, status: 'completed' }
             ]
         }
     ];
     const runs = ['child', 'other', 'legacy'].map(id => ({
         id,
+        bank_version: '1.0',
+        plan: { bank_version: '1.0' },
         ...(id === 'legacy' ? {} : { task_id: 'task' }),
         status: 'completed',
         samples: []
@@ -40,6 +43,7 @@ function fixture() {
         renders = 0,
         defer;
     const app = {
+        bank: { version: '1.0' },
         services: {
             available: true,
             notify: message => notices.push(message),
@@ -278,14 +282,28 @@ test('selecting a child run under an active task skips task detail refetch, dedu
     expect(f.requests.slice(beforeSelect).filter(path => path.includes('/runs/child'))).toEqual([
         './api/bench/runs/child?omit_provenance=1'
     ]);
-    resolveChild({ id: 'child', task_id: 'task', status: 'completed', updated_at: '2026-11-22T01:00:00.000Z', samples: [] });
+    resolveChild({
+        id: 'child',
+        task_id: 'task',
+        bank_version: '1.0',
+        status: 'completed',
+        updated_at: '2026-11-22T01:00:00.000Z',
+        samples: []
+    });
     await Promise.all([opening, polling]);
     expect(f.state.runDetail.id).toBe('child');
 
     // Switching away and back to an unchanged terminal child serves immediately from the local cache.
     const resolveOther = f.defer('./api/bench/runs/other?omit_provenance=1');
     const openOther = f.click('bench-task-detail', { childRunId: 'other' });
-    resolveOther({ id: 'other', task_id: 'task', status: 'completed', updated_at: '2026-11-22T01:00:00.000Z', samples: [] });
+    resolveOther({
+        id: 'other',
+        task_id: 'task',
+        bank_version: '1.0',
+        status: 'completed',
+        updated_at: '2026-11-22T01:00:00.000Z',
+        samples: []
+    });
     await openOther;
     const beforeCachedReopen = f.requests.length;
     await f.click('bench-task-detail', { childRunId: 'child' });
@@ -298,7 +316,14 @@ test('selecting a child run under an active task skips task detail refetch, dedu
     const beforeInvalidated = f.requests.length;
     const resolveRefreshed = f.defer('./api/bench/runs/child?omit_provenance=1');
     const reopenInvalidated = f.click('bench-task-detail', { childRunId: 'child' });
-    resolveRefreshed({ id: 'child', task_id: 'task', status: 'completed', updated_at: '2026-11-22T02:00:00.000Z', samples: [] });
+    resolveRefreshed({
+        id: 'child',
+        task_id: 'task',
+        bank_version: '1.0',
+        status: 'completed',
+        updated_at: '2026-11-22T02:00:00.000Z',
+        samples: []
+    });
     await reopenInvalidated;
     expect(f.requests.slice(beforeInvalidated)).toEqual(['./api/bench/runs/child?omit_provenance=1']);
 });
@@ -332,6 +357,7 @@ test('terminal child run cache matches scalar child summary against run detail b
     resolveChild({
         id: 'child',
         task_id: 'task',
+        bank_version: '1.0',
         status: 'completed',
         updated_at: ts,
         baseline_eligible: true,
@@ -353,6 +379,7 @@ test('terminal child run cache matches scalar child summary against run detail b
     resolveOther({
         id: 'other',
         task_id: 'task',
+        bank_version: '1.0',
         status: 'completed',
         updated_at: ts,
         baseline_targets: [{ target_id: 'target-b', baseline_eligible: true, ineligibility_reason: null, baseline_id: null }],
@@ -373,6 +400,7 @@ test('terminal child run cache matches scalar child summary against run detail b
     resolvePromoted({
         id: 'child',
         task_id: 'task',
+        bank_version: '1.0',
         status: 'completed',
         updated_at: ts,
         baseline_eligible: true,
@@ -519,4 +547,86 @@ test('bulk baseline promote and demote split requests into 256-item batches and 
     expect(batchBodies.map(body => ({ action: body.action, size: body.ids.length }))).toEqual([{ action: 'delete', size: 44 }]);
     expect(tasks[0].children.every(child => !child.baseline_id)).toBe(true);
     expect(notices.at(-1)).toEqual({ message: '已取消 44 份基线标记，原始运行记录已保留。', isError: false });
+});
+
+test('selecting an unknown run from analysis switches bank upon detail load while mid-flight mismatch drops stale detail', async () => {
+    let switchedTo = null;
+    const nodes = new Map(),
+        events = new Map();
+    const element = id => {
+        if (!nodes.has(id))
+            nodes.set(id, {
+                handlers: new Map(),
+                addEventListener(name, handler) {
+                    this.handlers.set(name, handler);
+                },
+                contains: () => false
+            });
+        return nodes.get(id);
+    };
+    let state;
+    const app = {
+        bank: { version: '2.0' },
+        services: {
+            available: true,
+            notify() {},
+            request: async path => {
+                if (path.includes('/runs/unlisted-v1'))
+                    return { id: 'unlisted-v1', plan: { bank_version: '1.0' }, status: 'completed', samples: [] };
+                if (path.includes('/runs/mismatch-v2'))
+                    return { id: 'mismatch-v2', plan: { bank_version: '2.0' }, status: 'completed', samples: [] };
+                return { tasks: [], runs: [] };
+            }
+        },
+        on: (name, handler) => events.set(name, handler),
+        emit() {},
+        setHistory() {},
+        setTaskRoutes() {}
+    };
+    const context = vm.createContext({
+        getAppContext: () => app,
+        createTaskTargets() {},
+        createTaskHistoryView: options => {
+            state = options.state;
+            state.banks = [{ version: '2.0' }, { version: '1.0' }];
+            return {
+                element,
+                historyEntries: () => [],
+                renderDetails() {},
+                inProgress: () => false,
+                canCancel: () => false,
+                fixedTargets: () => [],
+                taskSection: element('task-section'),
+                runSection: element('run-section')
+            };
+        },
+        createTaskSubmission: () => ({
+            updateTaskPreview() {},
+            renderBanks() {},
+            selectBankVersion: v => {
+                switchedTo = v;
+                app.bank = { version: v };
+            }
+        }),
+        clearTimeout() {},
+        setTimeout() {}
+    });
+    vm.runInContext(
+        readFileSync(new URL('../web/bench.js', import.meta.url), 'utf8')
+            .replace(/^import .*;\n/gm, '')
+            .replace('if (available) load();', ''),
+        context
+    );
+    // Imperative select-run switches to 1.0 even when unlisted-v1 was not in state.runs yet.
+    await events.get('mini-bench:select-run')({ detail: 'unlisted-v1' });
+    expect(switchedTo).toBe('1.0');
+    expect(state.runDetail?.id).toBe('unlisted-v1');
+
+    // Non-imperative click on a run whose loaded detail belongs to 2.0 while active bank is 1.0 fails closed.
+    await element('bench-run-list').handlers.get('click')({
+        composedPath: () => [],
+        target: { closest: selector => (selector.includes('data-bench-run-id') ? { dataset: { benchRunId: 'mismatch-v2' } } : null) }
+    });
+    expect(state.selectedRunId).toBeNull();
+    expect(state.runDetail).toBeNull();
 });
