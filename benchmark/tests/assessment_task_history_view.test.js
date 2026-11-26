@@ -1789,3 +1789,51 @@ test('history entries fail closed when active bank is unloaded or record lacks b
     appHolder.bank = { version: '1.0' };
     expect(view.historyEntries().map(e => e.record.id)).toEqual(['v1-task']);
 });
+
+test('multi-target direct runs keep target-aware anomaly navigation and resolve inspector specs by original task id', async () => {
+    const { state, nodes, app } = fixture();
+    app.services.request = async url => (url.includes('/events') ? { events: [] } : { calls: [] });
+    const taskId = 'C23_Async_Generator_Finally_Override';
+    state.banks = [
+        { version: '1.0', tasks: [{ id: taskId, domain: 'code', title: 'Async generator', prompt: 'Evaluate the async generator.' }] }
+    ];
+    const targetA = { id: 'ta', model: 'model-a', thinking: 'high' };
+    const targetB = { id: 'tb', model: 'model-b', thinking: 'high' };
+    state.runs = [];
+    state.tasks = [];
+    state.selectedTaskId = null;
+    state.taskDetail = null;
+    state.selectedRunId = 'run-multi';
+    state.runDetail = {
+        id: 'run-multi',
+        bank_version: '1.0',
+        status: 'failed',
+        updated_at: '2026-11-26T00:00:00Z',
+        plan: { bank_version: '1.0', targets: [targetA, targetB], limits: { timeout: 600 } },
+        samples: [
+            { sample_id: 's-a', target_id: 'ta', task: taskId, round: 1, status: 'api_failure' },
+            {
+                sample_id: 's-b',
+                target_id: 'tb',
+                task: taskId,
+                round: 1,
+                status: 'completed',
+                grade: { content_score: 1, instruction_checks: { submitted_via_tool: true } },
+                answer_submission: { submissions: 1, answer: {} }
+            }
+        ]
+    };
+    const view = createTaskHistoryView({ app, state, retryRequests: new Set(), retrying: new Set() });
+    view.renderDetails();
+    const runDetailNode = nodes.get('bench-run-detail');
+    expect(runDetailNode.innerHTML).toContain('data-matrix-step="next"');
+
+    // The earlier target's failure must stay reachable even though the later target succeeded in the same cell.
+    clickRunDetail(nodes, '[data-matrix-step]', { matrixStep: 'next' });
+    await new Promise(resolve => setTimeout(resolve, 0));
+    const html = runDetailNode.innerHTML;
+    expect(html).toContain('sample-inline-inspector');
+    expect(html).toContain('data-open-sample="s-a" aria-expanded="true"');
+    // The decorated row key must not hide the bank task specification.
+    expect(html).toContain('data-si-toggle-prompt');
+});

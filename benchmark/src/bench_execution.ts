@@ -691,8 +691,12 @@ export class BenchExecutionService {
             }
             if (needsBudgetRepair && runEvents) {
                 const llmEvents = runEvents.filter(event => event.kind === 'llm_turn');
+                // Clear missing-cost accounting only when every call has known cost evidence or was a confirmed
+                // entry rejection; unpriced routes keep known usage with unknown cost.
                 const nonEntryUnknown = llmEvents.filter(
-                    event => !event.usage_known && !(event.http_status !== null && is_entry_rejection_status(event.http_status))
+                    event =>
+                        !(event.http_status !== null && is_entry_rejection_status(event.http_status)) &&
+                        !(event.usage_known && event.estimated_cost_usd !== null)
                 );
                 if (llmEvents.length > 0 && nonEntryUnknown.length === 0) {
                     const knownBound = Number(run.budget.known_cost_lower_bound_usd ?? 0);
@@ -1562,6 +1566,7 @@ export class BenchExecutionService {
                     'estimated_uncached_cost_usd',
                     'latest_attempt_usage',
                     'latest_attempt_cost_usd',
+                    'usage_incomplete',
                     'answer_submission',
                     'api_request_count',
                     'last_http_status',

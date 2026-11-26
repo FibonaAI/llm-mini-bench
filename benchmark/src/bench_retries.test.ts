@@ -5,7 +5,7 @@ import { tmpdir } from 'node:os';
 import { AssessmentBudget, run_assessment_sample, type RunnerTask } from '../calibrate_assessment.ts';
 import { BenchDatabase } from './bench_db.ts';
 import { BenchExecutionService, type ExecutionRoutes } from './bench_execution.ts';
-import { project_assessment_observation } from './assessment_observations.ts';
+import { observation_usage_accounting, project_assessment_observation } from './assessment_observations.ts';
 import type { BaselineRun, BaselineTarget } from './assessment_baselines.ts';
 import type { GatewayResponse } from './client.ts';
 
@@ -712,6 +712,12 @@ test('multi-turn SampleTimeout preserves earlier turns known usage and cost inst
     expect(result.runner_error).toBe('SampleTimeout');
     expect(result.usage).toEqual({ input_tokens: 500, output_tokens: 120 });
     expect(result.estimated_uncached_cost_usd).toBeCloseTo(0.00062, 12);
+    // The timed-out call returned no usage, so the retained totals are lower bounds, not complete totals.
+    expect(result.usage_incomplete).toBe(true);
+    const accounting = observation_usage_accounting([result]);
+    expect(accounting.usage_known).toEqual({ input_tokens: 500, output_tokens: 120 });
+    expect(accounting.unknown_usage_attempts).toBe(1);
+    expect(accounting.unknown_cost_attempts).toBe(1);
 });
 
 test('model anomalies (no_submission) complete and stay retryable; post-submission non-model anomalies fail run and retry cleanly', async () => {

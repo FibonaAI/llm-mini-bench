@@ -12,7 +12,15 @@ export function createTaskHistoryView({ app, state, retryRequests, retrying, bas
   function getInspectorState(runId) {
     let entry = inspectorByRun.get(runId);
     if (!entry) {
-      entry = { sampleId: null, tab: null, showAllFields: false, showPrompt: false, attemptId: null, matrixFilter: 'all' };
+      entry = {
+        sampleId: null,
+        tab: null,
+        showAllFields: false,
+        showPrompt: false,
+        attemptId: null,
+        matrixFilter: 'all',
+        anomalyOrder: []
+      };
       inspectorByRun.set(runId, entry);
     }
     return entry;
@@ -2005,6 +2013,8 @@ export function createTaskHistoryView({ app, state, retryRequests, retrying, bas
       }
     }
     const activeAnomalyIdx = activeSampleObj ? anomalyOrder.findIndex(s => s.sample_id === activeSampleObj.sample_id) : -1;
+    // Step navigation reuses the exact target-aware order the matrix rendered.
+    inspector.anomalyOrder = anomalyOrder.map(s => s.sample_id);
 
     const runAnomalies = recordAnomalyCounts(run);
     const diagTags = [];
@@ -2090,7 +2100,7 @@ export function createTaskHistoryView({ app, state, retryRequests, retrying, bas
                 ''
               )}<span role="cell" class="sample-matrix-avg">${escapeHtml(avgText)}</span><span role="cell" class="sample-matrix-time">${escapeHtml(avgTimeText)}</span></div>`;
             if (!isActiveRow || !activeSampleObj) return rowHtml;
-            const taskSpec = resolveTaskSpec(task, run, state.banks || []);
+            const taskSpec = resolveTaskSpec(rawTaskKey(activeSampleObj), run, state.banks || []);
             const inspectorHtml = renderInlineSampleInspector({
               run,
               sample: activeSampleObj,
@@ -2264,30 +2274,12 @@ export function createTaskHistoryView({ app, state, retryRequests, retrying, bas
     }
     const stepBtn = event.target.closest?.('[data-matrix-step]');
     if (stepBtn) {
-      const samples = run.samples || [];
-      const taskKey = s => s.task || s.sample_id || 'unknown';
-      const roundKey = s => (Number.isInteger(s.round) && s.round > 0 ? s.round : 1);
-      const taskIds = [...new Set(samples.map(taskKey))];
-      const rounds = [...new Set(samples.map(roundKey))].sort((a, b) => a - b);
-      const byCell = new Map(samples.map(s => [`${taskKey(s)}\u0000${roundKey(s)}`, s]));
-      const anomalies = [];
-      for (const task of taskIds) {
-        for (const round of rounds) {
-          const s = byCell.get(`${task}\u0000${round}`);
-          if (
-            s &&
-            ((s.status !== 'completed' && !['pending', 'queued', 'running'].includes(s.status)) ||
-              (s.status === 'completed' && (!validScore(s) || hasSubmissionAnomaly(s))))
-          ) {
-            anomalies.push(s);
-          }
-        }
-      }
+      const anomalies = Array.isArray(inspector.anomalyOrder) ? inspector.anomalyOrder : [];
       if (!anomalies.length) return;
-      const curIdx = anomalies.findIndex(s => s.sample_id === inspector.sampleId);
+      const curIdx = anomalies.indexOf(inspector.sampleId);
       const dir = stepBtn.dataset.matrixStep === 'prev' ? -1 : 1;
       const nextIdx = curIdx < 0 ? (dir > 0 ? 0 : anomalies.length - 1) : (curIdx + dir + anomalies.length) % anomalies.length;
-      inspector.sampleId = anomalies[nextIdx].sample_id;
+      inspector.sampleId = anomalies[nextIdx];
       inspector.tab = null;
       inspector.showAllFields = false;
       inspector.attemptId = null;

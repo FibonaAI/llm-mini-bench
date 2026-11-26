@@ -110,6 +110,8 @@ export interface AssessmentObservation extends Record<string, unknown> {
     elapsed_seconds: number;
     usage: AssessmentUsage | null;
     estimated_uncached_cost_usd: number | null;
+    /** Set when a call without returned usage was excluded from usage/cost, which are then known lower bounds. */
+    usage_incomplete?: true;
 }
 /** Validated nonnegative integer usage; omitted or malformed counts remain null. */
 export interface AssessmentUsage {
@@ -628,6 +630,9 @@ export async function run_assessment_sample(
             usages.push(null);
         }
     }
+    // A timeout or post-submission abort keeps earlier turns' known usage, but the unanswered call may still have
+    // consumed tokens upstream, so the retained totals are only lower bounds.
+    const usageIncomplete = unknownCallUsage && (local_error === 'SampleTimeout' || ended_after_submission !== null);
     const completeUsage = usages.length > 0 && usages.every((value): value is AssessmentUsage => value !== null);
     const completeCosts = pricing !== null && costs.length > 0 && costs.every((value): value is number => value !== null);
     const observation: AssessmentObservation = {
@@ -656,6 +661,7 @@ export async function run_assessment_sample(
             : null,
         estimated_uncached_cost_usd: completeCosts ? costs.reduce<number>((total, cost) => total + cost!, 0) : null
     };
+    if (usageIncomplete) observation.usage_incomplete = true;
     if (simulator || submitProtocol) observation.tool_execution_policy = 'ordered-batch-v1';
     if (submitProtocol)
         observation.answer_submission = {

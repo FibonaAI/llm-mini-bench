@@ -7,7 +7,7 @@ import { BenchDatabase } from './bench_db.ts';
 import { BenchService, make_handler } from '../backend/mini_bench.ts';
 import { load_assessment_bank } from './assessment_bank.ts';
 
-function routes(): ExecutionRoutes {
+function routes(pricing: { prompt: number; completion: number } | null = { prompt: 0.000001, completion: 0.000002 }): ExecutionRoutes {
     const route = {
         id: 'route-a',
         label: 'Route A',
@@ -20,7 +20,7 @@ function routes(): ExecutionRoutes {
         api_key: 'sk-test-secret',
         thinking_levels: ['high'],
         account_concurrency: 4,
-        pricing: { prompt: 0.000001, completion: 0.000002 }
+        pricing
     };
     return {
         resolve: id => {
@@ -368,6 +368,41 @@ describe('terminal run eviction and persistent index cache', () => {
             expect(cachedReload.get_run(runId)!.status).toBe('failed');
             expect(cachedReload.get_run(runId)!.budget.missing_cost_calls).toBe(0);
             await cachedReload.close();
+        } finally {
+            rmSync(dir, { recursive: true, force: true });
+        }
+    });
+    test('startup budget repair keeps missing-cost calls for unpriced routes with known usage', async () => {
+        const dir = mkdtempSync(join(tmpdir(), 'mini-bench-unpriced-repair-'));
+        const taskId = load_assessment_bank().task_ids[0]!;
+        try {
+            const clientFactory = () => ({
+                post_responses_stream: () => [200, 0.01, {}, completedResponse()] as const
+            });
+            const writer = new BenchExecutionService(dir, routes(null), 4, clientFactory as never);
+            const runId = await writer.start_run({
+                targets: [{ id: 'target-a', route_id: 'route-a', thinking: 'high' }],
+                task_ids: [taskId],
+                rounds: 1
+            });
+            expect(await writer.wait_for_run(runId, 5)).toBe(true);
+            const before = writer.get_run(runId)!;
+            await writer.close();
+            expect(before.budget.estimated_uncached_cost_usd).toBeNull();
+            const missingBefore = Number(before.budget.missing_cost_calls);
+            expect(missingBefore).toBeGreaterThan(0);
+
+            const db = new BenchDatabase(join(dir, 'mini-bench.sqlite'));
+            try {
+                db.db.run('DELETE FROM run_index_cache');
+            } finally {
+                db.close();
+            }
+            const reloaded = new BenchExecutionService(dir, routes(null), 4, clientFactory as never);
+            const loaded = reloaded.get_run(runId)!;
+            expect(loaded.budget.missing_cost_calls).toBe(missingBefore);
+            expect(loaded.budget.estimated_uncached_cost_usd).toBeNull();
+            await reloaded.close();
         } finally {
             rmSync(dir, { recursive: true, force: true });
         }

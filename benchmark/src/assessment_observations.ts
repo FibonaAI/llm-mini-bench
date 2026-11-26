@@ -71,10 +71,16 @@ export function observation_usage_accounting(samples: readonly Evidence[]) {
         } else unknown_usage_attempts++;
         if (knownNumber(cost)) cost_known += cost;
         else unknown_cost_attempts++;
+        // Known usage retained after a timeout/abort is a lower bound, never a complete total.
+        if (attempt.usage_incomplete === true) {
+            if (knownUsage(usage)) unknown_usage_attempts++;
+            if (knownNumber(cost)) unknown_cost_attempts++;
+        }
     };
     for (const sample of samples) {
         const prior = Array.isArray(sample.attempts) ? (sample.attempts as unknown[]).filter(object) : [];
-        if (knownUsage(sample.usage) && knownNumber(sample.estimated_uncached_cost_usd)) {
+        const incomplete = sample.usage_incomplete === true || prior.some(attempt => attempt.usage_incomplete === true);
+        if (!incomplete && knownUsage(sample.usage) && knownNumber(sample.estimated_uncached_cost_usd)) {
             attempts += prior.length + 1;
             usage_known.input_tokens += sample.usage.input_tokens;
             usage_known.output_tokens += sample.usage.output_tokens;
