@@ -306,4 +306,32 @@ describe('Magpie catalog routes', () => {
     expect(resolved.get(listed[0]!.id)?.model).toBe('model-a');
     expect(resolved.get(listed[1]!.id)?.model).toBe('model-b');
   });
+  test('reuses built routes snapshot across resolve_many calls while cache key is unchanged and rebuilds on key change', async () => {
+    let loads = 0;
+    let cacheKey: string | null = 'gen-1';
+    const routes = new BenchGatewayRoutes(
+      () => {
+        loads++;
+        return [model({ id: 'model-a' }), model({ id: 'model-b' })];
+      },
+      'https://example.com',
+      () => 'key',
+      2,
+      [],
+      () => [],
+      () => cacheKey
+    );
+    const listed = await routes.public_routes();
+    expect(loads).toBe(1);
+    const first = await routes.resolve_many([listed[0]!.id]);
+    const second = await routes.resolve_many([listed[1]!.id]);
+    const jsonText = await routes.public_routes_json();
+    expect(loads).toBe(1);
+    expect(first.get(listed[0]!.id)?.model).toBe('model-a');
+    expect(second.get(listed[1]!.id)?.model).toBe('model-b');
+    expect(JSON.parse(jsonText).routes).toHaveLength(2);
+    cacheKey = 'gen-2';
+    await routes.resolve_many([listed[0]!.id]);
+    expect(loads).toBe(2);
+  });
 });

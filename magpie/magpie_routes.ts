@@ -62,9 +62,15 @@ function parse_catalog_pricing(raw: unknown): { state: 'valid'; pricing: Assessm
   }
 }
 type BoundAccount = MagpieAccountBinding & { evidence: 'configured_binding' | 'gateway_account_binding' };
+interface CachedRoutesSnapshot {
+  key: string | null;
+  routes: BenchPublicRoute[];
+  byId: Map<string, BenchPublicRoute>;
+}
 /** Lazy gateway catalog adapter with one shared concurrency pool, not verified upstream accounts. */
 export class MagpieBenchRoutes {
-  private loading: Promise<BenchPublicRoute[]> | null = null;
+  private loading: Promise<CachedRoutesSnapshot> | null = null;
+  private cached_snapshot: CachedRoutesSnapshot | null = null;
   private readonly accounts: MagpieAccountBinding[];
   private readonly active_bindings = new Map<string, MagpieAccountBinding>();
   private readonly resolved_bindings = new Map<string, MagpieAccountBinding>();
@@ -75,14 +81,27 @@ export class MagpieBenchRoutes {
     private readonly concurrency: number,
     accounts: MagpieAccountBinding[] = [],
     private readonly discovered_accounts_loader: () =>
-      MagpieAccountBinding[] | MagpieAccountsCatalog | Promise<MagpieAccountBinding[] | MagpieAccountsCatalog> = () => []
+      MagpieAccountBinding[] | MagpieAccountsCatalog | Promise<MagpieAccountBinding[] | MagpieAccountsCatalog> = () => [],
+    private readonly cache_key_loader?: () => string | null
   ) {
     this.accounts = validateMagpieAccountBindings(accounts);
     if (!_validate_route_url(base_url)) throw new TypeError('Bench gateway must use HTTPS or loopback HTTP without URL credentials');
   }
-  /** Coalesce reads; freshness belongs to the catalog loader, not a permanent route snapshot. */
-  private async load_routes_shared(): Promise<BenchPublicRoute[]> {
-    if (!this.loading) this.loading = this.load_catalog_routes();
+  /** Coalesce reads; reuse the built route index while the adapter's catalog generation stays fresh. */
+  private async load_routes_shared(): Promise<CachedRoutesSnapshot> {
+    const cacheKey = this.cache_key_loader?.() ?? null;
+    if (cacheKey !== null && this.cached_snapshot?.key === cacheKey) return this.cached_snapshot;
+    if (!this.loading) {
+      this.loading = (async () => {
+        const routes = await this.load_catalog_routes();
+        const byId = new Map<string, BenchPublicRoute>();
+        for (const row of routes) byId.set(row.id, row);
+        const afterKey = this.cache_key_loader?.() ?? null;
+        const snapshot: CachedRoutesSnapshot = { key: afterKey, routes, byId };
+        this.cached_snapshot = afterKey !== null ? snapshot : null;
+        return snapshot;
+      })();
+    }
     const loading = this.loading;
     try {
       return await loading;
@@ -91,7 +110,11 @@ export class MagpieBenchRoutes {
     }
   }
   async public_routes(): Promise<BenchPublicRoute[]> {
-    return structuredClone(await this.load_routes_shared());
+    return structuredClone((await this.load_routes_shared()).routes);
+  }
+  async public_routes_json(): Promise<string> {
+    const snapshot = await this.load_routes_shared();
+    return JSON.stringify({ routes: snapshot.routes });
   }
   private merged_accounts(discovered: MagpieAccountBinding[]): BoundAccount[] {
     const manualAccounts = new Set<string>();
@@ -142,7 +165,7 @@ export class MagpieBenchRoutes {
     const rawDiscoveredModels = Array.isArray(discoveredRaw) ? [] : discoveredRaw.models;
     let discovered: MagpieAccountBinding[] = [];
     try {
-      discovered = validateMagpieAccountBindings(rawAccounts);
+      discovered = validateMagpieAccountBindings(rawAccounts, false);
     } catch {
       discovered = [];
     }
@@ -173,6 +196,15 @@ export class MagpieBenchRoutes {
     const providersWithRemote = new Set<string>();
     const providersWithDirect = new Set<string>();
     const nextActive = new Map<string, MagpieAccountBinding>();
+    const bindingsByProvider = new Map<string, Array<{ binding: BoundAccount; modelSet: Set<string> | null }>>();
+    for (const binding of bindings) {
+      let list = bindingsByProvider.get(binding.provider_id);
+      if (!list) {
+        list = [];
+        bindingsByProvider.set(binding.provider_id, list);
+      }
+      list.push({ binding, modelSet: binding.models ? new Set(binding.models) : null });
+    }
     const appendRouteWithBindings = (baseRoute: BenchPublicRoute, includeBase = true) => {
       if (includeBase) routes.push(baseRoute);
       if (
@@ -183,8 +215,10 @@ export class MagpieBenchRoutes {
         !baseRoute.model.startsWith(baseRoute.provider_id + '/')
       )
         return;
-      for (const binding of bindings) {
-        if (binding.provider_id !== baseRoute.provider_id || (binding.models && !binding.models.includes(baseRoute.model))) continue;
+      const providerBindings = bindingsByProvider.get(baseRoute.provider_id);
+      if (!providerBindings) return;
+      for (const { binding, modelSet } of providerBindings) {
+        if (modelSet && !modelSet.has(baseRoute.model)) continue;
         const binding_ref = this.account_binding_ref(baseRoute.model, binding);
         nextActive.set(binding_ref, binding);
         routes.push({
@@ -310,8 +344,7 @@ export class MagpieBenchRoutes {
   /** Resolve a batch of route IDs against one coalesced catalog read instead of rebuilding routes per target. */
   async resolve_many(route_ids: string[]): Promise<Map<string, BenchResolvedRoute>> {
     const unique = [...new Set(route_ids)];
-    const routes = await this.load_routes_shared();
-    const byId = new Map(routes.map(row => [row.id, row]));
+    const { byId } = await this.load_routes_shared();
     const matched: BenchPublicRoute[] = [];
     for (const route_id of unique) {
       const route = byId.get(route_id);

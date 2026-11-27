@@ -2,9 +2,16 @@ import { describe, expect, test } from 'bun:test';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
-import { canonicalAssessmentJson } from './assessment_json.ts';
+import { canonicalAssessmentJson, parseAssessmentJson, assessmentJsonNumberToken } from './assessment_json.ts';
 import { BenchDatabase } from './bench_db.ts';
-import { canonicalStorageJson, SessionJournal, SampleJournal } from './bench_execution_storage.ts';
+import {
+    canonicalStorageJson,
+    parseStrictJson,
+    parseStrictJsonWithResponseUsage,
+    SessionJournal,
+    SampleJournal
+} from './bench_execution_storage.ts';
+import { ResponsesStreamDecoder, responses_stream_telemetry } from './responses_stream.ts';
 
 describe('bench execution storage optimizations', () => {
     test('canonicalStorageJson matches canonicalAssessmentJson byte-for-byte including Unicode code-point order and errors', () => {
@@ -183,5 +190,56 @@ describe('bench execution storage optimizations', () => {
             db.close();
             rmSync(dir, { recursive: true, force: true });
         }
+    });
+
+    test('parseStrictJson matches parseAssessmentJson validation semantics and extracts response.usage accurately', () => {
+        const validCases = [
+            'null',
+            'true',
+            'false',
+            '0',
+            '-123.45e-6',
+            '"hello \\"world\\" \\u4e2d\\u6587"',
+            '[]',
+            '{}',
+            '{"a":1,"b":[true,false,null,{"nested":42}],"__proto__":{"polluted":true}}',
+            '[{"x":1},{"x":2}]'
+        ];
+        for (const text of validCases) {
+            expect(parseStrictJson(text)).toEqual(parseAssessmentJson(text));
+        }
+        const protoParsed = parseStrictJson('{"__proto__":{"polluted":true}}') as Record<string, unknown>;
+        expect(Object.hasOwn(protoParsed, '__proto__')).toBe(true);
+        expect(({} as Record<string, unknown>).polluted).toBeUndefined();
+
+        // Reject duplicate keys (including escaped equivalents), nonfinite numbers, nesting overflow, and bad syntax.
+        expect(() => parseStrictJson('{"a":1,"a":2}')).toThrow('duplicate object key');
+        expect(() => parseStrictJson('{"a":1,"\\u0061":2}')).toThrow('duplicate object key');
+        expect(() => parseStrictJson('{"n":1e309}')).toThrow('nonfinite number');
+        expect(() => parseStrictJson('{"n":-1e400}')).toThrow('nonfinite number');
+        expect(() => parseStrictJson('{"a":1} trailing')).toThrow('invalid JSON syntax');
+        expect(() => parseStrictJson('{"a":"\x01"}')).toThrow('invalid JSON syntax');
+        expect(() => parseStrictJson('[1]', 1)).not.toThrow();
+        expect(() => parseStrictJson('[[1]]', 1)).toThrow('nesting limit exceeded');
+        expect(() => parseStrictJson('[[]]', 1)).not.toThrow();
+
+        // parseStrictJsonWithResponseUsage ignores `"usage"` inside assistant strings and captures the real response.usage slice.
+        const sseData = JSON.stringify({
+            type: 'response.completed',
+            response: {
+                status: 'completed',
+                output_text: 'literal "usage":{"input_tokens":999}',
+                usage: { input_tokens: 10, output_tokens: 5 }
+            }
+        }).replace('"input_tokens":10', '"input_tokens":10.0');
+        const extracted = parseStrictJsonWithResponseUsage(sseData);
+        expect(extracted.usageJson).toBe('{"input_tokens":10.0,"output_tokens":5}');
+
+        // Terminal SSE frame keeps exact number-token detection for float usage values.
+        const decoder = new ResponsesStreamDecoder(responses_stream_telemetry(), () => 0.1);
+        decoder.push(`event: response.completed\ndata: ${sseData}\n\n`);
+        expect(decoder.response).not.toBeNull();
+        expect(assessmentJsonNumberToken(decoder.response!.usage as object, 'input_tokens')).toBe('10.0');
+        expect(assessmentJsonNumberToken(decoder.response!.usage as object, 'output_tokens')).toBe('5');
     });
 });

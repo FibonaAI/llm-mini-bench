@@ -74,6 +74,21 @@ export interface StoredSessionEvent {
     created_at: string;
 }
 
+export interface StoredLlmTurnUsageEvent {
+    call_id: string | null;
+    http_status: number | null;
+    usage_known: boolean | null;
+    input_tokens: number | null;
+    output_tokens: number | null;
+    estimated_cost_usd: number | null;
+}
+
+export interface PrecomputedPlanSnapshots {
+    bankHash: string;
+    tasksHash: string;
+    sourcesHash: string;
+}
+
 export interface StoredBaselineRow {
     id: string;
     run_id: string;
@@ -326,6 +341,7 @@ export class BenchDatabase {
     private closed = false;
     private _baselines_revision = 0;
     private txDepth = 0;
+    private static readonly SNAPSHOT_CACHE_MAX = 64;
     private readonly snapshotCache = new Map<string, unknown>();
     private readonly runSnapshotHashes = new Map<
         string,
@@ -340,6 +356,8 @@ export class BenchDatabase {
     private readonly stmtInsertSessionEvent;
     private readonly stmtUpsertIndexCache;
     private readonly stmtDeleteIndexCache;
+    private readonly stmtReadLlmTurnUsageEvents;
+    private readonly stmtReadRetryBatchesJson;
 
     constructor(dbPath: string) {
         this.path = resolve(dbPath);
@@ -350,6 +368,7 @@ export class BenchDatabase {
         this.db.run('PRAGMA synchronous = NORMAL;');
         this.db.run('PRAGMA foreign_keys = ON;');
         this.db.run('PRAGMA busy_timeout = 5000;');
+        this.db.run('PRAGMA cache_size = -8000;');
         this.db.run(SCHEMA_SQL);
         this.db.run('INSERT OR IGNORE INTO meta (key, value) VALUES (?, ?)', ['schema_version', BENCH_DB_SCHEMA_VERSION]);
         // Ensure private permissions after WAL initialization.
@@ -498,6 +517,22 @@ export class BenchDatabase {
                 legacy_overlay_json = excluded.legacy_overlay_json`
         );
         this.stmtDeleteIndexCache = this.db.query('DELETE FROM run_index_cache WHERE run_id = ?');
+        this.stmtReadLlmTurnUsageEvents = this.db.query(
+            `SELECT call_id, http_status, usage_known, input_tokens, output_tokens, estimated_cost_usd
+             FROM session_events
+             WHERE run_id = ? AND kind = 'llm_turn'
+             ORDER BY id ASC`
+        );
+        this.stmtReadRetryBatchesJson = this.db.query('SELECT retry_batches_json FROM runs WHERE id = ?');
+    }
+
+    shrink_memory(): void {
+        if (this.closed) return;
+        try {
+            this.db.run('PRAGMA shrink_memory;');
+        } catch {
+            /* Best-effort native SQLite page-cache release. */
+        }
     }
 
     get is_closed(): boolean {
@@ -530,28 +565,42 @@ export class BenchDatabase {
         }
     }
 
+    private cacheSnapshot(hash: string, value: unknown): void {
+        if (this.snapshotCache.has(hash)) this.snapshotCache.delete(hash);
+        this.snapshotCache.set(hash, value);
+        if (this.snapshotCache.size > BenchDatabase.SNAPSHOT_CACHE_MAX) {
+            const oldest = this.snapshotCache.keys().next().value;
+            if (oldest !== undefined) this.snapshotCache.delete(oldest);
+        }
+    }
+
     put_snapshot(kind: SnapshotKind, value: unknown): string {
         const json = canonicalStorageJson(value);
         const hash = createHash('sha256').update(json).digest('hex');
         if (!this.snapshotCache.has(hash)) {
             this.stmtPutSnapshot.run(hash, kind, json);
-            this.snapshotCache.set(hash, JSON.parse(json));
+            this.cacheSnapshot(hash, JSON.parse(json));
         }
         return hash;
     }
 
     get_snapshot<T = unknown>(hash: string | null | undefined): T | undefined {
         if (!hash) return undefined;
-        if (this.snapshotCache.has(hash)) return clone(this.snapshotCache.get(hash) as T);
+        if (this.snapshotCache.has(hash)) {
+            const hit = this.snapshotCache.get(hash) as T;
+            this.snapshotCache.delete(hash);
+            this.snapshotCache.set(hash, hit);
+            return clone(hit);
+        }
         const row = this.stmtGetSnapshot.get(hash) as { payload_json: string } | null;
         if (!row) return undefined;
         const parsed = JSON.parse(row.payload_json) as T;
-        this.snapshotCache.set(hash, parsed);
+        this.cacheSnapshot(hash, parsed);
         return clone(parsed);
     }
 
     /** Atomically persist a run, its deduplicated plan snapshots, its samples, and immutable attempt rows. */
-    save_run(run: RecordValue, dirtySampleIds?: ReadonlySet<string>): void {
+    save_run(run: RecordValue, dirtySampleIds?: ReadonlySet<string>, precomputed?: PrecomputedPlanSnapshots): void {
         const plan = run.plan as RecordValue;
         const targets = Array.isArray(plan.targets) ? (plan.targets as RecordValue[]) : [];
         const primary = targets[0] ?? null;
@@ -565,7 +614,19 @@ export class BenchDatabase {
             const tasksObj = plan.task_snapshots ?? [];
             const sourcesObj = plan.source_sha256 ?? {};
             let bankHash: string, tasksHash: string, sourcesHash: string;
-            if (cachedSnap && cachedSnap.bank === bankObj && cachedSnap.tasks === tasksObj && cachedSnap.sources === sourcesObj) {
+            if (precomputed) {
+                bankHash = precomputed.bankHash;
+                tasksHash = precomputed.tasksHash;
+                sourcesHash = precomputed.sourcesHash;
+                this.runSnapshotHashes.set(runId, {
+                    bank: bankObj,
+                    bankHash,
+                    tasks: tasksObj,
+                    tasksHash,
+                    sources: sourcesObj,
+                    sourcesHash
+                });
+            } else if (cachedSnap && cachedSnap.bank === bankObj && cachedSnap.tasks === tasksObj && cachedSnap.sources === sourcesObj) {
                 bankHash = cachedSnap.bankHash;
                 tasksHash = cachedSnap.tasksHash;
                 sourcesHash = cachedSnap.sourcesHash;
@@ -775,6 +836,16 @@ export class BenchDatabase {
         this.stmtDeleteIndexCache.run(runId);
     }
 
+    get_run_snapshot_hashes(runId: string): PrecomputedPlanSnapshots | null {
+        const row = this.db.query('SELECT bank_hash, tasks_hash, sources_hash FROM runs WHERE id = ?').get(runId) as {
+            bank_hash: string;
+            tasks_hash: string;
+            sources_hash: string;
+        } | null;
+        if (!row) return null;
+        return { bankHash: row.bank_hash, tasksHash: row.tasks_hash, sourcesHash: row.sources_hash };
+    }
+
     has_run(id: string): boolean {
         return Boolean(this.db.query('SELECT 1 FROM runs WHERE id = ?').get(id));
     }
@@ -878,12 +949,12 @@ export class BenchDatabase {
         return run;
     }
 
-    save_task(task: RecordValue): void {
+    save_task(task: RecordValue, precomputed?: PrecomputedPlanSnapshots): void {
         const plan = task.plan as RecordValue;
         this.run_in_transaction(() => {
-            const bankHash = this.put_snapshot('bank', plan.bank_snapshot ?? {});
-            const tasksHash = this.put_snapshot('tasks', plan.task_snapshots ?? []);
-            const sourcesHash = this.put_snapshot('sources', plan.source_sha256 ?? {});
+            const bankHash = precomputed ? precomputed.bankHash : this.put_snapshot('bank', plan.bank_snapshot ?? {});
+            const tasksHash = precomputed ? precomputed.tasksHash : this.put_snapshot('tasks', plan.task_snapshots ?? []);
+            const sourcesHash = precomputed ? precomputed.sourcesHash : this.put_snapshot('sources', plan.source_sha256 ?? {});
             this.db.run(
                 `INSERT INTO tasks (
                     id, status, stop_reason, bank_version, bank_scope, rounds,
@@ -1084,6 +1155,31 @@ export class BenchDatabase {
             payload: typeof row.payload_json === 'string' ? (JSON.parse(row.payload_json) as RecordValue) : null,
             created_at: String(row.created_at)
         };
+    }
+
+    /** Read only scalar usage/status columns for llm_turn events without deserializing payload_json. */
+    read_run_llm_turn_usage_events(runId: string): StoredLlmTurnUsageEvent[] {
+        const rows = this.stmtReadLlmTurnUsageEvents.all(runId) as Array<RecordValue>;
+        return rows.map(row => ({
+            call_id: text(row.call_id),
+            http_status: finite(row.http_status),
+            usage_known: row.usage_known === null || row.usage_known === undefined ? null : row.usage_known === 1,
+            input_tokens: integer(row.input_tokens),
+            output_tokens: integer(row.output_tokens),
+            estimated_cost_usd: finite(row.estimated_cost_usd)
+        }));
+    }
+
+    /** Check whether a run has already recorded a retry batch with the given idempotency key. */
+    has_retry_batch(runId: string, requestId: string): boolean {
+        const row = this.stmtReadRetryBatchesJson.get(runId) as { retry_batches_json: string | null } | null;
+        if (!row || typeof row.retry_batches_json !== 'string' || !row.retry_batches_json.includes(requestId)) return false;
+        try {
+            const batches = JSON.parse(row.retry_batches_json);
+            return Array.isArray(batches) && batches.some(batch => object(batch) && batch.request_id === requestId);
+        } catch {
+            return false;
+        }
     }
 
     read_run_session_events(runId: string, attemptId?: string): StoredSessionEvent[] {

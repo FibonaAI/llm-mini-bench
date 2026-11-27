@@ -107,7 +107,7 @@ export function project_assessment_observation(
     run: BaselineRun,
     target: BaselineTarget,
     source: string,
-    candidate: AssessmentBaseline | null,
+    candidate: Pick<AssessmentBaseline, 'assessment_protocol_sha256'> | null,
     reason: string | null,
     baseline?: AssessmentBaseline
 ): AssessmentObservation {

@@ -407,4 +407,101 @@ describe('terminal run eviction and persistent index cache', () => {
             rmSync(dir, { recursive: true, force: true });
         }
     });
+
+    test('lazy child hydration keeps queued task children out of active memory and supports completion, cancel, and route fast-fail', async () => {
+        const dir = mkdtempSync(join(tmpdir(), 'mini-bench-lazy-children-'));
+        const multiRoutes: ExecutionRoutes = {
+            resolve: id => ({
+                id,
+                label: id,
+                provider_id: 'openai',
+                provider_evidence: 'configured_binding',
+                account_ref: 'acct-a',
+                account_evidence: 'configured_binding',
+                base_url: 'http://127.0.0.1:1/v1',
+                model: 'model-' + id,
+                api_key: 'sk-test-secret',
+                thinking_levels: ['low', 'medium', 'high'],
+                account_concurrency: 6,
+                pricing: { prompt: 0.000001, completion: 0.000002 }
+            }),
+            public_routes: () => []
+        };
+        try {
+            const pendingResolvers: Array<() => void> = [];
+            let gate = true;
+            const clientFactory = () => ({
+                post_responses_stream: async () => {
+                    if (gate) {
+                        await new Promise<void>(resolve => pendingResolvers.push(resolve));
+                    }
+                    return [200, 0.01, {}, completedResponse()] as const;
+                }
+            });
+            const service = new BenchExecutionService(dir, multiRoutes, 18, clientFactory as never);
+            const targets = ['r0', 'r1', 'r2', 'r3'].flatMap(route_id =>
+                ['low', 'medium', 'high'].map(thinking => ({ route_id, thinking }))
+            );
+            const taskId = await service.start_task({
+                targets,
+                rounds: 1,
+                run_concurrency: 2,
+                sample_concurrency: 2,
+                limits: { timeout: 60 }
+            });
+            // Only the initial run_concurrency (2) children are hydrated; the other 10 stay lazy-queued in SQLite.
+            expect(service._runs.size).toBe(2);
+            expect(service._runtime.size).toBe(2);
+            const taskView = service.get_task(taskId, { omit_provenance: true })!;
+            const childIds = (taskView.children as Array<{ run_id: string; status: string }>).map(c => c.run_id);
+            expect(childIds).toHaveLength(12);
+            expect(service.list_observations()).toHaveLength(12);
+
+            // Cancel one lazy-queued child directly while active children are still running.
+            const lazyChildId = childIds.find(id => !service._runs.has(id))!;
+            expect(service.cancel_run(lazyChildId)).toBe(true);
+            expect(service.get_run(lazyChildId, { omit_provenance: true })?.status).toBe('cancelled');
+
+            // Release gate so remaining 11 children promote and complete cleanly.
+            gate = false;
+            while (pendingResolvers.length) pendingResolvers.shift()!();
+            await Promise.all(childIds.map(id => service.wait_for_run(id, 10)));
+            expect(service._runs.size).toBe(0);
+            expect(service._runtime.size).toBe(0);
+            const completedCount = childIds.filter(id => service.get_run(id, { omit_provenance: true })?.status === 'completed').length;
+            expect(completedCount).toBe(11);
+
+            // Fast-fail route block drains lazy-queued siblings on the same route without starting them.
+            const rateLimitedFactory = () => ({
+                post_responses_stream: async () => [429, 0.01, {}, { error: { code: 'rate_limit_exceeded' } }] as const
+            });
+            const fastFailService = new BenchExecutionService(join(dir, 'ff'), multiRoutes, 18, rateLimitedFactory as never);
+            fastFailService.retry_wait = async () => {};
+            const ffTargets = ['low', 'medium', 'high'].map(thinking => ({ route_id: 'r-rate', thinking }));
+            const ffTaskId = await fastFailService.start_task({
+                targets: ffTargets,
+                rounds: 1,
+                run_concurrency: 1,
+                sample_concurrency: 1,
+                limits: { timeout: 60, max_api_retries: 0 }
+            });
+            expect(fastFailService._runs.size).toBe(1);
+            const ffChildren = (fastFailService.get_task(ffTaskId, { omit_provenance: true })!.children as Array<{ run_id: string }>).map(
+                c => c.run_id
+            );
+            await Promise.all(ffChildren.map(id => fastFailService.wait_for_run(id, 10)));
+            expect(fastFailService.get_task(ffTaskId, { omit_provenance: true })?.status).toBe('failed');
+            for (const cid of ffChildren.slice(1)) {
+                const run = fastFailService.get_run(cid, { omit_provenance: true })!;
+                expect(run.status).toBe('incomplete');
+                expect(run.stop_reason).toBe('rate_limited');
+                expect(run.retryable_samples).toBe(12);
+                expect(run.samples.every(s => s.status === 'budget_not_admitted')).toBe(true);
+            }
+            await fastFailService.close();
+            await service.close();
+        } finally {
+            rmSync(dir, { recursive: true, force: true });
+        }
+    });
 });

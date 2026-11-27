@@ -1,7 +1,7 @@
 import { readFileSync, statSync } from 'node:fs';
 import { createHash } from 'node:crypto';
 import { join } from 'node:path';
-import { PRODUCTION_BANK_VERSION, RELEASED_BANK_VERSIONS } from './production_bank.ts';
+import { PRODUCTION_BANK_VERSION, RELEASED_BANK_VERSIONS, is_released_bank_version } from './production_bank.ts';
 import {
     ASSESSMENT_BANK_SOURCE_PATHS,
     ASSESSMENT_PROJECT_ROOT,
@@ -72,12 +72,36 @@ export interface AssessmentSourceContext {
     cards_for_version?(version: string): AssessmentTaskSnapshot[];
 }
 
-/** Never cache across queries: edited source bytes must be revalidated on the next query. */
+let cachedDefaultSourceContext: {
+    sig: string;
+    entries: Map<string, { bank: AssessmentBank; cards?: AssessmentTaskSnapshot[] } | { error: unknown }>;
+    digest?: string;
+} | null = null;
+
+/**
+ * Query-local source verification shares bank loads per version, including failed loads.
+ * Default-loader contexts reuse the validated bank map while the on-disk stat signature is unchanged,
+ * and immediately revalidate whenever any tracked bank or execution source file changes.
+ */
 export function create_assessment_source_context(
     load_bank: (version?: string) => AssessmentBank = load_assessment_bank
 ): AssessmentSourceContext {
-    const entries = new Map<string, { bank: AssessmentBank; cards?: AssessmentTaskSnapshot[] } | { error: unknown }>();
+    let entries: Map<string, { bank: AssessmentBank; cards?: AssessmentTaskSnapshot[] } | { error: unknown }>;
+    if (load_bank === load_assessment_bank) {
+        const sig = assessment_source_signature();
+        if (cachedDefaultSourceContext?.sig === sig) {
+            entries = cachedDefaultSourceContext.entries;
+        } else {
+            entries = new Map();
+            cachedDefaultSourceContext = { sig, entries };
+        }
+    } else {
+        entries = new Map();
+    }
     const bank_for_version = (version: string): AssessmentBank => {
+        if (load_bank === load_assessment_bank && !is_released_bank_version(version)) {
+            return load_bank(version);
+        }
         let entry = entries.get(version);
         if (!entry) {
             try {
@@ -123,16 +147,23 @@ export function assessment_source_signature(root = ASSESSMENT_PROJECT_ROOT): str
 }
 
 /** Cryptographic digest of the released banks and execution sources for persistent cache validation. */
-export function assessment_source_digest(context = create_assessment_source_context()): string {
+export function assessment_source_digest(context?: AssessmentSourceContext): string {
+    const sig = context ? null : assessment_source_signature();
+    if (sig !== null && cachedDefaultSourceContext?.sig === sig && cachedDefaultSourceContext.digest !== undefined) {
+        return cachedDefaultSourceContext.digest;
+    }
+    const resolvedContext = context ?? create_assessment_source_context();
     try {
-        const versions = context.bank_for_version ? RELEASED_BANK_VERSIONS : [PRODUCTION_BANK_VERSION];
+        const versions = resolvedContext.bank_for_version ? RELEASED_BANK_VERSIONS : [PRODUCTION_BANK_VERSION];
         const digests = versions.map(version => {
-            const bank = context.bank_for_version ? context.bank_for_version(version) : context.production_bank();
+            const bank = resolvedContext.bank_for_version ? resolvedContext.bank_for_version(version) : resolvedContext.production_bank();
             const { hashes } = capture_assessment_sources(bank);
             return { version: bank.version, task_sha256: bank.task_sha256, hashes };
         });
-        return createHash('sha256').update(JSON.stringify(digests)).digest('hex');
+        const digest = createHash('sha256').update(JSON.stringify(digests)).digest('hex');
+        if (sig !== null && cachedDefaultSourceContext?.sig === sig) cachedDefaultSourceContext.digest = digest;
+        return digest;
     } catch {
-        return 'invalid:' + assessment_source_signature();
+        return 'invalid:' + (sig ?? assessment_source_signature());
     }
 }

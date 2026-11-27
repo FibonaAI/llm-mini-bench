@@ -9,7 +9,8 @@ import {
     type AssessmentSampleConfig,
     type ExecutionProtocol
 } from './run_protocol.ts';
-import { assessment_hash, canonicalAssessmentJson, parseAssessmentJson, assessmentJsonNumberToken } from './assessment_json.ts';
+import { assessment_hash, parseAssessmentJson, assessmentJsonNumberToken } from './assessment_json.ts';
+import { canonicalStorageJson } from './bench_execution_storage.ts';
 import type { AssessmentPricing } from './bench_routes.ts';
 import type { AssessmentGrade } from './assessment_tasks.ts';
 import {
@@ -177,7 +178,7 @@ export class AssessmentBudget implements AssessmentBudgetController {
         }
         // Python's historical serializer included a space after commas and colons.
         // Retaining that byte count keeps cost-reservation admission conservative and comparable.
-        const serialized = canonicalAssessmentJson(body);
+        const serialized = canonicalStorageJson(body);
         let separators = 0,
             quoted = false,
             escaped = false;
@@ -246,7 +247,7 @@ export interface AssessmentJournalStream {
 export class AssessmentJournal implements AssessmentJournalWriter {
     constructor(readonly stream: AssessmentJournalStream | number) {}
     write(record_: Record<string, unknown>): void {
-        const line = canonicalAssessmentJson(record_) + '\n';
+        const line = canonicalStorageJson(record_) + '\n';
         if (typeof this.stream === 'number') {
             const buffer = Buffer.from(line);
             let offset = 0;
@@ -327,8 +328,8 @@ export async function run_assessment_sample(
             ? no_submission_grade()
             : submitted_grade(
                   simulator
-                      ? simulator.grade(canonicalAssessmentJson(submission.answer))
-                      : task.grade!(canonicalAssessmentJson(submission.answer))
+                      ? simulator.grade(canonicalStorageJson(submission.answer))
+                      : task.grade!(canonicalStorageJson(submission.answer))
               );
     const calls: string[] = [],
         trace: AssessmentToolTrace[] = [],
@@ -594,7 +595,7 @@ export async function run_assessment_sample(
             const step = { call_id: wire_id, name, arguments: call.arguments ?? null, result };
             trace.push(step);
             journal.write({ type: 'tool_result', sample_id, ...step });
-            results.push({ type: 'function_call_output', call_id: wire_id, output: canonicalAssessmentJson(result) });
+            results.push({ type: 'function_call_output', call_id: wire_id, output: canonicalStorageJson(result) });
         }
         history = [...history, ...output, ...results];
     }
