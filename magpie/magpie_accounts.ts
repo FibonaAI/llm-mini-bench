@@ -7,6 +7,7 @@ export interface MagpieAccountBinding {
   account: string;
   account_ref: string;
   models?: string[];
+  disabled?: boolean;
 }
 /** Account bindings plus deduplicated full model metadata from `/v1/magpie/accounts?models=full`. */
 export interface MagpieAccountsCatalog {
@@ -64,7 +65,7 @@ export function validateMagpieAccountBindings(value: unknown): MagpieAccountBind
       !row ||
       typeof row !== 'object' ||
       Array.isArray(row) ||
-      Object.keys(row).some(key => !['provider_id', 'account', 'account_ref', 'models'].includes(key)) ||
+      Object.keys(row).some(key => !['provider_id', 'account', 'account_ref', 'models', 'disabled'].includes(key)) ||
       !_route_text(row.provider_id) ||
       row.provider_id.includes('/') ||
       ['auto', 'group'].includes(row.provider_id) ||
@@ -72,6 +73,8 @@ export function validateMagpieAccountBindings(value: unknown): MagpieAccountBind
       !_route_text(row.account_ref)
     )
       throw new TypeError('Magpie account binding requires a local provider, account and account_ref');
+    if (row.disabled !== undefined && typeof row.disabled !== 'boolean')
+      throw new TypeError('Magpie account binding disabled flag must be a boolean');
     if (!validAccountHeader(row.account)) throw new TypeError('Magpie account name must be valid Unicode');
     if (
       row.models !== undefined &&
@@ -90,18 +93,28 @@ export function validateMagpieAccountBindings(value: unknown): MagpieAccountBind
 /**
  * Discover local pin-able accounts, API keys, and their full served model catalog from Magpie's
  * `/v1/magpie/accounts?models=full` list (v0.1.4621+ for accounts, v0.1.4794+ for string model IDs,
- * v0.1.4805+ for full `/v1/models`-shaped model metadata objects).
- * Each enabled local entry is pinned verbatim via its gateway-provided `pin` (`<provider>/<id>`).
+ * v0.1.4805+ for full `/v1/models`-shaped model metadata objects, v0.1.4862+ for pinning disabled
+ * accounts/keys of enabled providers).
+ * Each local entry of an enabled provider is pinned verbatim via its gateway-provided `pin`
+ * (`<provider>/<id>`). Providers with no enabled local entries (e.g., whole provider switched off)
+ * remain excluded because the gateway only plans enabled providers.
  */
 export function discoverMagpieAccountCatalog(payload: unknown): MagpieAccountsCatalog {
   if (!validAccountsList(payload)) return { accounts: [], models: [] };
-  const entries: { provider_id: string; pin: string; id: string | null; label: string; models?: string[] }[] = [];
+  type ParsedEntry = {
+    provider_id: string;
+    pin: string;
+    id: string | null;
+    label: string;
+    disabled: boolean;
+    rawModels?: unknown[];
+  };
+  const parsed: ParsedEntry[] = [];
+  const enabledProviders = new Set<string>();
   const seenPins = new Set<string>();
-  const labelCounts = new Map<string, number>();
-  const modelsById = new Map<string, Record<string, unknown>>();
   for (const row of payload.data) {
     if (!object(row)) continue;
-    if (row.on !== true) continue;
+    if (typeof row.on !== 'boolean') continue;
     if (row.from !== undefined && row.from !== null && row.from !== '') continue;
     if (row.gatewayKey !== undefined && row.gatewayKey !== null) continue;
     if (!_route_text(row.provider) || row.provider.includes('/') || ['auto', 'group'].includes(row.provider)) continue;
@@ -111,14 +124,29 @@ export function discoverMagpieAccountCatalog(payload: unknown): MagpieAccountsCa
     seenPins.add(pinKey);
     const id = _route_text(row.id) ? row.id : null;
     const label = _route_text(row.label) ? row.label : _route_text(row.user) ? row.user : (id ?? row.pin);
-    const labelKey = JSON.stringify([row.provider, label.toLowerCase()]);
+    if (row.on) enabledProviders.add(row.provider);
+    parsed.push({
+      provider_id: row.provider,
+      pin: row.pin,
+      id,
+      label,
+      disabled: !row.on,
+      ...(Array.isArray(row.models) ? { rawModels: row.models } : {})
+    });
+  }
+  const entries: { provider_id: string; pin: string; id: string | null; label: string; disabled: boolean; models?: string[] }[] = [];
+  const labelCounts = new Map<string, number>();
+  const modelsById = new Map<string, Record<string, unknown>>();
+  for (const row of parsed) {
+    if (row.disabled && !enabledProviders.has(row.provider_id)) continue;
+    const labelKey = JSON.stringify([row.provider_id, row.label.toLowerCase()]);
     labelCounts.set(labelKey, (labelCounts.get(labelKey) ?? 0) + 1);
     let models: string[] | undefined;
-    if (Array.isArray(row.models)) {
+    if (row.rawModels) {
       const seenModels = new Set<string>();
-      const prefix = row.provider + '/';
+      const prefix = row.provider_id + '/';
       models = [];
-      for (const rawModel of row.models) {
+      for (const rawModel of row.rawModels) {
         let fullModel: string | null = null;
         if (object(rawModel)) {
           if (!_route_text(rawModel.id) || !rawModel.id.startsWith(prefix) || !_route_text(rawModel.id.slice(prefix.length))) continue;
@@ -138,10 +166,29 @@ export function discoverMagpieAccountCatalog(payload: unknown): MagpieAccountsCa
         if (models.length >= 10000) break;
       }
     }
-    entries.push({ provider_id: row.provider, pin: row.pin, id, label, ...(models !== undefined ? { models } : {}) });
+    entries.push({
+      provider_id: row.provider_id,
+      pin: row.pin,
+      id: row.id,
+      label: row.label,
+      disabled: row.disabled,
+      ...(models !== undefined ? { models } : {})
+    });
   }
+  // Keep provider encounter order, with enabled accounts before disabled ones within each provider,
+  // and prioritize enabled accounts if the 200-entry cap is reached.
+  const providerOrder: string[] = [];
+  const providerRank = new Map<string, number>();
+  for (const entry of entries) {
+    if (!providerRank.has(entry.provider_id)) {
+      providerRank.set(entry.provider_id, providerOrder.length);
+      providerOrder.push(entry.provider_id);
+    }
+  }
+  const enabledEntries = entries.filter(entry => !entry.disabled);
+  const disabledEntries = entries.filter(entry => entry.disabled);
   const seenRefs = new Set<string>();
-  const discovered: MagpieAccountBinding[] = [];
+  const resolved: MagpieAccountBinding[] = [];
   const claimRef = (provider_id: string, value: string | null): string | null => {
     if (!value || !_route_text(value) || value.toLowerCase() === 'gateway-default') return null;
     const refKey = JSON.stringify([provider_id, value.toLowerCase()]);
@@ -149,7 +196,7 @@ export function discoverMagpieAccountCatalog(payload: unknown): MagpieAccountsCa
     seenRefs.add(refKey);
     return value;
   };
-  for (const entry of entries) {
+  for (const entry of [...enabledEntries, ...disabledEntries]) {
     const labelKey = JSON.stringify([entry.provider_id, entry.label.toLowerCase()]);
     const needsId = (labelCounts.get(labelKey) ?? 0) > 1 || entry.label.toLowerCase() === 'gateway-default' || /^•+$/u.test(entry.label);
     const preferred =
@@ -157,14 +204,20 @@ export function discoverMagpieAccountCatalog(payload: unknown): MagpieAccountsCa
     const account_ref =
       claimRef(entry.provider_id, preferred) ?? claimRef(entry.provider_id, entry.id) ?? claimRef(entry.provider_id, entry.pin);
     if (!account_ref) continue;
-    discovered.push({
+    resolved.push({
       provider_id: entry.provider_id,
       account: entry.pin,
       account_ref,
+      ...(entry.disabled ? { disabled: true } : {}),
       ...(entry.models !== undefined ? { models: entry.models } : {})
     });
-    if (discovered.length >= 200) break;
+    if (resolved.length >= 200) break;
   }
+  const discovered = resolved.sort(
+    (left, right) =>
+      (providerRank.get(left.provider_id) ?? 0) - (providerRank.get(right.provider_id) ?? 0) ||
+      Number(Boolean(left.disabled)) - Number(Boolean(right.disabled))
+  );
   return { accounts: discovered, models: [...modelsById.values()] };
 }
 /** Discover local pin-able account bindings from `/v1/magpie/accounts`. */

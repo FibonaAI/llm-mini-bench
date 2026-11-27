@@ -619,4 +619,69 @@ describe('Magpie-style account masking', () => {
         expect(tokenDd.textContent).toBe('1,234 / 0');
         masker.destroy();
     });
+
+    test('masks disabled account names while leaving 已关闭 status tags readable across picker and selected targets', () => {
+        const h = createDomHarness();
+
+        const pill = h.doc.createElement('button');
+        pill.className = 'dp-acc-pill is-disabled';
+        const pillName = h.doc.createElement('span');
+        pillName.className = 'dp-acc-pill-name';
+        pillName.textContent = 'spare-off';
+        const pillOff = h.doc.createElement('span');
+        pillOff.className = 'dp-acc-off';
+        pillOff.textContent = '已关闭';
+        pill.append(pillName, pillOff);
+
+        const searchRow = h.doc.createElement('div');
+        searchRow.className = 'dp-search-row';
+        const accLine = h.doc.createElement('span');
+        accLine.className = 'dp-account-line';
+        const accName = h.doc.createElement('span');
+        accName.className = 'dp-account-name';
+        accName.textContent = 'spare-off';
+        const accOff = h.doc.createElement('span');
+        accOff.className = 'dp-acc-off';
+        accOff.textContent = '已关闭';
+        accLine.append(accName, accOff);
+        searchRow.append(accLine);
+
+        const targetMeta = h.doc.createElement('div');
+        targetMeta.className = 'selected-target-info';
+        const targetSpan = h.doc.createElement('span');
+        targetSpan.textContent = 'openai / spare-off · high';
+        const targetOff = h.doc.createElement('small');
+        targetOff.className = 'selected-target-off';
+        targetOff.textContent = '已关闭';
+        targetMeta.append(targetSpan, targetOff);
+
+        h.doc.body.append(pill, searchRow, targetMeta);
+
+        const masker = createAccountMasker({
+            root: h.doc.body,
+            button: h.button,
+            app: h.app,
+            storage: h.storage,
+            doc: h.doc,
+            win: h.winTarget,
+            MutationObserverImpl: h.MockMutationObserver
+        });
+        masker.noteAccounts([
+            { provider_id: 'openai', model: 'openai/gpt-5', account_ref: 'spare-off', account_evidence: 'gateway_account_binding' }
+        ]);
+        masker.set(true);
+
+        expect(pillName.textContent).not.toContain('spare-off');
+        expect(pillOff.textContent).toBe('已关闭');
+        expect(accName.textContent).not.toContain('spare-off');
+        expect(accOff.textContent).toBe('已关闭');
+        expect(targetSpan.textContent).not.toContain('spare-off');
+        expect(targetOff.textContent).toBe('已关闭');
+
+        masker.set(false);
+        expect(pillName.textContent).toBe('spare-off');
+        expect(accName.textContent).toBe('spare-off');
+        expect(targetSpan.textContent).toBe('openai / spare-off · high');
+        masker.destroy();
+    });
 });

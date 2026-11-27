@@ -75,7 +75,8 @@ const NOT_ACCOUNTS = new Set([
   '样本',
   '路由',
   '思考',
-  '账号'
+  '账号',
+  '已关闭'
 ]);
 
 const PURE_ACCOUNT_SELECTOR = [

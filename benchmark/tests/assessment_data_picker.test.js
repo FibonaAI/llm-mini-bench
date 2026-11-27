@@ -755,3 +755,114 @@ test('task target controller preserves active channel, staged drafts and search 
     app.setTaskSelection([]);
     expect(find('dp-search').value).toBe('');
 });
+
+test('disabled accounts sort after enabled accounts, carry 已关闭 badges, stay selectable, and stay out of unfiltered batch select', () => {
+    const records = [
+        {
+            providerId: 'provider:openai',
+            providerName: 'openai',
+            accountId: 'gateway-binding:gateway-default',
+            account: '网关自动分配（账号未记录）',
+            accountDisplayId: '实际账号未记录',
+            model: 'openai/gpt-5',
+            modelDisplayName: 'GPT-5',
+            think: 'high',
+            route: { id: 'r-auto', account_evidence: 'gateway_binding' }
+        },
+        {
+            providerId: 'provider:openai',
+            providerName: 'openai',
+            accountId: 'account:spare-off',
+            account: 'spare-off（固定绑定）',
+            accountDisplayId: 'spare-off',
+            accountDisabled: true,
+            model: 'openai/gpt-5',
+            modelDisplayName: 'GPT-5',
+            think: 'high',
+            route: { id: 'r-off', account_evidence: 'gateway_account_binding', account_disabled: true }
+        },
+        {
+            providerId: 'provider:openai',
+            providerName: 'openai',
+            accountId: 'account:main-on',
+            account: 'main-on（固定绑定）',
+            accountDisplayId: 'main-on',
+            model: 'openai/gpt-5',
+            modelDisplayName: 'GPT-5',
+            think: 'high',
+            route: { id: 'r-on', account_evidence: 'gateway_account_binding' }
+        }
+    ];
+    const { picker, find, findAll, search } = fixture({ records, selectedKeys: [], mode: 'tasks' });
+
+    // Tier 1 pills place auto first, then enabled fixed accounts, then disabled fixed accounts with 已关闭 badge.
+    const pills = findAll('dp-acc-pill');
+    expect(pills.map(p => p.dataset.accountId)).toEqual(['gateway-binding:gateway-default', 'account:main-on', 'account:spare-off']);
+    expect(pills[2].className).toContain('is-disabled');
+    expect(pills[2].querySelector('.dp-acc-off').textContent).toBe('已关闭');
+    expect(pills[2].title).toContain('Magpie 中已关闭');
+
+    // Unfiltered batch button targets enabled fixed accounts ("全选已开启 (1)"), leaving disabled accounts unchecked.
+    const batchBtn = find('dp-acc-link');
+    expect(batchBtn.textContent).toBe('全选已开启 (1)');
+    batchBtn.events.click();
+    expect(findAll('dp-acc-pill')[1].attributes['aria-pressed']).toBe('true');
+    expect(findAll('dp-acc-pill')[2].attributes['aria-pressed']).toBe('false');
+
+    // Clicking the disabled account pill selects it and allows running tasks on it.
+    findAll('dp-acc-pill')[2].events.click();
+    findAll('dp-think')[0].events.click();
+    expect(picker.getSelection()).toContain(selectionKey(records[1]));
+
+    // Cross-channel search finds disabled accounts by "已关闭" and shows the badge outside .dp-account-name.
+    search('已关闭');
+    const searchRows = findAll('dp-search-row');
+    expect(searchRows).toHaveLength(1);
+    expect(searchRows[0].querySelector('.dp-account-name').textContent).toBe('spare-off');
+    expect(searchRows[0].querySelector('.dp-acc-off').textContent).toBe('已关闭');
+
+    // Tier 2 (>8 fixed accounts): disabled accounts render at the end with 已关闭 tags; unfiltered batch picks enabled only,
+    // while searching "已关闭" lets batch-select target matched disabled accounts.
+    const tier2Records = [
+        ...Array.from({ length: 8 }, (_, i) => ({
+            providerId: 'provider:big',
+            providerName: 'big',
+            accountId: `account:on-${i}`,
+            account: `on-${i}（固定绑定）`,
+            accountDisplayId: `on-${i}`,
+            model: 'big/m',
+            modelDisplayName: 'M',
+            think: 'high',
+            route: { id: `r-on-${i}`, account_evidence: 'gateway_account_binding' }
+        })),
+        {
+            providerId: 'provider:big',
+            providerName: 'big',
+            accountId: 'account:off-last',
+            account: 'off-last（固定绑定）',
+            accountDisplayId: 'off-last',
+            accountDisabled: true,
+            model: 'big/m',
+            modelDisplayName: 'M',
+            think: 'high',
+            route: { id: 'r-off-last', account_evidence: 'gateway_account_binding', account_disabled: true }
+        }
+    ];
+    const t2 = fixture({ records: tier2Records, selectedKeys: [], mode: 'tasks' });
+    t2.find('dp-acc-toggle').events.click();
+    const cells = t2.findAll('dp-acc-cell');
+    expect(cells).toHaveLength(9);
+    expect(cells[8].className).toContain('is-disabled');
+    expect(cells[8].querySelector('.dp-acc-off').textContent).toBe('已关闭');
+    expect(t2.find('dp-acc-batch').textContent).toBe('全选已开启 (8)');
+    t2.find('dp-acc-batch').events.click();
+    expect(t2.findAll('dp-acc-check').filter(c => c.checked)).toHaveLength(8);
+    expect(t2.findAll('dp-acc-check')[8].checked).toBe(false);
+    const accSearch = t2.find('dp-acc-search');
+    accSearch.value = '已关闭';
+    accSearch.events.input();
+    expect(t2.findAll('dp-acc-cell')).toHaveLength(1);
+    expect(t2.find('dp-acc-batch').textContent).toBe('全选匹配 (1)');
+    t2.find('dp-acc-batch').events.click();
+    expect(t2.findAll('dp-acc-check')[0].checked).toBe(true);
+});
