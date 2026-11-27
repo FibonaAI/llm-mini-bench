@@ -411,6 +411,32 @@
   color: var(--accent);
   opacity: 0.85;
 }
+.dp-popup .dp-acc-pill.is-disabled {
+  border-style: dashed;
+  color: var(--muted);
+}
+.dp-popup .dp-acc-pill.is-disabled[aria-pressed='true'] {
+  border-style: solid;
+  color: var(--accent);
+}
+.dp-acc-off {
+  flex: 0 0 auto;
+  font-size: 10px;
+  line-height: 1.3;
+  font-weight: 500;
+  padding: 1px 5px;
+  border-radius: 4px;
+  background: var(--pill);
+  border: 1px solid var(--line);
+  color: var(--muted);
+  white-space: nowrap;
+}
+.dp-acc-pill[aria-pressed='true'] .dp-acc-off,
+.dp-acc-cell.is-checked .dp-acc-off {
+  background: transparent;
+  border-color: color-mix(in srgb, var(--accent) 40%, transparent);
+  color: var(--accent);
+}
 
 /* Tier 2 collapsed summary chips & expanded pinned selected strip */
 .dp-acc-collapsed-chips,
@@ -541,6 +567,15 @@
 .dp-acc-cell.is-checked {
   background: var(--accent-soft);
   border-color: var(--accent);
+}
+.dp-acc-cell.is-disabled {
+  border-style: dashed;
+}
+.dp-acc-cell.is-disabled:not(.is-checked) .dp-acc-cell-name {
+  color: var(--muted);
+}
+.dp-acc-cell.is-disabled.is-checked {
+  border-style: solid;
 }
 .dp-acc-check {
   flex: 0 0 auto;
@@ -774,6 +809,18 @@
   color: var(--ctl-fg);
   font-size: 11.5px;
   margin-top: 2px;
+}
+.dp-account-line {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 5px;
+  margin-top: 2px;
+}
+.dp-account-line .dp-account-name {
+  display: inline;
+  margin-top: 0;
+  color: var(--muted);
 }
 
 /* Checkbox & Thinking toggle pills (highlight only, no checkmark prefix) */

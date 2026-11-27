@@ -96,17 +96,32 @@ export class MagpieBenchRoutes {
   private merged_accounts(discovered: MagpieAccountBinding[]): BoundAccount[] {
     const manualAccounts = new Set<string>();
     const manualRefs = new Set<string>();
+    const discoveredDisabled = new Set<string>();
     const bareAccount = (provider_id: string, account: string) => {
       const lower = account.toLowerCase();
       const prefix = provider_id.toLowerCase();
       return lower.startsWith(prefix + '/') || lower.startsWith(prefix + '#') ? lower.slice(prefix.length + 1) : lower;
     };
-    for (const binding of this.accounts) {
-      manualAccounts.add(JSON.stringify([binding.provider_id, binding.account.toLowerCase()]));
-      manualAccounts.add(JSON.stringify([binding.provider_id, bareAccount(binding.provider_id, binding.account)]));
-      manualRefs.add(JSON.stringify([binding.provider_id, binding.account_ref.toLowerCase()]));
+    for (const binding of discovered) {
+      if (!binding.disabled) continue;
+      discoveredDisabled.add(JSON.stringify([binding.provider_id, binding.account.toLowerCase()]));
+      discoveredDisabled.add(JSON.stringify([binding.provider_id, bareAccount(binding.provider_id, binding.account)]));
+      discoveredDisabled.add(JSON.stringify([binding.provider_id, binding.account_ref.toLowerCase()]));
     }
-    const merged: BoundAccount[] = this.accounts.map(binding => ({ ...binding, evidence: 'configured_binding' }));
+    const merged: BoundAccount[] = [];
+    for (const binding of this.accounts) {
+      const accountKey = JSON.stringify([binding.provider_id, binding.account.toLowerCase()]);
+      const bareKey = JSON.stringify([binding.provider_id, bareAccount(binding.provider_id, binding.account)]);
+      const refKey = JSON.stringify([binding.provider_id, binding.account_ref.toLowerCase()]);
+      manualAccounts.add(accountKey);
+      manualAccounts.add(bareKey);
+      manualRefs.add(refKey);
+      const isDisabled =
+        binding.disabled !== undefined
+          ? binding.disabled
+          : discoveredDisabled.has(accountKey) || discoveredDisabled.has(bareKey) || discoveredDisabled.has(refKey);
+      merged.push({ ...binding, ...(isDisabled ? { disabled: true } : {}), evidence: 'configured_binding' });
+    }
     for (const binding of discovered) {
       const accountKey = JSON.stringify([binding.provider_id, binding.account.toLowerCase()]);
       const bareKey = JSON.stringify([binding.provider_id, bareAccount(binding.provider_id, binding.account)]);
@@ -133,11 +148,13 @@ export class MagpieBenchRoutes {
     }
     const bindings = this.merged_accounts(discovered);
     const discoveredModels = new Map<string, string>();
+    const enabledDiscoveredModels = new Set<string>();
     for (const binding of discovered) {
       if (!binding.models) continue;
       for (const fullModel of binding.models) {
-        if (fullModel.startsWith(binding.provider_id + '/') && !discoveredModels.has(fullModel)) {
-          discoveredModels.set(fullModel, binding.provider_id);
+        if (fullModel.startsWith(binding.provider_id + '/')) {
+          if (!discoveredModels.has(fullModel)) discoveredModels.set(fullModel, binding.provider_id);
+          if (!binding.disabled) enabledDiscoveredModels.add(fullModel);
         }
       }
     }
@@ -156,8 +173,8 @@ export class MagpieBenchRoutes {
     const providersWithRemote = new Set<string>();
     const providersWithDirect = new Set<string>();
     const nextActive = new Map<string, MagpieAccountBinding>();
-    const appendRouteWithBindings = (baseRoute: BenchPublicRoute) => {
-      routes.push(baseRoute);
+    const appendRouteWithBindings = (baseRoute: BenchPublicRoute, includeBase = true) => {
+      if (includeBase) routes.push(baseRoute);
       if (
         !baseRoute.provider_id ||
         baseRoute.remote_route ||
@@ -177,6 +194,7 @@ export class MagpieBenchRoutes {
           account_ref: binding.account_ref,
           account_evidence: binding.evidence,
           account_concurrency: 1,
+          ...(binding.disabled ? { account_disabled: true } : {}),
           binding_ref
         });
       }
@@ -256,7 +274,7 @@ export class MagpieBenchRoutes {
         ...(display_name ? { model_display_name: display_name } : {}),
         ...(remote_route ? { remote_route } : {})
       };
-      appendRouteWithBindings(baseRoute);
+      appendRouteWithBindings(baseRoute, enabledDiscoveredModels.has(fullModel));
     }
     this.active_bindings.clear();
     for (const [ref, binding] of nextActive) this.active_bindings.set(ref, binding);

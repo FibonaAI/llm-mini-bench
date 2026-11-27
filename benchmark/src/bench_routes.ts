@@ -27,6 +27,8 @@ export interface BenchPublicRoute extends BenchRouteMetadata {
     pricing: AssessmentPricing | null;
     account_concurrency: number;
     account_evidence?: string;
+    /** Live catalog hint that the pinned account/key is currently turned off in the host gateway. */
+    account_disabled?: boolean;
 }
 /** Private resolved route, for service execution only; never persist this object. */
 export interface BenchResolvedRoute extends BenchPublicRoute {

@@ -59,6 +59,7 @@ function pickerIdentity(record, routeId, fallbackId) {
             : '未记录账号',
     accountShortName: gateway ? '网关自动分配' : undefined,
     accountDisplayId: gateway ? '实际账号未记录' : (binding ?? '未记录'),
+    ...(record.account_disabled === true ? { accountDisabled: true } : {}),
     model,
     modelDisplayName: text(record.model_display_name) ?? model,
     routeId

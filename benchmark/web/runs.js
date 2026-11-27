@@ -43,8 +43,12 @@ export function createTaskTargets(app) {
             const key = selectionKey(leaf);
             const provider = leaf.providerName || leaf.providerDisplayId || leaf.provider;
             const account = shortAccountLabel(leaf);
-            const fullMeta = `${provider} / ${leaf.account} · ${thinkingLabel(leaf.think)}`;
-            return `<div class="selected-target"><div class="selected-target-info"><strong>${escapeHtml(leaf.modelDisplayName || leaf.model)}</strong><span title="${escapeHtml(fullMeta)}">${escapeHtml(provider)} / ${escapeHtml(account)} · ${escapeHtml(thinkingLabel(leaf.think))}</span></div><button class="selected-target-remove" type="button" data-remove-target-key="${escapeHtml(key)}" aria-label="移除 ${escapeHtml(leaf.modelDisplayName || leaf.model)} (${escapeHtml(account)})">×</button></div>`;
+            const isDisabled = Boolean(leaf.accountDisabled || leaf.route?.account_disabled);
+            const fullMeta = `${provider} / ${leaf.account}${isDisabled ? ' · Magpie 中已关闭' : ''} · ${thinkingLabel(leaf.think)}`;
+            const disabledTag = isDisabled
+              ? '<small class="selected-target-off" title="Magpie 中已关闭（仅单次固定发送，不影响常规路由与休息状态）">已关闭</small>'
+              : '';
+            return `<div class="selected-target"><div class="selected-target-info"><strong>${escapeHtml(leaf.modelDisplayName || leaf.model)}</strong><span title="${escapeHtml(fullMeta)}">${escapeHtml(provider)} / ${escapeHtml(account)} · ${escapeHtml(thinkingLabel(leaf.think))}</span>${disabledTag}</div><button class="selected-target-remove" type="button" data-remove-target-key="${escapeHtml(key)}" aria-label="移除 ${escapeHtml(leaf.modelDisplayName || leaf.model)} (${escapeHtml(account)})">×</button></div>`;
           })
           .join('')
       : '<p class="empty">尚未选择目标。在上方目标选择器中按渠道、账号与思考档位勾选，或跨渠道搜索。</p>';

@@ -46,6 +46,7 @@ function recordSearchText(record) {
       record.account,
       record.accountDisplayId,
       accountIdentity(record),
+      record.accountDisabled || record.route?.account_disabled ? '已关闭 disabled off' : '',
       thinkingLabel(record.think),
       record.think
     ].join(' ')
@@ -110,6 +111,7 @@ function buildChannels(leaves) {
     ch.leafByKey.set(leaf.key, leaf);
 
     const accId = accountIdentity(leaf);
+    const isDisabled = Boolean(leaf.accountDisabled || leaf.route?.account_disabled);
     if (!ch.accountById.has(accId)) {
       const isAuto = isAutoAccountRecord(leaf);
       const baseDisplay =
@@ -120,14 +122,30 @@ function buildChannels(leaves) {
       const acc = {
         id: accId,
         isAuto,
+        disabled: !isAuto && isDisabled,
         primary: parts.primary,
         badgeId: parts.badgeId,
         fullLabel: leaf.account ?? baseDisplay,
-        searchText: normalizeSearch([parts.primary, parts.badgeId, leaf.account, leaf.accountDisplayId, accId].join(' '))
+        searchText: normalizeSearch(
+          [
+            parts.primary,
+            parts.badgeId,
+            leaf.account,
+            leaf.accountDisplayId,
+            accId,
+            !isAuto && isDisabled ? '已关闭 disabled off' : ''
+          ].join(' ')
+        )
       };
       ch.accountById.set(accId, acc);
       if (isAuto && !ch.autoAccount) ch.autoAccount = acc;
       else ch.fixedAccounts.push(acc);
+    } else if (isDisabled) {
+      const acc = ch.accountById.get(accId);
+      if (!acc.isAuto && !acc.disabled) {
+        acc.disabled = true;
+        acc.searchText += normalizeSearch('已关闭 disabled off');
+      }
     }
 
     if (!ch.modelById.has(leaf.model)) {
@@ -152,6 +170,8 @@ function buildChannels(leaves) {
   for (const ch of all) labelCounts.set(ch.rawLabel, (labelCounts.get(ch.rawLabel) ?? 0) + 1);
   for (const ch of all) {
     ch.label = labelCounts.get(ch.rawLabel) > 1 ? `${ch.rawLabel} · ${ch.id}` : ch.rawLabel;
+    // Place enabled fixed accounts before disabled ones, preserving catalog order within each group.
+    ch.fixedAccounts.sort((left, right) => Number(left.disabled) - Number(right.disabled));
     // Disambiguate identical fixed account labels within one channel.
     const accLabelCounts = new Map();
     for (const acc of ch.fixedAccounts) {
@@ -577,15 +597,26 @@ export function createDataPicker(container, { records, selectedKeys, mode = 'ana
     headLeft.append(statusNode);
 
     const headRight = element('div', 'dp-acc-head-right');
+    const accountTitle = acc =>
+      acc.disabled ? `${acc.fullLabel} · Magpie 中已关闭（仅单次固定发送，不影响常规路由与休息状态）` : acc.fullLabel;
+    const enabledFixed = ch.fixedAccounts.filter(acc => !acc.disabled);
+    const hasDisabledFixed = enabledFixed.length < fixedCount;
+    const defaultBatchAccounts = hasDisabledFixed && enabledFixed.length > 0 ? enabledFixed : ch.fixedAccounts;
 
     // Tier 1: 1–8 fixed accounts -> compact wrapping pills.
     if (fixedCount <= COMPACT_ACCOUNT_LIMIT) {
-      const allFixedSelected = selectedFixed.length === fixedCount;
+      const allBatchSelected = defaultBatchAccounts.every(acc => cs.activeAccounts.has(acc.id));
       const batchBtn = button(
         'dp-acc-link',
-        allFixedSelected ? (ch.autoAccount ? '切回自动' : '清空固定') : `全选固定 (${fixedCount})`,
+        allBatchSelected
+          ? ch.autoAccount
+            ? '切回自动'
+            : '清空固定'
+          : hasDisabledFixed && enabledFixed.length > 0
+            ? `全选已开启 (${enabledFixed.length})`
+            : `全选固定 (${fixedCount})`,
         () => {
-          if (allFixedSelected) {
+          if (allBatchSelected) {
             if (ch.autoAccount) switchToAuto(ch);
             else
               batchAccounts(
@@ -596,7 +627,7 @@ export function createDataPicker(container, { records, selectedKeys, mode = 'ana
           } else {
             batchAccounts(
               ch,
-              ch.fixedAccounts.map(a => a.id),
+              defaultBatchAccounts.map(a => a.id),
               true
             );
           }
@@ -617,13 +648,14 @@ export function createDataPicker(container, { records, selectedKeys, mode = 'ana
         pills.append(autoBtn);
       }
       for (const acc of ch.fixedAccounts) {
-        const pill = button('dp-acc-pill', '', () => toggleAccount(ch, acc.id));
+        const pill = button(`dp-acc-pill${acc.disabled ? ' is-disabled' : ''}`, '', () => toggleAccount(ch, acc.id));
         pill.setAttribute('aria-pressed', String(cs.activeAccounts.has(acc.id)));
         pill.dataset.accountId = acc.id;
         pill.dataset.focusId = `acc:${ch.id}:${acc.id}`;
-        pill.title = acc.fullLabel;
+        pill.title = accountTitle(acc);
         pill.append(element('span', 'dp-acc-pill-name', acc.primary));
         if (acc.badgeId) pill.append(element('span', 'dp-acc-id', acc.badgeId));
+        if (acc.disabled) pill.append(element('span', 'dp-acc-off', '已关闭'));
         pills.append(pill);
       }
       section.append(pills);
@@ -654,8 +686,9 @@ export function createDataPicker(container, { records, selectedKeys, mode = 'ana
         const collapsedBar = element('div', 'dp-acc-collapsed-chips');
         const preview = selectedFixed.slice(0, 4);
         for (const acc of preview) {
-          const chip = button('dp-acc-chip', `${acc.primary} ×`, () => toggleAccount(ch, acc.id));
+          const chip = button(`dp-acc-chip${acc.disabled ? ' is-disabled' : ''}`, `${acc.primary} ×`, () => toggleAccount(ch, acc.id));
           chip.setAttribute('aria-label', `移除账号 ${acc.primary}`);
+          chip.title = accountTitle(acc);
           chip.dataset.accountId = acc.id;
           chip.dataset.focusId = `acc-chip:${ch.id}:${acc.id}`;
           collapsedBar.append(chip);
@@ -674,8 +707,9 @@ export function createDataPicker(container, { records, selectedKeys, mode = 'ana
       selectedBar.append(element('span', 'dp-acc-selected-label', '已选'));
       const chipList = element('div', 'dp-acc-chip-list');
       for (const acc of selectedFixed) {
-        const chip = button('dp-acc-chip', `${acc.primary} ×`, () => toggleAccount(ch, acc.id));
+        const chip = button(`dp-acc-chip${acc.disabled ? ' is-disabled' : ''}`, `${acc.primary} ×`, () => toggleAccount(ch, acc.id));
         chip.setAttribute('aria-label', `移除账号 ${acc.primary}`);
+        chip.title = accountTitle(acc);
         chip.dataset.accountId = acc.id;
         chip.dataset.focusId = `acc-chip:${ch.id}:${acc.id}`;
         chipList.append(chip);
@@ -731,22 +765,25 @@ export function createDataPicker(container, { records, selectedKeys, mode = 'ana
       return queryTokens.every(token => acc.searchText.includes(token));
     });
     const isFiltered = queryTokens.length > 0 || cs.accView === 'selected';
-    const allFilteredSelected = filteredAccounts.length > 0 && filteredAccounts.every(acc => cs.activeAccounts.has(acc.id));
+    const batchTargets = isFiltered ? filteredAccounts : defaultBatchAccounts;
+    const allBatchSelected = batchTargets.length > 0 && batchTargets.every(acc => cs.activeAccounts.has(acc.id));
     const batchLabel = isFiltered
-      ? allFilteredSelected
+      ? allBatchSelected
         ? `取消匹配 (${filteredAccounts.length})`
         : `全选匹配 (${filteredAccounts.length})`
-      : allFilteredSelected
+      : allBatchSelected
         ? '清空固定'
-        : `全选固定 (${fixedCount})`;
+        : hasDisabledFixed && enabledFixed.length > 0
+          ? `全选已开启 (${enabledFixed.length})`
+          : `全选固定 (${fixedCount})`;
     const batchBtn = button('dp-acc-link dp-acc-batch', batchLabel, () => {
       batchAccounts(
         ch,
-        filteredAccounts.map(a => a.id),
-        !allFilteredSelected
+        (allBatchSelected && !isFiltered ? ch.fixedAccounts : batchTargets).map(a => a.id),
+        !allBatchSelected
       );
     });
-    batchBtn.disabled = filteredAccounts.length === 0;
+    batchBtn.disabled = batchTargets.length === 0;
     batchBtn.dataset.focusId = `acc-batch:${ch.id}`;
 
     accToolbar.append(accSearch, seg, batchBtn);
@@ -758,8 +795,8 @@ export function createDataPicker(container, { records, selectedKeys, mode = 'ana
     } else {
       for (const acc of filteredAccounts) {
         const checked = cs.activeAccounts.has(acc.id);
-        const cell = element('label', `dp-acc-cell${checked ? ' is-checked' : ''}`);
-        cell.title = acc.fullLabel;
+        const cell = element('label', `dp-acc-cell${checked ? ' is-checked' : ''}${acc.disabled ? ' is-disabled' : ''}`);
+        cell.title = accountTitle(acc);
         const checkbox = element('input', 'dp-acc-check');
         checkbox.type = 'checkbox';
         checkbox.checked = checked;
@@ -768,6 +805,7 @@ export function createDataPicker(container, { records, selectedKeys, mode = 'ana
         checkbox.addEventListener('change', () => toggleAccount(ch, acc.id));
         cell.append(checkbox, element('span', 'dp-acc-cell-name', acc.primary));
         if (acc.badgeId) cell.append(element('span', 'dp-acc-id', acc.badgeId));
+        if (acc.disabled) cell.append(element('span', 'dp-acc-off', '已关闭'));
         grid.append(cell);
       }
     }
@@ -1043,14 +1081,25 @@ export function createDataPicker(container, { records, selectedKeys, mode = 'ana
       check.addEventListener('change', () => changeDirectLeaves(group, check.checked));
 
       const route = element('span', 'dp-route');
-      route.append(
-        element('span', 'dp-provider-name', ch?.label ?? first.providerName ?? first.providerDisplayId ?? first.provider),
-        element(
-          'span',
-          'dp-account-name',
-          acc ? (acc.isAuto ? acc.fullLabel : acc.badgeId ? `${acc.primary} (${acc.badgeId})` : acc.primary) : first.account
-        )
+      const accountNameNode = element(
+        'span',
+        'dp-account-name',
+        acc ? (acc.isAuto ? acc.fullLabel : acc.badgeId ? `${acc.primary} (${acc.badgeId})` : acc.primary) : first.account
       );
+      if (acc?.disabled) {
+        const accountLine = element('span', 'dp-account-line');
+        accountLine.title = `${acc.fullLabel} · Magpie 中已关闭（仅单次固定发送，不影响常规路由与休息状态）`;
+        accountLine.append(accountNameNode, element('span', 'dp-acc-off', '已关闭'));
+        route.append(
+          element('span', 'dp-provider-name', ch?.label ?? first.providerName ?? first.providerDisplayId ?? first.provider),
+          accountLine
+        );
+      } else {
+        route.append(
+          element('span', 'dp-provider-name', ch?.label ?? first.providerName ?? first.providerDisplayId ?? first.provider),
+          accountNameNode
+        );
+      }
 
       const modelCol = element('div', 'dp-model-col');
       modelCol.append(element('span', 'dp-model-name', displayName));

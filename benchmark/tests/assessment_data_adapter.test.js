@@ -193,3 +193,20 @@ test('historical records without namespace evidence do not merge into current re
     expect(recent.provider_id).toBe('remote');
     expect(recent.original.remote_route).toEqual(current.remote_route);
 });
+test('disabled account flag is preserved for presentation without changing account identity or selectionKey', () => {
+    const enabledRoute = {
+        ...route('r-on', 'openai'),
+        model: 'openai/gpt-5',
+        account_ref: 'spare',
+        account_evidence: 'gateway_account_binding'
+    };
+    const disabledRoute = { ...enabledRoute, id: 'r-off', account_disabled: true };
+    const [enabledLeaf] = routePickerLeaves([enabledRoute]);
+    const [disabledLeaf] = routePickerLeaves([disabledRoute]);
+    expect(enabledLeaf.accountDisabled).toBeUndefined();
+    expect(disabledLeaf.accountDisabled).toBe(true);
+    expect(disabledLeaf.accountId).toBe(enabledLeaf.accountId);
+    expect(disabledLeaf.accountDisplayId).toBe('spare');
+    expect(disabledLeaf.account).toBe('spare（固定绑定）');
+    expect(selectionKey(disabledLeaf)).toBe(selectionKey(enabledLeaf));
+});

@@ -22,6 +22,7 @@ describe('Magpie account adapter', () => {
       { ...bindings[0], provider_id: 'auto' },
       { ...bindings[0], account: 'bad\nheader' },
       { ...bindings[0], key: 'inline-secret' },
+      { ...bindings[0], disabled: 'yes' },
       { ...bindings[0], models: [null] }
     ])
       expect(() => validateMagpieAccountBindings([row])).toThrow();
@@ -75,12 +76,14 @@ describe('Magpie account adapter', () => {
       object: 'list',
       data: [
         { provider: 'openai', providerName: 'OpenAI', id: 'key0000001', pin: 'openai/key0000001', kind: 'key', label: 'a', on: true },
+        { provider: 'openai', providerName: 'OpenAI', id: 'disabled01', pin: 'openai/disabled01', kind: 'key', label: 'off', on: false },
         { provider: 'openai', providerName: 'OpenAI', id: 'key0000002', pin: 'openai/key0000002', kind: 'key', label: 'b', on: true },
         { provider: 'openai', providerName: 'OpenAI', id: 'key0000003', pin: 'openai/key0000003', kind: 'key', label: '•••', on: true },
-        { provider: 'openai', providerName: 'OpenAI', id: 'disabled01', pin: 'openai/disabled01', kind: 'key', label: 'off', on: false },
         { provider: 'openai', providerName: 'OpenAI', id: 'key0000001', pin: 'openai/KEY0000001', kind: 'key', label: 'dup', on: true },
+        { provider: 'all-off', providerName: 'Disabled Provider', id: 'off1', pin: 'all-off/off1', kind: 'key', label: 'gone', on: false },
+        { provider: 'all-off', providerName: 'Disabled Provider', id: 'off2', pin: 'all-off/off2', kind: 'key', label: 'gone2', on: false },
         { provider: 'relay', id: 'k1', pin: 'relay/k1', kind: 'key', label: 'prod', on: true },
-        { provider: 'relay', id: 'k2', pin: 'relay/k2', kind: 'key', label: 'Prod', on: true },
+        { provider: 'relay', id: 'k2', pin: 'relay/k2', kind: 'key', label: 'Prod', on: false },
         { provider: 'relay', id: 'k3', pin: 'relay/k3', kind: 'key', label: 'gateway-default', on: true },
         { provider: 'deepseek', id: 'solo1', pin: 'deepseek/solo1', kind: 'key', label: 'sk-ds…1111', on: true },
         {
@@ -112,9 +115,10 @@ describe('Magpie account adapter', () => {
       { provider_id: 'openai', account: 'openai/key0000001', account_ref: 'a' },
       { provider_id: 'openai', account: 'openai/key0000002', account_ref: 'b' },
       { provider_id: 'openai', account: 'openai/key0000003', account_ref: '••• (key0000003)' },
+      { provider_id: 'openai', account: 'openai/disabled01', account_ref: 'off', disabled: true },
       { provider_id: 'relay', account: 'relay/k1', account_ref: 'prod (k1)' },
-      { provider_id: 'relay', account: 'relay/k2', account_ref: 'Prod (k2)' },
       { provider_id: 'relay', account: 'relay/k3', account_ref: 'gateway-default (k3)' },
+      { provider_id: 'relay', account: 'relay/k2', account_ref: 'Prod (k2)', disabled: true },
       { provider_id: 'deepseek', account: 'deepseek/solo1', account_ref: 'sk-ds…1111' },
       { provider_id: 'codex', account: 'codex/user@example.invalid', account_ref: 'user@example.invalid' },
       { provider_id: 'codex', account: 'codex/测试账号', account_ref: '测试账号' }
@@ -654,5 +658,121 @@ describe('Magpie account adapter', () => {
       ['openai/dual-a', 'chat', 'Dual A'],
       ['openai/dual-b', 'chat', 'Dual B']
     ]);
+  });
+
+  test('exposes disabled accounts of enabled providers with account_disabled, excludes whole-provider-off, and omits gateway-default for disabled-only models', async () => {
+    const adapter = new MagpieBenchAdapter('http://127.0.0.1:3425/v1', 'magpie', 18, [
+      { provider_id: 'openai', account: 'openai/off-manual', account_ref: 'manual-off-key' }
+    ]);
+    adapter.gateway = async (path: string) => {
+      if (path === '/models') {
+        return {
+          data: [{ id: 'openai/gpt-5', owned_by: 'openai', display_name: 'GPT-5', pricing: { prompt: 0.000001, completion: 0.000002 } }]
+        };
+      }
+      if (path === '/magpie/accounts?models=full') {
+        return {
+          object: 'list',
+          data: [
+            {
+              provider: 'openai',
+              id: 'off-spare',
+              pin: 'openai/off-spare',
+              kind: 'key',
+              label: 'spare',
+              on: false,
+              models: [
+                { id: 'openai/gpt-5', display_name: 'GPT-5', pricing: { prompt: '0.000001', completion: '0.000002' } },
+                {
+                  id: 'openai/gpt-5-preview',
+                  display_name: 'GPT-5 Preview',
+                  reasoning_levels: ['high'],
+                  pricing: { prompt: '0.000002', completion: '0.000004' }
+                }
+              ]
+            },
+            {
+              provider: 'openai',
+              id: 'off-manual',
+              pin: 'openai/off-manual',
+              kind: 'key',
+              label: 'manual-off',
+              on: false,
+              models: [{ id: 'openai/gpt-5', display_name: 'GPT-5', pricing: { prompt: '0.000001', completion: '0.000002' } }]
+            },
+            {
+              provider: 'openai',
+              id: 'on-main',
+              pin: 'openai/on-main',
+              kind: 'key',
+              label: 'main',
+              on: true,
+              models: [{ id: 'openai/gpt-5', display_name: 'GPT-5', pricing: { prompt: '0.000001', completion: '0.000002' } }]
+            },
+            {
+              provider: 'switched-off',
+              id: 'dead-key',
+              pin: 'switched-off/dead-key',
+              kind: 'key',
+              label: 'dead',
+              on: false,
+              models: [{ id: 'switched-off/m1', display_name: 'Dead Model', pricing: { prompt: '0.000001', completion: '0.000002' } }]
+            }
+          ]
+        };
+      }
+      throw new TypeError('unexpected path ' + path);
+    };
+
+    const routes = await adapter.routes.public_routes();
+    // Whole provider switched off (no on:true accounts) is never exposed.
+    expect(routes.some(r => r.provider_id === 'switched-off')).toBe(false);
+
+    // Shared model has gateway-default, manual binding (inherits disabled), enabled account, then disabled account.
+    const gpt5Routes = routes.filter(r => r.model === 'openai/gpt-5');
+    expect(gpt5Routes.map(r => [r.account_ref, r.account_evidence, r.account_disabled ?? false])).toEqual([
+      ['gateway-default', 'gateway_binding', false],
+      ['manual-off-key', 'configured_binding', true],
+      ['main', 'gateway_account_binding', false],
+      ['spare', 'gateway_account_binding', true]
+    ]);
+
+    // Model served only by disabled account omits gateway-default and keeps only the pinned disabled binding.
+    const previewRoutes = routes.filter(r => r.model === 'openai/gpt-5-preview');
+    expect(previewRoutes.map(r => [r.account_ref, r.account_evidence, r.account_disabled ?? false])).toEqual([
+      ['manual-off-key', 'configured_binding', true],
+      ['spare', 'gateway_account_binding', true]
+    ]);
+
+    // Resolving a disabled pinned route still pins verbatim via X-Magpie-Account.
+    const spareRoute = previewRoutes.find(r => r.account_ref === 'spare')!;
+    const resolved = await adapter.routes.resolve(spareRoute.id);
+    expect(adapter.routes.create_client(resolved)._headers()['X-Magpie-Account']).toBe(encodeURIComponent('openai/off-spare'));
+
+    // Under the 200-entry cap, enabled accounts are prioritized ahead of disabled accounts.
+    const capped = discoverMagpieAccounts({
+      object: 'list',
+      data: [
+        ...Array.from({ length: 10 }, (_, i) => ({
+          provider: 'openai',
+          id: `off-${i}`,
+          pin: `openai/off-${i}`,
+          kind: 'key',
+          label: `off-${i}`,
+          on: false
+        })),
+        ...Array.from({ length: 195 }, (_, i) => ({
+          provider: 'openai',
+          id: `on-${i}`,
+          pin: `openai/on-${i}`,
+          kind: 'key',
+          label: `on-${i}`,
+          on: true
+        }))
+      ]
+    });
+    expect(capped).toHaveLength(200);
+    expect(capped.filter(a => !a.disabled)).toHaveLength(195);
+    expect(capped.filter(a => a.disabled)).toHaveLength(5);
   });
 });
