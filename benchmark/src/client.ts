@@ -1,4 +1,5 @@
-import { parseAssessmentJson, canonicalAssessmentJson } from './assessment_json.ts';
+import { parseAssessmentJson } from './assessment_json.ts';
+import { canonicalStorageJson, parseStrictJson } from './bench_execution_storage.ts';
 import { _validate_route_url } from './bench_routes.ts';
 import {
     ResponsesStreamDecoder,
@@ -47,7 +48,7 @@ export class GatewayClient {
                 await response.body?.cancel();
                 return {};
             }
-            const data = parseAssessmentJson(await response.text());
+            const data = parseStrictJson(await response.text());
             if (!data || typeof data !== 'object' || !('data' in data) || !Array.isArray(data.data)) return {};
             return Object.fromEntries(
                 data.data
@@ -88,7 +89,7 @@ export class GatewayClient {
         try {
             const response = await fetch(`${this.base_url}/responses`, {
                 method: 'POST',
-                body: canonicalAssessmentJson({ ...body, stream: true }),
+                body: canonicalStorageJson({ ...body, stream: true }),
                 headers: { ...this._headers(), Accept: 'text/event-stream' },
                 redirect: 'manual',
                 signal
@@ -153,7 +154,7 @@ export class GatewayClient {
         try {
             const response = await fetch(`${this.base_url}/responses`, {
                 method: 'POST',
-                body: canonicalAssessmentJson(body),
+                body: canonicalStorageJson(body),
                 headers: this._headers(),
                 redirect: 'manual',
                 signal: AbortSignal.timeout(Math.max(1, Math.ceil((timeout || this.default_timeout) * 1000)))

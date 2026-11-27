@@ -28,7 +28,8 @@ const DISCOVERED_MODEL_META_KEYS = [
 function pickDiscoveredModelMetadata(raw: Record<string, unknown>): Record<string, unknown> {
   const picked: Record<string, unknown> = {};
   for (const key of DISCOVERED_MODEL_META_KEYS) {
-    if (raw[key] !== undefined) picked[key] = structuredClone(raw[key]);
+    const val = raw[key];
+    if (val !== undefined) picked[key] = typeof val === 'object' && val !== null ? structuredClone(val) : val;
   }
   return picked;
 }
@@ -56,7 +57,7 @@ const validAccountHeader = (account: string): boolean => {
 const validAccountsList = (payload: unknown): payload is { data: unknown[] } =>
   object(payload) && Array.isArray(payload.data) && payload.data.length <= 2000;
 /** Validate plugin configuration without accepting keys, endpoints or arbitrary HTTP headers. */
-export function validateMagpieAccountBindings(value: unknown): MagpieAccountBinding[] {
+export function validateMagpieAccountBindings(value: unknown, cloneOutput = true): MagpieAccountBinding[] {
   if (value === undefined) return [];
   if (!Array.isArray(value) || value.length > 200) throw new TypeError('Magpie account bindings must be a bounded array');
   const seen = new Set<string>();
@@ -87,7 +88,7 @@ export function validateMagpieAccountBindings(value: unknown): MagpieAccountBind
     const id = JSON.stringify([row.provider_id, row.account.toLowerCase()]);
     if (seen.has(id)) throw new TypeError('Magpie account binding is duplicated');
     seen.add(id);
-    return structuredClone(row);
+    return cloneOutput ? structuredClone(row) : (row as MagpieAccountBinding);
   });
 }
 /**
@@ -150,9 +151,20 @@ export function discoverMagpieAccountCatalog(payload: unknown): MagpieAccountsCa
         let fullModel: string | null = null;
         if (object(rawModel)) {
           if (!_route_text(rawModel.id) || !rawModel.id.startsWith(prefix) || !_route_text(rawModel.id.slice(prefix.length))) continue;
-          const picked = pickDiscoveredModelMetadata(rawModel);
           const existing = modelsById.get(rawModel.id);
-          modelsById.set(rawModel.id, existing ? mergeDiscoveredModelMetadata(existing, picked) : picked);
+          if (!existing) {
+            modelsById.set(rawModel.id, pickDiscoveredModelMetadata(rawModel));
+          } else {
+            const existingIsChat = isChatKind(existing.kind);
+            const incomingIsChat = isChatKind(rawModel.kind);
+            if (
+              (!existingIsChat && incomingIsChat) ||
+              (existingIsChat === incomingIsChat &&
+                DISCOVERED_MODEL_META_KEYS.some(key => existing[key] === undefined && rawModel[key] !== undefined))
+            ) {
+              modelsById.set(rawModel.id, mergeDiscoveredModelMetadata(existing, pickDiscoveredModelMetadata(rawModel)));
+            }
+          }
           if (rawModel.kind !== undefined && rawModel.kind !== 'chat') continue;
           fullModel = rawModel.id;
         } else if (_route_text(rawModel)) {
@@ -270,21 +282,32 @@ export function discoverMagpieLocalAccounts(payload: unknown): MagpieAccountBind
 export class MagpieAccountsReader {
   private cached: MagpieAccountsCatalog | null = null;
   private expires = 0;
+  private _generation = 0;
   private pending: Promise<MagpieAccountsCatalog | null> | null = null;
   constructor(private readonly load: () => Promise<unknown>) {}
+  get generation(): number {
+    return this._generation;
+  }
+  get isFresh(): boolean {
+    return performance.now() < this.expires && this.cached !== null;
+  }
   invalidate(): void {
     this.expires = 0;
+    this._generation++;
   }
-  async read(refresh = false): Promise<MagpieAccountsCatalog | null> {
-    if (!refresh && performance.now() < this.expires) return this.cached === null ? null : structuredClone(this.cached);
+  async readReadonly(refresh = false): Promise<MagpieAccountsCatalog | null> {
+    if (!refresh && performance.now() < this.expires) return this.cached;
     if (!this.pending) this.pending = this.fetch();
     const pending = this.pending;
     try {
-      const result = await pending;
-      return result === null ? null : structuredClone(result);
+      return await pending;
     } finally {
       if (this.pending === pending) this.pending = null;
     }
+  }
+  async read(refresh = false): Promise<MagpieAccountsCatalog | null> {
+    const result = await this.readReadonly(refresh);
+    return result === null ? null : structuredClone(result);
   }
   private async fetch(): Promise<MagpieAccountsCatalog | null> {
     try {
@@ -295,6 +318,7 @@ export class MagpieAccountsReader {
       this.cached = forbidden ? { accounts: [], models: [] } : null;
     }
     this.expires = performance.now() + 30000;
+    this._generation++;
     return this.cached;
   }
 }

@@ -6,7 +6,8 @@ import { build_assessment_data_task } from './assessment_data.ts';
 import { ASSESSMENT_INTERACTIVE_SOURCE_PATHS, build_assessment_interactive_task } from './assessment_interactive.ts';
 import { ASSESSMENT_INTERACTIVE_V2_SOURCE_PATHS, build_assessment_interactive_v2_task } from './assessment_interactive_v2.ts';
 import type { AssessmentTask } from './assessment_tasks.ts';
-import { assessment_hash, parseAssessmentJson } from './assessment_json.ts';
+import { assessment_hash } from './assessment_json.ts';
+import { parseStrictJson } from './bench_execution_storage.ts';
 
 /** Bank paths always resolve against the benchmark root, never the working directory. */
 export const ASSESSMENT_PROJECT_ROOT = dirname(dirname(fileURLToPath(import.meta.url)));
@@ -60,9 +61,7 @@ export function assessment_task_snapshot(task: BankObject): AssessmentTaskSnapsh
 /** Validate source bytes and ordered task snapshots; importing this module never starts a runner. */
 export function load_assessment_bank(version: string = '1.0', manifest_path?: string): AssessmentBank {
     requireBank(typeof version === 'string' && /^[A-Za-z0-9][A-Za-z0-9._-]*$/.test(version), 'version must be a nonempty path-safe string');
-    const manifest = parseAssessmentJson(
-        readFileSync(manifest_path ?? join(ASSESSMENT_BANK_DIRECTORY, `assessment-${version}.json`), 'utf8')
-    );
+    const manifest = parseStrictJson(readFileSync(manifest_path ?? join(ASSESSMENT_BANK_DIRECTORY, `assessment-${version}.json`), 'utf8'));
     const required = [
         'version',
         'title',
@@ -125,7 +124,7 @@ export function load_assessment_bank(version: string = '1.0', manifest_path?: st
     );
     requireBank(object(bank.grading) && keysMatch(bank.grading, ids), 'grading must cover exactly the selected task IDs');
     const manifestDirectory = dirname(manifest_path ?? join(ASSESSMENT_BANK_DIRECTORY, `assessment-${version}.json`));
-    const cards = parseAssessmentJson(readFileSync(join(manifestDirectory, bank.task_file), 'utf8'));
+    const cards = parseStrictJson(readFileSync(join(manifestDirectory, bank.task_file), 'utf8'));
     requireBank(Array.isArray(cards), 'task_file must contain an array');
     const catalogTasks = cards.map(card => {
         requireBank(

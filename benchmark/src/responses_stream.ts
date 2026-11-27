@@ -1,4 +1,5 @@
 import { parseAssessmentJson } from './assessment_json.ts';
+import { parseStrictJson, parseStrictJsonWithResponseUsage } from './bench_execution_storage.ts';
 
 /** Stream timing is local receipt evidence, not proof of upstream computation or identity. */
 export interface ResponsesStreamTelemetry {
@@ -130,8 +131,15 @@ export class ResponsesStreamDecoder {
         if (!hasData) return;
         if (data === '[DONE]') throw new ResponsesStreamProtocolError('Responses stream DONE marker has no terminal response');
         let value: unknown;
+        let usageJson: string | null = null;
         try {
-            value = parseAssessmentJson(data);
+            if (data.includes('"usage"')) {
+                const parsed = parseStrictJsonWithResponseUsage(data);
+                value = parsed.value;
+                usageJson = parsed.usageJson;
+            } else {
+                value = parseStrictJson(data);
+            }
         } catch {
             throw new ResponsesStreamProtocolError('Responses stream contains invalid JSON');
         }
@@ -158,6 +166,10 @@ export class ResponsesStreamDecoder {
         } else if (['response.completed', 'response.failed', 'response.incomplete'].includes(value.type)) {
             if (!object(value.response) || value.response.status !== value.type.slice('response.'.length))
                 throw new ResponsesStreamProtocolError('Responses stream terminal status is inconsistent');
+            // Re-parse only the small usage object with parseAssessmentJson so integer/float token checks remain exact.
+            if (usageJson !== null && object(value.response.usage)) {
+                value.response.usage = parseAssessmentJson(usageJson);
+            }
             this.response = value.response;
         } else return;
         this.terminal_event_data = data;

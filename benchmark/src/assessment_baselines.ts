@@ -1,6 +1,7 @@
 import { readFileSync } from 'node:fs';
+import { createHash } from 'node:crypto';
 import { assessment_task_snapshot, type AssessmentBank, type AssessmentTaskSnapshot } from './assessment_bank.ts';
-import { assessment_hash, canonicalAssessmentJson, parseAssessmentJson } from './assessment_json.ts';
+import { canonicalStorageJson, parseStrictJson } from './bench_execution_storage.ts';
 import { assessment_sample_protocol, execution_protocol_hash, type ExecutionProtocol } from './run_protocol.ts';
 import {
     assessment_execution_source_paths,
@@ -98,7 +99,16 @@ export interface AssessmentBaseline extends Evidence {
 export type { AssessmentObservation } from './assessment_observations.ts';
 const protocolLimits = ['max_output_tokens', 'max_turns', 'max_tool_calls', 'timeout'] as const;
 const object = (value: unknown): value is Evidence => value !== null && typeof value === 'object' && !Array.isArray(value);
-const same = (left: unknown, right: unknown) => canonicalAssessmentJson(left) === canonicalAssessmentJson(right);
+const canonicalCardsCache = new WeakMap<object, string>();
+const canonicalText = (value: unknown): string => {
+    if (value !== null && typeof value === 'object') {
+        const cached = canonicalCardsCache.get(value);
+        if (cached !== undefined) return cached;
+    }
+    return canonicalStorageJson(value);
+};
+const same = (left: unknown, right: unknown) => canonicalText(left) === canonicalText(right);
+const storageHash = (value: unknown) => createHash('sha256').update(canonicalStorageJson(value)).digest('hex');
 const finiteScore = (value: unknown): value is number => typeof value === 'number' && Number.isFinite(value) && value >= 0 && value <= 1;
 function requireBaseline(condition: unknown, reason: string): asserts condition {
     if (!condition) throw new TypeError('Assessment baseline: ' + reason);
@@ -113,7 +123,18 @@ export function build_assessment_baseline(
     return buildBaselineWithContext(run, target_id, context);
 }
 
-function buildBaselineWithContext(run: unknown, target_id: string, context: AssessmentSourceContext): AssessmentBaseline {
+interface ValidatedBaselineEvidence {
+    bank: AssessmentBank;
+    cards: AssessmentTaskSnapshot[];
+    sources: Record<string, string>;
+    rounds: number;
+    target: BaselineTarget;
+    config: ProtocolLimits;
+    samples: BaselineSample[];
+    assessment_protocol_sha256: string;
+}
+
+function validateBaselineEvidenceWithContext(run: unknown, target_id: string, context: AssessmentSourceContext): ValidatedBaselineEvidence {
     const requestedVersion =
         object(run) && object(run.plan) && is_released_bank_version(run.plan.bank_version)
             ? run.plan.bank_version
@@ -121,11 +142,15 @@ function buildBaselineWithContext(run: unknown, target_id: string, context: Asse
     const bank = context.bank_for_version ? context.bank_for_version(requestedVersion) : context.production_bank();
     const getCards = context.cards_for_version ? () => context.cards_for_version!(requestedVersion) : context.production_cards;
     try {
-        return buildBaseline(run as BaselineRun, target_id, bank, getCards);
+        return validateBaselineEvidence(run as BaselineRun, target_id, bank, getCards);
     } catch (error) {
         if (error instanceof Error && error.message.startsWith('Assessment baseline:')) throw error;
         throw new TypeError('Assessment baseline: malformed run evidence', { cause: error });
     }
+}
+
+function buildBaselineWithContext(run: unknown, target_id: string, context: AssessmentSourceContext): AssessmentBaseline {
+    return materializeBaseline(run as BaselineRun, target_id, validateBaselineEvidenceWithContext(run, target_id, context));
 }
 
 function requireProvenanceSources(sources: unknown, bank: AssessmentBank, prefix = ''): void {
@@ -189,12 +214,12 @@ function validateProtocolLimits(limits: unknown): ProtocolLimits {
     return config;
 }
 
-function buildBaseline(
+function validateBaselineEvidence(
     run: BaselineRun,
     target_id: string,
     bank: AssessmentBank,
     getCards = () => bank.tasks.map(assessment_task_snapshot)
-): AssessmentBaseline {
+): ValidatedBaselineEvidence {
     const plan = run.plan;
     requireBaseline(run.status === 'completed', 'run must be completed');
     requireBaseline(typeof run.id === 'string' && run.id, 'run identity is missing');
@@ -212,6 +237,7 @@ function buildBaseline(
             'current bank provenance mismatch: extension_sha256'
         );
     const cards = getCards();
+    if (!canonicalCardsCache.has(cards)) canonicalCardsCache.set(cards, canonicalStorageJson(cards));
     requireBaseline(same(plan.task_snapshots, cards), 'task snapshots differ from current bank');
     const sources = plan.source_sha256;
     requireProvenanceSources(sources, bank);
@@ -303,6 +329,20 @@ function buildBaseline(
         );
         requireBaseline(typeof grade.outcome === 'string' && grade.outcome, 'grade outcome is missing');
     }
+    return {
+        bank,
+        cards,
+        sources,
+        rounds,
+        target,
+        config,
+        samples,
+        assessment_protocol_sha256: storageHash(protocolHashes)
+    };
+}
+
+function materializeBaseline(run: BaselineRun, target_id: string, validated: ValidatedBaselineEvidence): AssessmentBaseline {
+    const { bank, cards, sources, rounds, target, config, samples, assessment_protocol_sha256 } = validated;
     const snapshot: AssessmentBaseline = {
         id: '',
         schema: ASSESSMENT_BASELINE_SCHEMA,
@@ -324,10 +364,10 @@ function buildBaseline(
         source_sha256: structuredClone(sources),
         limits: config,
         samples: structuredClone(samples),
-        assessment_protocol_sha256: assessment_hash(protocolHashes)
+        assessment_protocol_sha256
     };
     const { id: _emptyId, ...identity } = snapshot;
-    snapshot.id = assessment_hash(identity);
+    snapshot.id = storageHash(identity);
     return snapshot;
 }
 
@@ -371,7 +411,7 @@ export function load_assessment_baselines(paths: Iterable<string>, context = cre
         seen = new Set();
     for (const path of paths) {
         try {
-            const baseline = validatedBaseline(parseAssessmentJson(readFileSync(path, 'utf8')) as Evidence, context);
+            const baseline = validatedBaseline(parseStrictJson(readFileSync(path, 'utf8')) as Evidence, context);
             if (!seen.has(baseline.id)) {
                 seen.add(baseline.id);
                 result.push(baseline);
@@ -389,10 +429,10 @@ export function project_run_observations(value: unknown, context = create_assess
     const run = value as BaselineRun;
     const result: AssessmentObservation[] = [];
     for (const target of run.plan.targets ?? []) {
-        let candidate: AssessmentBaseline | null = null,
+        let candidate: Pick<AssessmentBaseline, 'assessment_protocol_sha256'> | null = null,
             reason: string | null = null;
         try {
-            candidate = buildBaselineWithContext(run, target.id, context);
+            candidate = validateBaselineEvidenceWithContext(run, target.id, context);
         } catch (error) {
             reason = String((error as Error).message);
         }

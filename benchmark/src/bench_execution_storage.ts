@@ -29,6 +29,227 @@ function compareCodePoints(left: string, right: string): number {
     return left.length - i - (right.length - j);
 }
 
+function scanStrictJson(text: string, maxDepth: number, captureResponseUsage: boolean): string | null {
+    if (typeof text !== 'string') throw new SyntaxError('Assessment JSON: input must be text');
+    const len = text.length;
+    let pos = 0;
+    const fail = (): never => {
+        throw new SyntaxError('Assessment JSON: invalid JSON syntax');
+    };
+    const skipWs = () => {
+        while (pos < len) {
+            const c = text.charCodeAt(pos);
+            if (c === 0x20 || c === 0x09 || c === 0x0d || c === 0x0a) pos++;
+            else break;
+        }
+    };
+    const scanString = (decode: boolean): string => {
+        const start = pos++;
+        let hasEscape = false;
+        while (pos < len) {
+            const c = text.charCodeAt(pos++);
+            if (c === 0x22) {
+                if (!decode) return '';
+                if (!hasEscape) return text.slice(start + 1, pos - 1);
+                try {
+                    return JSON.parse(text.slice(start, pos)) as string;
+                } catch {
+                    return fail();
+                }
+            }
+            if (c === 0x5c) {
+                hasEscape = true;
+                if (pos >= len) return fail();
+                pos++;
+            } else if (c < 0x20) {
+                return fail();
+            }
+        }
+        return fail();
+    };
+    const scanNumber = () => {
+        const start = pos;
+        if (text.charCodeAt(pos) === 0x2d) pos++;
+        if (pos >= len) fail();
+        const first = text.charCodeAt(pos);
+        if (first === 0x30) {
+            pos++;
+        } else if (first >= 0x31 && first <= 0x39) {
+            pos++;
+            while (pos < len) {
+                const c = text.charCodeAt(pos);
+                if (c >= 0x30 && c <= 0x39) pos++;
+                else break;
+            }
+        } else {
+            fail();
+        }
+        if (pos < len && text.charCodeAt(pos) === 0x2e) {
+            pos++;
+            if (pos >= len) fail();
+            const frac = text.charCodeAt(pos);
+            if (frac < 0x30 || frac > 0x39) fail();
+            pos++;
+            while (pos < len) {
+                const c = text.charCodeAt(pos);
+                if (c >= 0x30 && c <= 0x39) pos++;
+                else break;
+            }
+        }
+        let hasExp = false;
+        if (pos < len) {
+            const e = text.charCodeAt(pos);
+            if (e === 0x65 || e === 0x45) {
+                hasExp = true;
+                pos++;
+                if (pos < len) {
+                    const sign = text.charCodeAt(pos);
+                    if (sign === 0x2b || sign === 0x2d) pos++;
+                }
+                if (pos >= len) fail();
+                const d = text.charCodeAt(pos);
+                if (d < 0x30 || d > 0x39) fail();
+                pos++;
+                while (pos < len) {
+                    const c = text.charCodeAt(pos);
+                    if (c >= 0x30 && c <= 0x39) pos++;
+                    else break;
+                }
+            }
+        }
+        if (hasExp || pos - start > 308) {
+            const value = Number(text.slice(start, pos));
+            if (!Number.isFinite(value)) throw new SyntaxError('Assessment JSON: nonfinite number');
+        }
+    };
+
+    // Container stack: 0 = array, 1 = object.
+    const kinds: number[] = [];
+    const firstKeys: Array<string | null> = [];
+    const keySets: Array<Set<string> | null> = [];
+    let inResponse = false;
+    let capturingUsage = false;
+    let usageStart = -1;
+    let usageEnd = -1;
+
+    const readObjectKey = () => {
+        if (pos >= len || text.charCodeAt(pos) !== 0x22) fail();
+        const key = scanString(true);
+        const top = kinds.length - 1;
+        const first = firstKeys[top];
+        if (first === null) {
+            firstKeys[top] = key;
+        } else {
+            let set = keySets[top];
+            if (!set) {
+                if (first === key) throw new SyntaxError('Assessment JSON: duplicate object key');
+                set = new Set<string>([first, key]);
+                keySets[top] = set;
+            } else {
+                if (set.has(key)) throw new SyntaxError('Assessment JSON: duplicate object key');
+                set.add(key);
+            }
+        }
+        skipWs();
+        if (pos >= len || text.charCodeAt(pos++) !== 0x3a) fail();
+        if (captureResponseUsage) {
+            if (kinds.length === 1) {
+                inResponse = key === 'response';
+            } else if (kinds.length === 2 && inResponse && key === 'usage') {
+                skipWs();
+                capturingUsage = true;
+                usageStart = pos;
+            }
+        }
+    };
+
+    // State: expecting a value at current depth = kinds.length.
+    for (;;) {
+        if (kinds.length > maxDepth) throw new SyntaxError('Assessment JSON: nesting limit exceeded');
+        skipWs();
+        if (pos >= len) fail();
+        const c = text.charCodeAt(pos);
+        if (c === 0x7b || c === 0x5b) {
+            const isObject = c === 0x7b;
+            const endChar = isObject ? 0x7d : 0x5d;
+            pos++;
+            skipWs();
+            if (pos < len && text.charCodeAt(pos) === endChar) {
+                pos++;
+                // Empty container finished; fall through to post-value transitions.
+            } else {
+                kinds.push(isObject ? 1 : 0);
+                firstKeys.push(null);
+                keySets.push(null);
+                if (isObject) readObjectKey();
+                continue;
+            }
+        } else if (c === 0x22) {
+            scanString(false);
+        } else if (c === 0x74) {
+            if (!text.startsWith('true', pos)) fail();
+            pos += 4;
+        } else if (c === 0x66) {
+            if (!text.startsWith('false', pos)) fail();
+            pos += 5;
+        } else if (c === 0x6e) {
+            if (!text.startsWith('null', pos)) fail();
+            pos += 4;
+        } else if (c === 0x2d || (c >= 0x30 && c <= 0x39)) {
+            scanNumber();
+        } else {
+            fail();
+        }
+
+        // Completed a value; advance parent containers until we expect the next value or finish.
+        let needValue = false;
+        while (kinds.length > 0) {
+            if (capturingUsage && kinds.length === 2) {
+                usageEnd = pos;
+                capturingUsage = false;
+            }
+            if (inResponse && kinds.length === 1) {
+                inResponse = false;
+            }
+            skipWs();
+            if (pos >= len) fail();
+            const isObject = kinds[kinds.length - 1] === 1;
+            const next = text.charCodeAt(pos++);
+            if (next === 0x2c) {
+                skipWs();
+                if (isObject) readObjectKey();
+                needValue = true;
+                break;
+            }
+            if (next !== (isObject ? 0x7d : 0x5d)) fail();
+            kinds.pop();
+            firstKeys.pop();
+            keySets.pop();
+        }
+        if (!needValue) break;
+    }
+
+    skipWs();
+    if (pos !== len) fail();
+    return usageStart >= 0 && usageEnd > usageStart ? text.slice(usageStart, usageEnd) : null;
+}
+
+/**
+ * Strict JSON parser with identical validation semantics to parseAssessmentJson
+ * (rejecting duplicate object keys, nonfinite numbers, and excessive nesting)
+ * without allocating canonical strings, number-token WeakMaps, or full-tail slices.
+ */
+export function parseStrictJson(text: string, maxDepth = 100): unknown {
+    scanStrictJson(text, maxDepth, false);
+    return JSON.parse(text);
+}
+
+/** Strict JSON parser that also returns the raw JSON slice of `response.usage` when present. */
+export function parseStrictJsonWithResponseUsage(text: string, maxDepth = 100): { value: unknown; usageJson: string | null } {
+    const usageJson = scanStrictJson(text, maxDepth, true);
+    return { value: JSON.parse(text), usageJson };
+}
+
 /** Allocation-lean serializer with byte-identical output and validation to canonicalAssessmentJson. */
 export function canonicalStorageJson(value: unknown): string {
     const ancestors = new Set<object>();
@@ -144,9 +365,9 @@ export class SecretRedactor {
             }
         });
     }
-    redactRecord(record: RecordValue): RecordValue {
-        if (!this.secrets.length) return clone(record);
-        const result = clone(record);
+    redactRecord(record: RecordValue, cloneUnredacted = true): RecordValue {
+        if (!this.secrets.length) return cloneUnredacted ? clone(record) : { ...record };
+        const result: RecordValue = { ...record };
         const state = { changed: false };
         for (const key of ['raw_response', 'text', 'tool_trace', 'runner_error', 'result', 'arguments', 'request', 'answer_submission'])
             if (key in result) result[key] = this.redactTracked(result[key], state);
@@ -413,6 +634,55 @@ export class SessionJournal {
     }
 }
 
+/** Project a call's raw_response down to only fields retained by build_session_event before redaction. */
+function compactCallRawResponse(raw: unknown): unknown {
+    if (!object(raw)) return raw;
+    const compact: RecordValue = {};
+    if (raw.status !== undefined) compact.status = raw.status;
+    if (object(raw.usage)) {
+        compact.usage = {
+            ...(raw.usage.input_tokens !== undefined ? { input_tokens: raw.usage.input_tokens } : {}),
+            ...(raw.usage.output_tokens !== undefined ? { output_tokens: raw.usage.output_tokens } : {})
+        };
+    }
+    if (raw.error !== undefined) compact.error = raw.error;
+    if (raw.exception !== undefined) compact.exception = raw.exception;
+    if (raw.raw_error !== undefined) compact.raw_error = raw.raw_error;
+    if (typeof raw.output_text === 'string') compact.output_text = raw.output_text;
+    if (Array.isArray(raw.output)) {
+        const output: RecordValue[] = [];
+        for (const item of raw.output) {
+            if (!object(item)) continue;
+            if (item.type === 'message' && Array.isArray(item.content)) {
+                const content: RecordValue[] = [];
+                for (const part of item.content) {
+                    if (object(part) && part.type === 'output_text' && typeof part.text === 'string') {
+                        content.push({ type: 'output_text', text: part.text });
+                    }
+                }
+                if (content.length) output.push({ type: 'message', content });
+            } else if (item.type === 'reasoning' && Array.isArray(item.summary)) {
+                const summary: RecordValue[] = [];
+                for (const part of item.summary) {
+                    if (object(part) && typeof part.text === 'string' && part.text.length > 0) {
+                        summary.push({ text: part.text });
+                    }
+                }
+                if (summary.length) output.push({ type: 'reasoning', summary });
+            } else if (item.type === 'function_call') {
+                output.push({
+                    type: 'function_call',
+                    ...(item.call_id !== undefined ? { call_id: item.call_id } : {}),
+                    ...(item.name !== undefined ? { name: item.name } : {}),
+                    ...(item.arguments !== undefined ? { arguments: item.arguments } : {})
+                });
+            }
+        }
+        if (output.length) compact.output = output;
+    }
+    return compact;
+}
+
 /** Sample journal binds attempt identity and stops admission synchronously on write failure. */
 export class SampleJournal {
     observation: RecordValue | null = null;
@@ -424,13 +694,29 @@ export class SampleJournal {
     write(record: RecordValue): void {
         try {
             if (record.type === 'stream_chunk') return;
-            let value = { ...clone(record), ...this.identity };
-            if (value.type === 'call')
-                value.call_id = this.identity.attempt_id + ':' + String(value.turn) + ':' + String(value.api_attempt ?? 1);
-            else if (value.type === 'observation')
-                value.calls = (value.calls as string[]).map(id => this.identity.attempt_id + ':' + id.split(':').slice(1).join(':'));
-            value = this.journal.redact_record(value);
-            if (value.type === 'observation') this.observation = value;
+            let value: RecordValue;
+            if (record.type === 'call') {
+                // Request history is never persisted into session_events; skip cloning and redacting it.
+                const { request: _omittedRequest, raw_response, ...rest } = record;
+                value = {
+                    ...rest,
+                    ...(raw_response !== undefined ? { raw_response: compactCallRawResponse(raw_response) } : {}),
+                    ...this.identity,
+                    call_id: this.identity.attempt_id + ':' + String(record.turn) + ':' + String(record.api_attempt ?? 1)
+                };
+                value = this.journal.redactor.redactRecord(value, false);
+            } else if (record.type === 'observation') {
+                value = {
+                    ...clone(record),
+                    ...this.identity,
+                    calls: (record.calls as string[]).map(id => this.identity.attempt_id + ':' + id.split(':').slice(1).join(':'))
+                };
+                value = this.journal.redactor.redactRecord(value, false);
+                this.observation = value;
+            } else {
+                value = { ...record, ...this.identity };
+                value = this.journal.redactor.redactRecord(value, false);
+            }
             this.journal.write(value, true);
         } catch (error) {
             // Stop every admission synchronously, before another sample resumes a tool continuation.

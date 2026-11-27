@@ -1,4 +1,4 @@
-import { parseAssessmentJson } from '../benchmark/src/assessment_json.ts';
+import { parseStrictJson } from '../benchmark/src/bench_execution_storage.ts';
 import { readBenchLimitedBody } from '../benchmark/src/bench_http_body.ts';
 import { _validate_route_url } from '../benchmark/src/bench_routes.ts';
 import type { BenchServiceAdapter } from '../benchmark/src/bench_adapter.ts';
@@ -17,6 +17,7 @@ export class MagpieBenchAdapter implements BenchServiceAdapter {
   );
   _models_cache: JsonObject[] | null = null;
   _models_cache_time = 0;
+  private _models_generation = 0;
   private _non_chat_cache: JsonObject[] = [];
   private models_inflight: Promise<JsonObject[]> | null = null;
   readonly base_url: string;
@@ -30,22 +31,27 @@ export class MagpieBenchAdapter implements BenchServiceAdapter {
     this.base_url = base_url.replace(/\/+$/, '');
     if (!this.base_url.endsWith('/v1')) this.base_url += '/v1';
     this.routes = new MagpieBenchRoutes(
-      async () => [...(await this.models()), ...structuredClone(this._non_chat_cache)],
+      async () => [...(await this.models_readonly()), ...this._non_chat_cache],
       this.base_url,
       () => this.api_key,
       concurrency,
       accounts,
-      () => this.discover_local_accounts()
+      () => this.discover_local_accounts(),
+      () =>
+        this._models_cache !== null && performance.now() / 1000 - this._models_cache_time < 60 && this.accounts_catalog.isFresh
+          ? `${this._models_generation}:${this.accounts_catalog.generation}`
+          : null
     );
   }
   private async discover_local_accounts(): Promise<MagpieAccountsCatalog> {
-    const listed = await this.accounts_catalog.read();
+    const listed = await this.accounts_catalog.readReadonly();
     if (listed !== null) return listed;
     const accounts = await this.quotas.readLocalAccounts().catch(() => [] as MagpieAccountBinding[]);
     return { accounts, models: [] };
   }
   refresh(): void {
     this._models_cache_time = -Infinity;
+    this._models_generation++;
     this.quotas.invalidate();
     this.accounts_catalog.invalidate();
   }
@@ -80,15 +86,15 @@ export class MagpieBenchAdapter implements BenchServiceAdapter {
     }
     let value: unknown;
     try {
-      value = parseAssessmentJson(new TextDecoder('utf-8', { fatal: true }).decode(bytes));
+      value = parseStrictJson(new TextDecoder('utf-8', { fatal: true }).decode(bytes));
     } catch {
       throw new TypeError('gateway returned invalid JSON');
     }
     if (!object(value)) throw new TypeError('gateway response must be an object');
     return value;
   }
-  async models(): Promise<JsonObject[]> {
-    if (this._models_cache !== null && performance.now() / 1000 - this._models_cache_time < 60) return structuredClone(this._models_cache);
+  private async models_readonly(): Promise<JsonObject[]> {
+    if (this._models_cache !== null && performance.now() / 1000 - this._models_cache_time < 60) return this._models_cache;
     if (!this.models_inflight) {
       this.models_inflight = (async () => {
         const payload = await this.gateway('/models');
@@ -101,17 +107,21 @@ export class MagpieBenchAdapter implements BenchServiceAdapter {
         const nonChat = models.filter(
           (entry): entry is JsonObject => object(entry) && typeof entry.id === 'string' && entry.kind !== undefined && entry.kind !== 'chat'
         );
-        this._models_cache = structuredClone(filtered);
-        this._non_chat_cache = structuredClone(nonChat);
+        this._models_cache = filtered;
+        this._non_chat_cache = nonChat;
         this._models_cache_time = performance.now() / 1000;
+        this._models_generation++;
         return filtered;
       })();
     }
     const pending = this.models_inflight;
     try {
-      return structuredClone(await pending);
+      return await pending;
     } finally {
       if (this.models_inflight === pending) this.models_inflight = null;
     }
+  }
+  async models(): Promise<JsonObject[]> {
+    return structuredClone(await this.models_readonly());
   }
 }

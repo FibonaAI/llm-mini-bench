@@ -17,6 +17,7 @@ import {
     type AssessmentSourceContext
 } from '../src/assessment_provenance.ts';
 import { parseAssessmentJson } from '../src/assessment_json.ts';
+import { parseStrictJson } from '../src/bench_execution_storage.ts';
 import { readBenchLimitedBody } from '../src/bench_http_body.ts';
 export { readBenchLimitedBody } from '../src/bench_http_body.ts';
 import { BENCH_DB_FILENAME, BenchDatabase } from '../src/bench_db.ts';
@@ -165,14 +166,21 @@ export class BenchService {
     }
     private readonly instance_id = randomUUID().slice(0, 12);
     private _baselines_cache: { key: string; baselines: AssessmentBaseline[] } | null = null;
-    private _observations_cache: { key: string; etag: string; body: string; gzip: Uint8Array<ArrayBuffer> | null } | null = null;
+    private _observations_cache: {
+        key: string;
+        etag: string;
+        body: string | Uint8Array<ArrayBuffer>;
+        gzip: Uint8Array<ArrayBuffer> | null;
+    } | null = null;
     private _banks_cache: { key: string; body: string; gzip: Uint8Array<ArrayBuffer> | null } | null = null;
     private _tasks_cache: { key: string; etag: string; body: string; gzip: Uint8Array<ArrayBuffer> | null } | null = null;
     private _runs_cache: { key: string; etag: string; body: string; gzip: Uint8Array<ArrayBuffer> | null } | null = null;
-    private static readonly RUN_DETAIL_CACHE_MAX = 64;
+    private static readonly RUN_DETAIL_CACHE_MAX = 16;
+    private static readonly RUN_DETAIL_CACHE_MAX_BYTES = 8 * 1024 * 1024;
+    private _run_detail_cache_bytes = 0;
     private readonly _run_detail_cache = new Map<
         string,
-        { status: string; updated_at: string; body: string; gzip: Uint8Array<ArrayBuffer> | null }
+        { status: string; updated_at: string; body: string; gzip: Uint8Array<ArrayBuffer> | null; bytes: number }
     >();
     private baselines_signature(): string {
         if (this.db.is_closed) return 'closed';
@@ -189,7 +197,7 @@ export class BenchService {
         const seen = new Set<string>();
         for (const raw of payloads) {
             try {
-                const baseline = validate_assessment_baseline(parseAssessmentJson(raw), resolvedContext);
+                const baseline = validate_assessment_baseline(parseStrictJson(raw), resolvedContext);
                 if (!seen.has(baseline.id)) {
                     seen.add(baseline.id);
                     validated.push(baseline);
@@ -207,6 +215,7 @@ export class BenchService {
         this._tasks_cache = null;
         this._runs_cache = null;
         this._run_detail_cache.clear();
+        this._run_detail_cache_bytes = 0;
     }
     save_baseline(baseline: AssessmentBaseline): void {
         this.db.save_baseline(baseline);
@@ -350,16 +359,57 @@ export class BenchService {
         const runRows = execution.list_observations(context, sourceSig);
         return [...baselineRows, ...runRows];
     }
-    cached_observations_payload(): { etag: string; body: string; gzip: Uint8Array<ArrayBuffer> | null } {
+    cached_observations_payload(): { etag: string; body: string | Uint8Array<ArrayBuffer>; gzip: Uint8Array<ArrayBuffer> | null } {
         const execution = this.bench_execution();
         const sourceSig = assessment_source_signature();
         const baselineSig = this.baselines_signature();
         const key = `${sourceSig}\u0000${baselineSig}\u0000${execution.revision}`;
         if (this._observations_cache?.key === key) return this._observations_cache;
-        const observations = this.observations();
-        const observationsJson = JSON.stringify(observations);
-        const etag = createHash('sha256').update(observationsJson).digest('hex').slice(0, 32);
-        const body = `{"etag":${JSON.stringify(etag)},"observations":${observationsJson}}`;
+        if (execution.list_observations !== BenchExecutionService.prototype.list_observations) {
+            const observations = this.observations();
+            const observationsJson = JSON.stringify(observations);
+            const etag = createHash('sha256').update(observationsJson).digest('hex').slice(0, 32);
+            const body = `{"etag":${JSON.stringify(etag)},"observations":${observationsJson}}`;
+            this._observations_cache = { key, etag, body, gzip: null };
+            return this._observations_cache;
+        }
+        const context = create_assessment_source_context();
+        const baselineRows = project_validated_baseline_observations(this.baselines(undefined, sourceSig));
+        const chunks: string[] = [];
+        if (baselineRows.length) {
+            const rawBaselines = JSON.stringify(baselineRows);
+            if (rawBaselines.length > 2) chunks.push(rawBaselines.slice(1, -1));
+        }
+        for (const chunk of execution.serialize_observation_chunks(context, sourceSig)) {
+            chunks.push(chunk);
+        }
+        const hasher = createHash('sha256');
+        hasher.update('[');
+        let payloadBytes = 0;
+        for (let i = 0; i < chunks.length; i++) {
+            if (i > 0) {
+                hasher.update(',');
+                payloadBytes += 1;
+            }
+            const chunk = chunks[i]!;
+            hasher.update(chunk);
+            payloadBytes += Buffer.byteLength(chunk);
+        }
+        hasher.update(']');
+        const etag = hasher.digest('hex').slice(0, 32);
+        const prefix = `{"etag":${JSON.stringify(etag)},"observations":[`;
+        const suffix = ']}';
+        const prefixBytes = Buffer.byteLength(prefix);
+        const suffixBytes = Buffer.byteLength(suffix);
+        // Write directly into one exact-sized buffer to avoid doubling multi-MiB strings + UTF-8 copies during gzip.
+        const out = Buffer.allocUnsafe(prefixBytes + payloadBytes + suffixBytes);
+        let offset = out.write(prefix, 0, 'utf8');
+        for (let i = 0; i < chunks.length; i++) {
+            if (i > 0) out[offset++] = 0x2c; // ','
+            offset += out.write(chunks[i]!, offset, 'utf8');
+        }
+        out.write(suffix, offset, 'utf8');
+        const body = new Uint8Array(out.buffer, out.byteOffset, out.byteLength) as Uint8Array<ArrayBuffer>;
         this._observations_cache = { key, etag, body, gzip: null };
         return this._observations_cache;
     }
@@ -392,9 +442,9 @@ export class BenchService {
     }
     cached_tasks_payload(execution: BenchExecutionService): { etag: string | null; body: string; gzip: Uint8Array<ArrayBuffer> | null } {
         const sourceSig = assessment_source_signature();
-        const lookup = this.baseline_lookup(sourceSig);
-        const context = create_assessment_source_context();
         if (execution.list_tasks !== BenchExecutionService.prototype.list_tasks) {
+            const lookup = this.baseline_lookup(sourceSig);
+            const context = create_assessment_source_context();
             const tasks = execution.list_tasks().map(task => this.enrich_task_payload(execution, task, lookup, context, sourceSig));
             return { etag: null, body: JSON.stringify({ tasks }), gzip: null };
         }
@@ -402,6 +452,8 @@ export class BenchService {
         const baselineSig = this.baselines_signature();
         const key = `${revision}\u0000${sourceSig}\u0000${baselineSig}`;
         if (this._tasks_cache?.key === key) return this._tasks_cache;
+        const lookup = this.baseline_lookup(sourceSig);
+        const context = create_assessment_source_context();
         const sigDigest = createHash('sha256').update(`${sourceSig}\u0000${baselineSig}`).digest('hex').slice(0, 12);
         const etag = `${this.instance_id}-t-${revision}-${sigDigest}`;
         if (typeof execution.ensure_source_index === 'function') execution.ensure_source_index(context, sourceSig);
@@ -412,9 +464,9 @@ export class BenchService {
     }
     cached_runs_payload(execution: BenchExecutionService): { etag: string | null; body: string; gzip: Uint8Array<ArrayBuffer> | null } {
         const sourceSig = assessment_source_signature();
-        const lookup = this.baseline_lookup(sourceSig);
-        const context = create_assessment_source_context();
         if (execution.list_runs !== BenchExecutionService.prototype.list_runs) {
+            const lookup = this.baseline_lookup(sourceSig);
+            const context = create_assessment_source_context();
             const runs = execution.list_runs().map(run => this.enrich_run_payload(execution, run, lookup, context, sourceSig));
             return { etag: null, body: JSON.stringify({ runs }), gzip: null };
         }
@@ -422,6 +474,8 @@ export class BenchService {
         const baselineSig = this.baselines_signature();
         const key = `${revision}\u0000${sourceSig}\u0000${baselineSig}`;
         if (this._runs_cache?.key === key) return this._runs_cache;
+        const lookup = this.baseline_lookup(sourceSig);
+        const context = create_assessment_source_context();
         const sigDigest = createHash('sha256').update(`${sourceSig}\u0000${baselineSig}`).digest('hex').slice(0, 12);
         const etag = `${this.instance_id}-r-${revision}-${sigDigest}`;
         if (typeof execution.ensure_source_index === 'function') execution.ensure_source_index(context, sourceSig);
@@ -455,13 +509,27 @@ export class BenchService {
         const run = execution.get_run(id, omitProvenance ? { omit_provenance: true } : undefined);
         if (!run) return null;
         const enriched = this.enrich_run_payload(execution, run, undefined, undefined, sourceSig);
-        const entry = { status: run.status, updated_at: run.updated_at, body: JSON.stringify(enriched), gzip: null };
+        const body = JSON.stringify(enriched);
+        const entry = { status: run.status, updated_at: run.updated_at, body, gzip: null, bytes: body.length };
         if (meta && run.status === meta.status && run.updated_at === meta.updated_at) {
-            this._run_detail_cache.delete(cacheKey);
-            this._run_detail_cache.set(cacheKey, entry);
-            if (this._run_detail_cache.size > BenchService.RUN_DETAIL_CACHE_MAX) {
-                const oldest = this._run_detail_cache.keys().next().value;
-                if (oldest !== undefined) this._run_detail_cache.delete(oldest);
+            const existing = this._run_detail_cache.get(cacheKey);
+            if (existing) {
+                this._run_detail_cache_bytes -= existing.bytes;
+                this._run_detail_cache.delete(cacheKey);
+            }
+            if (entry.bytes <= BenchService.RUN_DETAIL_CACHE_MAX_BYTES) {
+                this._run_detail_cache.set(cacheKey, entry);
+                this._run_detail_cache_bytes += entry.bytes;
+                while (
+                    this._run_detail_cache.size > BenchService.RUN_DETAIL_CACHE_MAX ||
+                    this._run_detail_cache_bytes > BenchService.RUN_DETAIL_CACHE_MAX_BYTES
+                ) {
+                    const oldest = this._run_detail_cache.keys().next().value;
+                    if (oldest === undefined) break;
+                    const evicted = this._run_detail_cache.get(oldest)!;
+                    this._run_detail_cache_bytes -= evicted.bytes;
+                    this._run_detail_cache.delete(oldest);
+                }
             }
         }
         return entry;
@@ -537,8 +605,9 @@ export function make_handler(service: BenchService, web_dir?: string): (request:
         }
         // Larger JSON bodies (observations, task/run lists polled every 2 s) compress roughly 10x.
         const acceptsGzip = /\bgzip\b/i.test(request.headers.get('accept-encoding') ?? '');
-        const jsonCached = (status: number, cached: { body: string; gzip: Uint8Array<ArrayBuffer> | null }) => {
-            if (!acceptsGzip || cached.body.length < JSON_GZIP_MIN_BYTES) return new Response(cached.body, { status, headers });
+        const jsonCached = (status: number, cached: { body: string | Uint8Array<ArrayBuffer>; gzip: Uint8Array<ArrayBuffer> | null }) => {
+            const size = typeof cached.body === 'string' ? cached.body.length : cached.body.byteLength;
+            if (!acceptsGzip || size < JSON_GZIP_MIN_BYTES) return new Response(cached.body, { status, headers });
             if (!cached.gzip) cached.gzip = Bun.gzipSync(cached.body);
             headers.set('Content-Encoding', 'gzip');
             headers.append('Vary', 'Accept-Encoding');
@@ -621,6 +690,9 @@ export function make_handler(service: BenchService, web_dir?: string): (request:
                     return json(200, await service.quota_cards(new URL(request.url).searchParams.get('refresh') === '1'));
                 if (request.method === 'GET' && path === '/api/bench/routes') {
                     if (new URL(request.url).searchParams.get('refresh') === '1') service.adapter?.refresh();
+                    if (typeof execution.routes.public_routes_json === 'function') {
+                        return jsonCached(200, { body: await execution.routes.public_routes_json(), gzip: null });
+                    }
                     return json(200, { routes: await execution.routes.public_routes() });
                 }
                 if (request.method === 'POST' && path === '/api/bench/task-plans')
